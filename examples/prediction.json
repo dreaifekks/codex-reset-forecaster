@@ -1,0 +1,88 @@
+{
+  "schema_version": "reset-intel/0.1",
+  "record_type": "prediction",
+  "record_id": "pred_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-23T07:00:04Z",
+  "producer": {
+    "name": "reset-forecaster",
+    "version": "0.1.0",
+    "config_hash": "sha256:example"
+  },
+  "data": {
+    "issued_at": "2026-07-23T07:00:04Z",
+    "knowledge_cutoff": "2026-07-23T07:00:00Z",
+    "event_process": "first_reset",
+    "scope": {
+      "vendor": "openai",
+      "product": "codex",
+      "population": "platform",
+      "plans": ["unknown"],
+      "regions": ["global"],
+      "quota_bucket": null
+    },
+    "horizon": {
+      "start": "2026-07-23T07:00:00Z",
+      "end": "2026-07-23T11:00:00Z",
+      "boundary": "[start,end)",
+      "precision": "hour",
+      "timezone_basis": "UTC",
+      "original_text": null
+    },
+    "base_slot": "PT1H",
+    "display_horizon": "PT4H",
+    "slots": [
+      {
+        "start": "2026-07-23T07:00:00Z",
+        "end": "2026-07-23T08:00:00Z",
+        "hazard": 0.10,
+        "first_reset_probability": 0.10,
+        "reset_by_end_probability": 0.10,
+        "rolling_4h_probability": 0.3439,
+        "epistemic_interval_80": [0.04, 0.18]
+      },
+      {
+        "start": "2026-07-23T08:00:00Z",
+        "end": "2026-07-23T09:00:00Z",
+        "hazard": 0.10,
+        "first_reset_probability": 0.09,
+        "reset_by_end_probability": 0.19,
+        "rolling_4h_probability": 0.271,
+        "epistemic_interval_80": [0.04, 0.18]
+      },
+      {
+        "start": "2026-07-23T09:00:00Z",
+        "end": "2026-07-23T10:00:00Z",
+        "hazard": 0.10,
+        "first_reset_probability": 0.081,
+        "reset_by_end_probability": 0.271,
+        "rolling_4h_probability": 0.19,
+        "epistemic_interval_80": [0.04, 0.18]
+      },
+      {
+        "start": "2026-07-23T10:00:00Z",
+        "end": "2026-07-23T11:00:00Z",
+        "hazard": 0.10,
+        "first_reset_probability": 0.0729,
+        "reset_by_end_probability": 0.3439,
+        "rolling_4h_probability": 0.1,
+        "epistemic_interval_80": [0.04, 0.18]
+      }
+    ],
+    "no_reset_probability": 0.6561,
+    "data_quality": {
+      "score": 0.84,
+      "provider_coverage": 0.91,
+      "independent_evidence_groups": 2
+    },
+    "feature_snapshot_refs": [],
+    "model": {
+      "family": "bayesian_discrete_time_hazard",
+      "version": "reset-model/0.1.0",
+      "training_cutoff": "2026-07-20T00:00:00Z",
+      "calibrator_version": null,
+      "training_data_hash": "sha256:example-training-data"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+.DS_Store
+.env
+env
+node_modules/
+var/
+data/
+models/
+artifacts/
+*.log
+*.tmp

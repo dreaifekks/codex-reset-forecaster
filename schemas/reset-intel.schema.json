@@ -1,0 +1,506 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/reset-intel/0.1/reset-intel.schema.json",
+  "title": "Reset Intelligence Record",
+  "description": "Provider-neutral, append-only records for platform reset timing intelligence.",
+  "allOf": [
+    { "$ref": "#/$defs/envelope" },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "record_type": { "const": "raw_observation" },
+            "data": { "$ref": "#/$defs/rawObservation" }
+          }
+        },
+        {
+          "properties": {
+            "record_type": { "const": "normalized_signal" },
+            "data": { "$ref": "#/$defs/normalizedSignal" }
+          }
+        },
+        {
+          "properties": {
+            "record_type": { "const": "event_candidate" },
+            "data": { "$ref": "#/$defs/eventCandidate" }
+          }
+        },
+        {
+          "properties": {
+            "record_type": { "const": "reset_outcome" },
+            "data": { "$ref": "#/$defs/resetOutcome" }
+          }
+        },
+        {
+          "properties": {
+            "record_type": { "const": "feature_snapshot" },
+            "data": { "$ref": "#/$defs/featureSnapshot" }
+          }
+        },
+        {
+          "properties": {
+            "record_type": { "const": "prediction" },
+            "data": { "$ref": "#/$defs/prediction" }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "nullableUtcTimestamp": {
+      "oneOf": [
+        { "$ref": "#/$defs/utcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "config_hash": { "type": ["string", "null"] }
+      }
+    },
+    "recordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "revision"],
+      "properties": {
+        "record_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "timeRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "boundary"],
+      "properties": {
+        "start": { "$ref": "#/$defs/utcTimestamp" },
+        "end": { "$ref": "#/$defs/utcTimestamp" },
+        "boundary": { "const": "[start,end)" },
+        "precision": {
+          "enum": [
+            "exact",
+            "minute",
+            "hour",
+            "part_of_day",
+            "day",
+            "week",
+            "interval_observed",
+            "unknown"
+          ]
+        },
+        "timezone_basis": { "type": ["string", "null"] },
+        "original_text": { "type": ["string", "null"] }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor", "product", "population"],
+      "properties": {
+        "vendor": { "type": "string", "minLength": 1 },
+        "product": { "type": "string", "minLength": 1 },
+        "population": {
+          "enum": ["platform", "affected_users", "plan", "region", "account", "unknown"]
+        },
+        "plans": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "regions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "quota_bucket": { "type": ["string", "null"] }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "record_type",
+        "record_id",
+        "revision",
+        "supersedes",
+        "created_at",
+        "producer",
+        "data"
+      ],
+      "properties": {
+        "schema_version": { "const": "reset-intel/0.1" },
+        "record_type": {
+          "enum": [
+            "raw_observation",
+            "normalized_signal",
+            "event_candidate",
+            "reset_outcome",
+            "feature_snapshot",
+            "prediction"
+          ]
+        },
+        "record_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "supersedes": {
+          "oneOf": [
+            { "$ref": "#/$defs/recordRef" },
+            { "type": "null" }
+          ]
+        },
+        "created_at": { "$ref": "#/$defs/utcTimestamp" },
+        "producer": { "$ref": "#/$defs/producer" },
+        "data": { "type": "object" }
+      }
+    },
+    "rawObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ingest_provider",
+        "provider_item_id",
+        "canonical_url",
+        "published_at",
+        "first_seen_at",
+        "fetched_at",
+        "author",
+        "native_relations",
+        "content"
+      ],
+      "properties": {
+        "ingest_provider": { "type": "string", "minLength": 1 },
+        "provider_item_id": { "type": "string", "minLength": 1 },
+        "canonical_url": { "type": ["string", "null"] },
+        "published_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+        "first_seen_at": { "$ref": "#/$defs/utcTimestamp" },
+        "fetched_at": { "$ref": "#/$defs/utcTimestamp" },
+        "author": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider_author_id", "identity_id", "display_handle"],
+          "properties": {
+            "provider_author_id": { "type": ["string", "null"] },
+            "identity_id": { "type": ["string", "null"] },
+            "display_handle": { "type": ["string", "null"] }
+          }
+        },
+        "native_relations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "provider_item_id"],
+            "properties": {
+              "type": { "enum": ["quotes", "repost", "reply", "links", "unknown"] },
+              "provider_item_id": { "type": ["string", "null"] },
+              "url": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["media_type", "text", "language", "content_hash", "raw_payload_ref"],
+          "properties": {
+            "media_type": { "type": "string" },
+            "text": { "type": "string" },
+            "language": { "type": ["string", "null"] },
+            "content_hash": { "type": "string", "minLength": 1 },
+            "raw_payload_ref": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "normalizedSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_refs",
+        "available_at",
+        "taxonomy_version",
+        "claim",
+        "provenance",
+        "extraction"
+      ],
+      "properties": {
+        "observation_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/recordRef" }
+        },
+        "available_at": { "$ref": "#/$defs/utcTimestamp" },
+        "taxonomy_version": { "type": "string", "minLength": 1 },
+        "claim": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event_type", "phase", "stance", "scope", "asserted_time_range", "author_certainty"],
+          "properties": {
+            "event_type": {
+              "enum": [
+                "quota_reset",
+                "quota_refill",
+                "limit_policy_change",
+                "capacity_restore",
+                "incident",
+                "release",
+                "development_activity",
+                "competitor_limit_change"
+              ]
+            },
+            "phase": {
+              "enum": ["rumor", "expected", "scheduled", "started", "completed", "denied", "cancelled"]
+            },
+            "stance": { "enum": ["supports", "contradicts", "neutral", "unknown"] },
+            "scope": { "$ref": "#/$defs/scope" },
+            "asserted_time_range": {
+              "oneOf": [
+                { "$ref": "#/$defs/timeRange" },
+                { "type": "null" }
+              ]
+            },
+            "author_certainty": { "enum": ["explicit", "probable", "possible", "unknown"] }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_identity_id",
+            "source_role",
+            "root_evidence_id",
+            "derivation",
+            "independence_group_id"
+          ],
+          "properties": {
+            "source_identity_id": { "type": ["string", "null"] },
+            "source_role": {
+              "enum": ["official", "product_lead", "product_team_member", "employee", "community", "aggregator", "unknown"]
+            },
+            "root_evidence_id": { "type": "string", "minLength": 1 },
+            "derivation": { "enum": ["primary_statement", "independent_observation", "quotes", "repost", "summarizes", "unknown"] },
+            "independence_group_id": { "type": "string", "minLength": 1 }
+          }
+        },
+        "extraction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "model_version", "prompt_version", "confidence"],
+          "properties": {
+            "model": { "type": "string" },
+            "model_version": { "type": "string" },
+            "prompt_version": { "type": "string" },
+            "confidence": { "$ref": "#/$defs/probability" }
+          }
+        }
+      }
+    },
+    "eventCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_of", "state", "event_type", "scope", "hypothesized_time_range", "event_cluster_id", "evidence"],
+      "properties": {
+        "as_of": { "$ref": "#/$defs/utcTimestamp" },
+        "state": { "enum": ["open", "supported", "contradicted", "closed"] },
+        "event_type": { "enum": ["quota_reset", "quota_refill", "capacity_restore"] },
+        "scope": { "$ref": "#/$defs/scope" },
+        "hypothesized_time_range": {
+          "oneOf": [
+            { "$ref": "#/$defs/timeRange" },
+            { "type": "null" }
+          ]
+        },
+        "event_cluster_id": { "type": "string", "minLength": 1 },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["signal_ref", "relation", "provenance_relation", "independence_group_id", "link_confidence"],
+            "properties": {
+              "signal_ref": { "$ref": "#/$defs/recordRef" },
+              "relation": { "enum": ["supports", "contradicts", "context"] },
+              "provenance_relation": { "enum": ["independent", "quotes", "repost", "summarizes", "unknown"] },
+              "independence_group_id": { "type": "string" },
+              "link_confidence": { "$ref": "#/$defs/probability" }
+            }
+          }
+        }
+      }
+    },
+    "resetOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "event_type", "scope", "occurred_time_range", "known_at", "label_grade", "verification", "candidate_refs"],
+      "properties": {
+        "status": { "enum": ["confirmed", "rejected", "cancelled"] },
+        "event_type": { "enum": ["quota_reset", "quota_refill", "capacity_restore"] },
+        "scope": { "$ref": "#/$defs/scope" },
+        "occurred_time_range": {
+          "oneOf": [
+            { "$ref": "#/$defs/timeRange" },
+            { "type": "null" }
+          ]
+        },
+        "known_at": { "$ref": "#/$defs/utcTimestamp" },
+        "label_grade": { "enum": ["gold", "silver"] },
+        "verification": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "observation_ref", "independence_group_id"],
+            "properties": {
+              "kind": { "enum": ["direct_platform_observation", "official_confirmation", "independent_user_confirmation"] },
+              "observation_ref": { "$ref": "#/$defs/recordRef" },
+              "independence_group_id": { "type": "string" }
+            }
+          }
+        },
+        "candidate_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/recordRef" }
+        }
+      }
+    },
+    "featureSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledge_cutoff", "feature_schema_version", "target", "features", "data_quality", "source_record_refs"],
+      "properties": {
+        "knowledge_cutoff": { "$ref": "#/$defs/utcTimestamp" },
+        "feature_schema_version": { "type": "string" },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end", "base_slot", "display_horizon"],
+          "properties": {
+            "start": { "$ref": "#/$defs/utcTimestamp" },
+            "end": { "$ref": "#/$defs/utcTimestamp" },
+            "base_slot": { "const": "PT1H" },
+            "display_horizon": { "const": "PT4H" }
+          }
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": { "type": ["number", "integer", "boolean", "null"] }
+        },
+        "data_quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider_coverage", "max_delay_seconds", "out_of_distribution"],
+          "properties": {
+            "provider_coverage": { "$ref": "#/$defs/probability" },
+            "max_delay_seconds": { "type": "integer", "minimum": 0 },
+            "out_of_distribution": { "type": "boolean" }
+          }
+        },
+        "source_record_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/recordRef" }
+        }
+      }
+    },
+    "predictionSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "hazard", "first_reset_probability", "reset_by_end_probability", "rolling_4h_probability"],
+      "properties": {
+        "start": { "$ref": "#/$defs/utcTimestamp" },
+        "end": { "$ref": "#/$defs/utcTimestamp" },
+        "hazard": { "$ref": "#/$defs/probability" },
+        "first_reset_probability": { "$ref": "#/$defs/probability" },
+        "reset_by_end_probability": { "$ref": "#/$defs/probability" },
+        "rolling_4h_probability": { "$ref": "#/$defs/probability" },
+        "epistemic_interval_80": {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/probability" },
+            { "$ref": "#/$defs/probability" }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issued_at",
+        "knowledge_cutoff",
+        "event_process",
+        "scope",
+        "horizon",
+        "base_slot",
+        "display_horizon",
+        "slots",
+        "no_reset_probability",
+        "data_quality",
+        "feature_snapshot_refs",
+        "model"
+      ],
+      "properties": {
+        "issued_at": { "$ref": "#/$defs/utcTimestamp" },
+        "knowledge_cutoff": { "$ref": "#/$defs/utcTimestamp" },
+        "event_process": { "enum": ["first_reset", "recurrent"] },
+        "scope": { "$ref": "#/$defs/scope" },
+        "horizon": { "$ref": "#/$defs/timeRange" },
+        "base_slot": { "const": "PT1H" },
+        "display_horizon": { "const": "PT4H" },
+        "slots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 168,
+          "items": { "$ref": "#/$defs/predictionSlot" }
+        },
+        "no_reset_probability": {
+          "oneOf": [
+            { "$ref": "#/$defs/probability" },
+            { "type": "null" }
+          ]
+        },
+        "data_quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["score", "provider_coverage", "independent_evidence_groups"],
+          "properties": {
+            "score": { "$ref": "#/$defs/probability" },
+            "provider_coverage": { "$ref": "#/$defs/probability" },
+            "independent_evidence_groups": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "feature_snapshot_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/recordRef" }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["family", "version", "training_cutoff", "calibrator_version", "training_data_hash"],
+          "properties": {
+            "family": { "type": "string" },
+            "version": { "type": "string" },
+            "training_cutoff": { "$ref": "#/$defs/utcTimestamp" },
+            "calibrator_version": { "type": ["string", "null"] },
+            "training_data_hash": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

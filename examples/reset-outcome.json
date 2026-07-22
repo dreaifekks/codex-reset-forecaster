@@ -1,0 +1,46 @@
+{
+  "schema_version": "reset-intel/0.1",
+  "record_type": "reset_outcome",
+  "record_id": "out_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-23T09:51:00Z",
+  "producer": {
+    "name": "outcome-adjudicator",
+    "version": "0.1.0",
+    "config_hash": "sha256:example"
+  },
+  "data": {
+    "status": "confirmed",
+    "event_type": "quota_reset",
+    "scope": {
+      "vendor": "openai",
+      "product": "codex",
+      "population": "platform",
+      "plans": ["unknown"],
+      "regions": ["global"],
+      "quota_bucket": null
+    },
+    "occurred_time_range": {
+      "start": "2026-07-23T09:31:00Z",
+      "end": "2026-07-23T09:39:00Z",
+      "boundary": "[start,end)",
+      "precision": "interval_observed",
+      "timezone_basis": "UTC",
+      "original_text": null
+    },
+    "known_at": "2026-07-23T09:48:00Z",
+    "label_grade": "gold",
+    "verification": [
+      {
+        "kind": "direct_platform_observation",
+        "observation_ref": {
+          "record_id": "obs_probe_example_001",
+          "revision": 1
+        },
+        "independence_group_id": "verify_platform_probe"
+      }
+    ],
+    "candidate_refs": []
+  }
+}

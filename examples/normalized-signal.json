@@ -1,0 +1,58 @@
+{
+  "schema_version": "reset-intel/0.1",
+  "record_type": "normalized_signal",
+  "record_id": "sig_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-23T04:03:20Z",
+  "producer": {
+    "name": "claim-extractor",
+    "version": "0.1.0",
+    "config_hash": "sha256:example"
+  },
+  "data": {
+    "observation_refs": [
+      {
+        "record_id": "obs_x_example_001",
+        "revision": 1
+      }
+    ],
+    "available_at": "2026-07-23T04:03:20Z",
+    "taxonomy_version": "reset-taxonomy/0.1",
+    "claim": {
+      "event_type": "quota_reset",
+      "phase": "scheduled",
+      "stance": "supports",
+      "scope": {
+        "vendor": "openai",
+        "product": "codex",
+        "population": "platform",
+        "plans": ["unknown"],
+        "regions": ["global"],
+        "quota_bucket": null
+      },
+      "asserted_time_range": {
+        "start": "2026-07-23T08:00:00Z",
+        "end": "2026-07-24T00:00:00Z",
+        "boundary": "[start,end)",
+        "precision": "part_of_day",
+        "timezone_basis": "author_local_inferred",
+        "original_text": "later today"
+      },
+      "author_certainty": "probable"
+    },
+    "provenance": {
+      "source_identity_id": "person_example",
+      "source_role": "product_team_member",
+      "root_evidence_id": "obs_x_example_001",
+      "derivation": "primary_statement",
+      "independence_group_id": "ind_example_001"
+    },
+    "extraction": {
+      "model": "example-extractor",
+      "model_version": "2026-07-23",
+      "prompt_version": "reset-extract/0.1",
+      "confidence": 0.91
+    }
+  }
+}
