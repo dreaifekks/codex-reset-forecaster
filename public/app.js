@@ -341,6 +341,17 @@ async function fetchJson(url) {
   }
 }
 
+function forecastErrorText(result) {
+  const labels = {
+    forecast_incompatible: "模型版本需要更新。",
+    forecast_not_publishable: "当前数据还不支持发布预测。",
+    forecast_stale: "预测已过期，等待更新。",
+    forecast_not_ready: "预测尚未生成。",
+  };
+  if (result.status === 0) return "暂时无法连接预测服务。";
+  return labels[result.data?.error] ?? "预测暂不可用，请稍后再试。";
+}
+
 function setStatus(kind, text) {
   const status = document.querySelector("#source-status");
   status.classList.remove("ok", "warning", "error");
@@ -541,7 +552,7 @@ async function load() {
       renderForecast(forecastResult.data);
     } else {
       renderForecastError(
-        forecastResult.error ?? "请稍后再试。",
+        forecastErrorText(forecastResult),
         forecastResult.data,
       );
     }
