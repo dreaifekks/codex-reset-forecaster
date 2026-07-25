@@ -188,6 +188,11 @@ curl http://127.0.0.1:8799/api/readiness
 candidates. Do not start a second manual ingestion process while the scheduled
 pipeline is running.
 
+While coverage is waiting, the scheduler keeps the normal hourly cadence and
+also wakes just after `earliest_recheck_at` when that deadline falls before the
+next hourly run. A due stability recheck bypasses the provider's normal refresh
+interval so that this wakeup performs a real second observation.
+
 Do not run `down -v` and do not copy a seed over the existing volume. The outcome
 definition changes the model compatibility signature, so an older champion or
 evaluation is retained for audit but is not served as compatible evidence.

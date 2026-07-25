@@ -18,7 +18,7 @@ tests; it does not turn synthetic data into evidence of real-world accuracy.
 | Model promotion | Rolling-origin evaluation uses one fixed alert budget per fold for both recall and false-alert accounting; promotion checks convergence, the current compatibility signature, paired folds, Brier skill, calibration, and challenger improvement | model-correctness and integration tests |
 | Forecast website | 4h, 24h, and 7×24 projections of the same prediction, green intensity, exact tooltips, provenance and source freshness | API integration test and Playwright browser audit |
 | Accuracy website | Clearly separated walk-forward and mature immutable as-issued evaluation, calibration chart, metrics and event table | API integration test and Playwright browser audit |
-| Hourly operation | Non-overlapping scheduler, daily retraining attempt, stable champion fallback, Docker image and health endpoint | scheduler unit test and Docker smoke test |
+| Hourly operation | Non-overlapping hourly scheduler with exact coverage-recheck wakeups, daily retraining attempt, stable champion fallback, Docker image and health endpoint | scheduler unit test and Docker smoke test |
 | Personal quota optimizer | Deferred by confirmed MVP scope | `docs/personal-optimizer.md` |
 
 ## Local mechanics evidence

@@ -503,6 +503,45 @@ test("hourly scheduler records coverage observation as waiting, not failure", as
   assert.equal(state.last_success_at, "2026-07-22T18:30:00.000Z");
 });
 
+test("coverage stability recheck wakes at its deadline before the next hour", async (t) => {
+  const store = await temporaryStore(t);
+  const current = new Date("2026-07-26T03:00:05.000Z");
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: {
+        run_on_start: false,
+        retrain_interval_hours: 24,
+        scheduler_delay_seconds: 5,
+      },
+    },
+    now: () => new Date(current),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "waiting_for_coverage",
+      coverage_waiting: {
+        schema_version: "coverage-waiting/1",
+        status: "waiting_for_coverage",
+        reason_code: "coverage_stability_observation_pending",
+        providers: ["historical_monitor"],
+        candidate_count: 180,
+        earliest_first_observed_at: "2026-07-25T21:07:11.000Z",
+        earliest_recheck_at: "2026-07-26T03:07:11.000Z",
+        recheck_due: false,
+        observed_at: "2026-07-26T03:00:05.000Z",
+      },
+      training: { succeeded: false, skipped: true },
+      forecast: null,
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-26T03:00:05.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  assert.equal(scheduler.nextRunAt, "2026-07-26T03:07:16.000Z");
+});
+
 test("hourly scheduler records evaluation waiting and does not refit every hour", async (t) => {
   const store = await temporaryStore(t);
   const evaluationWaiting = {

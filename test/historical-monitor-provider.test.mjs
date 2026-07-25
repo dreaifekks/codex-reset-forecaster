@@ -303,7 +303,8 @@ test("authoritative daily coverage requires two stable snapshots and uses the se
   });
 
   clock.now = new Date("2026-07-11T12:00:00.000Z");
-  const second = await provider.collect(store, { force: true });
+  const second = await provider.collect(store);
+  assert.equal(second.skipped, undefined);
   assert.equal(second.coverage_pending, false);
   assert.equal(second.coverage_waiting, null);
   assert.equal(second.coverage_assertions.length, 1);

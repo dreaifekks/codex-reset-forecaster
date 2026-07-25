@@ -12,6 +12,18 @@ function untilNextHour(now, delayMs) {
   return target - current;
 }
 
+function untilNextRun(now, delayMs, preferredAt = null) {
+  const hourlyDelay = untilNextHour(now, delayMs);
+  const preferredMs = Date.parse(preferredAt);
+  if (!Number.isFinite(preferredMs) || preferredMs <= now.getTime()) {
+    return hourlyDelay;
+  }
+  return Math.min(
+    hourlyDelay,
+    preferredMs - now.getTime() + delayMs,
+  );
+}
+
 export function startScheduler({
   store,
   config,
@@ -22,17 +34,28 @@ export function startScheduler({
   let timer = null;
   let stopped = false;
   let running = false;
+  let scheduledFor = null;
 
-  function schedule() {
+  function schedule(preferredAt = null) {
     if (timer) clearTimeout(timer);
     const delayMs = Math.max(0, Number(config.runtime.scheduler_delay_seconds ?? 5) * 1_000);
-    if (!stopped) timer = setTimeout(execute, untilNextHour(now(), delayMs));
+    if (stopped) {
+      scheduledFor = null;
+      return;
+    }
+    const current = now();
+    const waitMs = untilNextRun(current, delayMs, preferredAt);
+    scheduledFor = new Date(current.getTime() + waitMs).toISOString();
+    timer = setTimeout(execute, waitMs);
   }
 
   async function execute() {
     if (running || stopped) return;
+    timer = null;
+    scheduledFor = null;
     running = true;
     const startedAt = now();
+    let preferredNextRunAt = null;
     try {
       const state = await store.readState("runtime", {});
       await store.writeState("runtime", {
@@ -61,6 +84,9 @@ export function startScheduler({
       const trainingError = result.status === "completed_with_training_error"
         ? String(result.training?.error ?? "").trim() || null
         : null;
+      if (coverageWaiting && !coverageWaiting.recheck_due) {
+        preferredNextRunAt = coverageWaiting.earliest_recheck_at;
+      }
       if (
         ["waiting_for_coverage", "waiting_for_evaluation"].includes(result.status) &&
         !waitingStatus
@@ -140,7 +166,7 @@ export function startScheduler({
       logger.error?.(`forecast pipeline failed: ${error.stack ?? error.message}`);
     } finally {
       running = false;
-      schedule();
+      schedule(preferredNextRunAt);
     }
   }
 
@@ -150,14 +176,21 @@ export function startScheduler({
   return {
     async runNow() {
       if (timer) clearTimeout(timer);
+      timer = null;
+      scheduledFor = null;
       await execute();
     },
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      timer = null;
+      scheduledFor = null;
     },
     get running() {
       return running;
+    },
+    get nextRunAt() {
+      return scheduledFor;
     },
   };
 }

@@ -644,22 +644,28 @@ export class HistoricalMonitorProvider {
     const currentContractAlreadyObserved =
       Object.hasOwn(previousState, "coverage_contract_hash") &&
       previousState.coverage_contract_hash === coverageContractHash;
+    const pendingCoverageWaiting = await this.coverageWaiting(
+      store,
+      completenessAttestation,
+      startedAt,
+    );
+    const coverageRecheckDue = Boolean(
+      pendingCoverageWaiting &&
+      Date.parse(pendingCoverageWaiting.earliest_recheck_at) <=
+        startedAt.getTime(),
+    );
     if (!force && previousState.last_success_at &&
         startedAt.getTime() - Date.parse(previousState.last_success_at) < refreshMs &&
-        currentContractAlreadyObserved) {
-      const coverageWaiting = await this.coverageWaiting(
-        store,
-        completenessAttestation,
-        startedAt,
-      );
+        currentContractAlreadyObserved &&
+        !coverageRecheckDue) {
       await store.writeState("historical-monitor-provider", {
         ...previousState,
-        coverage_waiting: coverageWaiting,
+        coverage_waiting: pendingCoverageWaiting,
       });
       return {
         collected: 0,
         skipped: "refresh_interval",
-        coverage_waiting: coverageWaiting,
+        coverage_waiting: pendingCoverageWaiting,
         invalidated_coverage_assertions: invalidatedCoverageAssertions,
         health: { ok: true, delay_seconds: 0 },
       };
