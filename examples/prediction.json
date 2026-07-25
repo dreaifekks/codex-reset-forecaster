@@ -1,5 +1,5 @@
 {
-  "schema_version": "reset-intel/0.1",
+  "schema_version": "reset-intel/0.2",
   "record_type": "prediction",
   "record_id": "pred_example_001",
   "revision": 1,
@@ -23,8 +23,8 @@
       "quota_bucket": null
     },
     "horizon": {
-      "start": "2026-07-23T07:00:00Z",
-      "end": "2026-07-23T11:00:00Z",
+      "start": "2026-07-23T08:00:00Z",
+      "end": "2026-07-23T12:00:00Z",
       "boundary": "[start,end)",
       "precision": "hour",
       "timezone_basis": "UTC",
@@ -34,8 +34,8 @@
     "display_horizon": "PT4H",
     "slots": [
       {
-        "start": "2026-07-23T07:00:00Z",
-        "end": "2026-07-23T08:00:00Z",
+        "start": "2026-07-23T08:00:00Z",
+        "end": "2026-07-23T09:00:00Z",
         "hazard": 0.10,
         "first_reset_probability": 0.10,
         "reset_by_end_probability": 0.10,
@@ -43,30 +43,30 @@
         "epistemic_interval_80": [0.04, 0.18]
       },
       {
-        "start": "2026-07-23T08:00:00Z",
-        "end": "2026-07-23T09:00:00Z",
-        "hazard": 0.10,
-        "first_reset_probability": 0.09,
-        "reset_by_end_probability": 0.19,
-        "rolling_4h_probability": 0.271,
-        "epistemic_interval_80": [0.04, 0.18]
-      },
-      {
         "start": "2026-07-23T09:00:00Z",
         "end": "2026-07-23T10:00:00Z",
         "hazard": 0.10,
-        "first_reset_probability": 0.081,
-        "reset_by_end_probability": 0.271,
-        "rolling_4h_probability": 0.19,
+        "first_reset_probability": 0.09,
+        "reset_by_end_probability": 0.19,
+        "rolling_4h_probability": null,
         "epistemic_interval_80": [0.04, 0.18]
       },
       {
         "start": "2026-07-23T10:00:00Z",
         "end": "2026-07-23T11:00:00Z",
         "hazard": 0.10,
+        "first_reset_probability": 0.081,
+        "reset_by_end_probability": 0.271,
+        "rolling_4h_probability": null,
+        "epistemic_interval_80": [0.04, 0.18]
+      },
+      {
+        "start": "2026-07-23T11:00:00Z",
+        "end": "2026-07-23T12:00:00Z",
+        "hazard": 0.10,
         "first_reset_probability": 0.0729,
         "reset_by_end_probability": 0.3439,
-        "rolling_4h_probability": 0.1,
+        "rolling_4h_probability": null,
         "epistemic_interval_80": [0.04, 0.18]
       }
     ],
@@ -74,12 +74,21 @@
     "data_quality": {
       "score": 0.84,
       "provider_coverage": 0.91,
+      "outcome_sample_count": 20,
+      "sample_sufficiency": 1,
       "independent_evidence_groups": 2
     },
-    "feature_snapshot_refs": [],
+    "feature_snapshot_refs": [
+      { "record_id": "feat_example_008", "revision": 1 },
+      { "record_id": "feat_example_009", "revision": 1 },
+      { "record_id": "feat_example_010", "revision": 1 },
+      { "record_id": "feat_example_011", "revision": 1 }
+    ],
     "model": {
       "family": "bayesian_discrete_time_hazard",
       "version": "reset-model/0.1.0",
+      "artifact_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model_contract_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "training_cutoff": "2026-07-20T00:00:00Z",
       "calibrator_version": null,
       "training_data_hash": "sha256:example-training-data"

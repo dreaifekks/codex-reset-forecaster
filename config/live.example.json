@@ -1,0 +1,19 @@
+{
+  "providers": {
+    "x": {
+      "enabled": true,
+      "token_file": null,
+      "outcome_exhaustiveness_contract": null,
+      "backfill_start": "2026-03-01T00:00:00Z",
+      "max_pages_per_poll": 10,
+      "search_endpoint": "/tweets/search/recent"
+    }
+  },
+  "model": {
+    "outcome_coverage_providers": ["x"]
+  },
+  "runtime": {
+    "scheduler_enabled": true,
+    "run_on_start": true
+  }
+}

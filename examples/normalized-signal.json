@@ -1,13 +1,13 @@
 {
-  "schema_version": "reset-intel/0.1",
+  "schema_version": "reset-intel/0.2",
   "record_type": "normalized_signal",
   "record_id": "sig_example_001",
   "revision": 1,
   "supersedes": null,
   "created_at": "2026-07-23T04:03:20Z",
   "producer": {
-    "name": "claim-extractor",
-    "version": "0.1.0",
+    "name": "rule-claim-extractor",
+    "version": "0.2.5",
     "config_hash": "sha256:example"
   },
   "data": {
@@ -18,7 +18,7 @@
       }
     ],
     "available_at": "2026-07-23T04:03:20Z",
-    "taxonomy_version": "reset-taxonomy/0.1",
+    "taxonomy_version": "reset-taxonomy/0.2.2",
     "claim": {
       "event_type": "quota_reset",
       "phase": "scheduled",
@@ -49,9 +49,10 @@
       "independence_group_id": "ind_example_001"
     },
     "extraction": {
-      "model": "example-extractor",
-      "model_version": "2026-07-23",
-      "prompt_version": "reset-extract/0.1",
+      "model": "deterministic-rules",
+      "model_version": "0.2.5",
+      "prompt_version": "reset-extract/rules-0.2.5",
+      "semantic_policy_hash": "sha256:0c2b32ba0cbc4deda49d7ad5f0ce08ecbc8abd762f945e0b77d5a9e06ff90793",
       "confidence": 0.91
     }
   }

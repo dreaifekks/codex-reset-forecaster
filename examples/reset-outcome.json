@@ -1,5 +1,5 @@
 {
-  "schema_version": "reset-intel/0.1",
+  "schema_version": "reset-intel/0.2",
   "record_type": "reset_outcome",
   "record_id": "out_example_001",
   "revision": 1,
@@ -7,11 +7,13 @@
   "created_at": "2026-07-23T09:51:00Z",
   "producer": {
     "name": "outcome-adjudicator",
-    "version": "0.1.0",
+    "version": "0.3.1",
     "config_hash": "sha256:example"
   },
   "data": {
     "status": "confirmed",
+    "label_policy_version": "completed-direct/0.3.1",
+    "event_identity": "evt_example_001",
     "event_type": "quota_reset",
     "scope": {
       "vendor": "openai",
@@ -30,17 +32,23 @@
       "original_text": null
     },
     "known_at": "2026-07-23T09:48:00Z",
+    "replay_available_at": null,
     "label_grade": "gold",
     "verification": [
       {
-        "kind": "direct_platform_observation",
+        "kind": "official_confirmation",
         "observation_ref": {
-          "record_id": "obs_probe_example_001",
+          "record_id": "obs_official_example_001",
           "revision": 1
         },
-        "independence_group_id": "verify_platform_probe"
+        "independence_group_id": "verify_official_statement"
       }
     ],
-    "candidate_refs": []
+    "candidate_refs": [
+      {
+        "record_id": "evt_candidate_example_001",
+        "revision": 1
+      }
+    ]
   }
 }

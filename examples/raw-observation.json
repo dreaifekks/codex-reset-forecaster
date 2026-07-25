@@ -1,5 +1,5 @@
 {
-  "schema_version": "reset-intel/0.1",
+  "schema_version": "reset-intel/0.2",
   "record_type": "raw_observation",
   "record_id": "obs_x_example_001",
   "revision": 1,
@@ -17,6 +17,7 @@
     "published_at": "2026-07-23T03:41:00Z",
     "first_seen_at": "2026-07-23T04:01:54Z",
     "fetched_at": "2026-07-23T04:01:54Z",
+    "availability_attestation": null,
     "author": {
       "provider_author_id": "example-author",
       "identity_id": "person_example",

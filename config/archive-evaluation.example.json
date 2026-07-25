@@ -1,0 +1,17 @@
+{
+  "providers": {
+    "historical_monitor": {
+      "enabled": true,
+      "discover_linked_posts": false,
+      "coverage_adequacy": "outcome_only",
+      "coverage_completeness_attestation": null
+    }
+  },
+  "model": {
+    "outcome_coverage_providers": []
+  },
+  "runtime": {
+    "scheduler_enabled": false,
+    "run_on_start": false
+  }
+}

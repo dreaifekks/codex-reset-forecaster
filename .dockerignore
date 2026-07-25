@@ -1,0 +1,13 @@
+.git
+.env*
+.secrets
+.playwright-cli
+coverage
+data
+models
+artifacts
+node_modules
+output
+test
+design-qa.md
+*.log

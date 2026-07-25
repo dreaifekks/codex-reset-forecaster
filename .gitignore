@@ -1,10 +1,16 @@
 .DS_Store
-.env
+.env*
+!.env.example
+.secrets/
 env
 node_modules/
 var/
 data/
 models/
 artifacts/
+coverage/
+output/
+.playwright-cli/
+design-qa.md
 *.log
 *.tmp

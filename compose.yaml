@@ -1,0 +1,45 @@
+name: codex-reset-forecaster
+
+services:
+  reset-forecaster:
+    build: .
+    restart: unless-stopped
+    user: "${RESET_UID:-1000}:${RESET_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    ports:
+      - "127.0.0.1:${RESET_HOST_PORT:-8799}:8787"
+    environment:
+      X_BEARER_TOKEN_FILE: "${X_BEARER_TOKEN_FILE:-}"
+      X_SEARCH_GATEWAY_ENABLED: "${X_SEARCH_GATEWAY_ENABLED:-false}"
+      X_SEARCH_GATEWAY_URL: "${X_SEARCH_GATEWAY_URL:-http://host.docker.internal:8787}"
+      X_SEARCH_GATEWAY_PROVIDER: "${X_SEARCH_GATEWAY_PROVIDER:-hermes}"
+      X_SEARCH_GATEWAY_TOKEN_FILE: "${X_SEARCH_GATEWAY_TOKEN_FILE:-/run/secrets/x-search-gateway-token}"
+      HISTORICAL_MONITOR_ENABLED: "${HISTORICAL_MONITOR_ENABLED:-false}"
+      HISTORICAL_MONITOR_URL: "${HISTORICAL_MONITOR_URL:-https://codex-resets.com/}"
+      RESET_CONFIG: "${RESET_CONFIG:-/app/config/default.json}"
+      RESET_SCHEDULER_ENABLED: "${RESET_SCHEDULER_ENABLED:-true}"
+      RESET_RUN_ON_START: "${RESET_RUN_ON_START:-true}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - reset-forecaster-data:/data
+      - ./config:/app/config:ro
+      - "${X_BEARER_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/x-bearer-token:ro"
+      - "${X_SEARCH_GATEWAY_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/x-search-gateway-token:ro"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  reset-forecaster-data:
+    external: true
+    name: "${RESET_DATA_VOLUME:-codex-reset-forecaster-data-v1}"

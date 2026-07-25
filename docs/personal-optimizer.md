@@ -2,8 +2,10 @@
 
 ## Boundary
 
-This is a downstream consumer planned for a later phase. The platform forecaster
-does not need retraining when personal inputs become available.
+This is a downstream consumer planned for a later phase and is explicitly outside
+the initial website MVP. The first release has no user accounts, personal quota
+state, reset-voucher inventory, or personalized recommendation UI. The platform
+forecaster does not need retraining when personal inputs become available.
 
 ## Inputs
 

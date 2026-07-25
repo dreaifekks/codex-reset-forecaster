@@ -1,0 +1,47 @@
+{
+  "schema_version": "reset-intel/0.2",
+  "record_type": "event_candidate",
+  "record_id": "evt_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-23T04:04:00Z",
+  "producer": {
+    "name": "event-linker",
+    "version": "0.1.0",
+    "config_hash": "sha256:example"
+  },
+  "data": {
+    "as_of": "2026-07-23T04:04:00Z",
+    "state": "supported",
+    "event_type": "quota_reset",
+    "scope": {
+      "vendor": "openai",
+      "product": "codex",
+      "population": "platform",
+      "plans": ["unknown"],
+      "regions": ["global"],
+      "quota_bucket": null
+    },
+    "hypothesized_time_range": {
+      "start": "2026-07-23T08:00:00Z",
+      "end": "2026-07-24T00:00:00Z",
+      "boundary": "[start,end)",
+      "precision": "part_of_day",
+      "timezone_basis": "author_local_inferred",
+      "original_text": "later today"
+    },
+    "event_cluster_id": "openai:codex:quota_reset:2026-07-23",
+    "evidence": [
+      {
+        "signal_ref": {
+          "record_id": "sig_example_001",
+          "revision": 1
+        },
+        "relation": "supports",
+        "provenance_relation": "independent",
+        "independence_group_id": "ind_example_001",
+        "link_confidence": 0.95
+      }
+    ]
+  }
+}

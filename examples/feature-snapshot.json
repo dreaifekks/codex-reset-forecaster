@@ -1,0 +1,62 @@
+{
+  "schema_version": "reset-intel/0.2",
+  "record_type": "feature_snapshot",
+  "record_id": "feat_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-23T07:00:00Z",
+  "producer": {
+    "name": "as-of-feature-builder",
+    "version": "0.2.3",
+    "config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "data": {
+    "knowledge_cutoff": "2026-07-23T07:00:00Z",
+    "config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "feature_schema_version": "reset-features/0.2.7",
+    "taxonomy_version": "reset-taxonomy/0.2.2",
+    "deduplication_version": "reset-dedup/0.2.1",
+    "timezone_database_version": "tzdata-example",
+    "extractor_model": "deterministic-rules",
+    "extractor_model_version": "0.2.5",
+    "extractor_prompt_version": "reset-extract/rules-0.2.5",
+    "extractor_semantic_policy_hash": "sha256:0c2b32ba0cbc4deda49d7ad5f0ce08ecbc8abd762f945e0b77d5a9e06ff90793",
+    "target": {
+      "start": "2026-07-23T07:00:00Z",
+      "end": "2026-07-23T08:00:00Z",
+      "base_slot": "PT1H",
+      "display_horizon": "PT4H"
+    },
+    "features": {
+      "weekly_sin_1": 0.42,
+      "weekly_cos_1": -0.91,
+      "renewal_periodic_kernel": 1.46,
+      "daily_sin_1": 0.97,
+      "daily_cos_1": -0.26,
+      "log_hours_since_reset": 3.21,
+      "since_reset_0_6h": 0,
+      "since_reset_18_36h": 1,
+      "recent_reset_density_7d": 1.18,
+      "official_reset_intent_decay": 0.62,
+      "official_reset_activity_decay": 0.7,
+      "official_incident_decay": 0.2,
+      "community_momentum": 0.15,
+      "provider_coverage": 1,
+      "provider_health": 1
+    },
+    "data_quality": {
+      "provider_coverage": 1,
+      "max_delay_seconds": 0,
+      "outcome_sample_count": 20,
+      "sample_sufficiency": 1,
+      "out_of_distribution": false
+    },
+    "source_record_refs": [
+      {
+        "record_id": "sig_example_001",
+        "revision": 1
+      }
+    ],
+    "coverage_assertion_refs": []
+  }
+}

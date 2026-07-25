@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/reset-intel/0.1/reset-intel.schema.json",
+  "$id": "https://example.invalid/reset-intel/0.2/reset-intel.schema.json",
   "title": "Reset Intelligence Record",
   "description": "Provider-neutral, append-only records for platform reset timing intelligence.",
   "allOf": [
@@ -42,6 +42,12 @@
             "record_type": { "const": "prediction" },
             "data": { "$ref": "#/$defs/prediction" }
           }
+        },
+        {
+          "properties": {
+            "record_type": { "const": "prediction_settlement" },
+            "data": { "$ref": "#/$defs/predictionSettlement" }
+          }
         }
       ]
     }
@@ -82,6 +88,15 @@
         "revision": { "type": "integer", "minimum": 1 }
       }
     },
+    "coverageAssertionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assertion_id", "revision"],
+      "properties": {
+        "assertion_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
     "timeRange": {
       "type": "object",
       "additionalProperties": false,
@@ -113,6 +128,12 @@
       "properties": {
         "vendor": { "type": "string", "minLength": 1 },
         "product": { "type": "string", "minLength": 1 },
+        "products": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
         "population": {
           "enum": ["platform", "affected_users", "plan", "region", "account", "unknown"]
         },
@@ -127,7 +148,16 @@
           "uniqueItems": true
         },
         "quota_bucket": { "type": ["string", "null"] }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "product": { "const": "multi_product" } },
+            "required": ["product"]
+          },
+          "then": { "required": ["products"] }
+        }
+      ]
     },
     "envelope": {
       "type": "object",
@@ -143,7 +173,7 @@
         "data"
       ],
       "properties": {
-        "schema_version": { "const": "reset-intel/0.1" },
+        "schema_version": { "const": "reset-intel/0.2" },
         "record_type": {
           "enum": [
             "raw_observation",
@@ -151,7 +181,8 @@
             "event_candidate",
             "reset_outcome",
             "feature_snapshot",
-            "prediction"
+            "prediction",
+            "prediction_settlement"
           ]
         },
         "record_id": { "type": "string", "minLength": 1 },
@@ -177,6 +208,7 @@
         "published_at",
         "first_seen_at",
         "fetched_at",
+        "availability_attestation",
         "author",
         "native_relations",
         "content"
@@ -188,6 +220,25 @@
         "published_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
         "first_seen_at": { "$ref": "#/$defs/utcTimestamp" },
         "fetched_at": { "$ref": "#/$defs/utcTimestamp" },
+        "availability_attestation": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["available_at", "basis", "attestor_url", "verified_at", "verification"],
+              "properties": {
+                "available_at": { "$ref": "#/$defs/utcTimestamp" },
+                "basis": {
+                  "enum": ["direct_source_publication", "archive_snapshot", "provider_first_seen"]
+                },
+                "attestor_url": { "type": "string", "minLength": 1 },
+                "verified_at": { "$ref": "#/$defs/utcTimestamp" },
+                "verification": { "type": "string", "minLength": 1 }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
         "author": {
           "type": "object",
           "additionalProperties": false,
@@ -220,8 +271,44 @@
             "text": { "type": "string" },
             "language": { "type": ["string", "null"] },
             "content_hash": { "type": "string", "minLength": 1 },
-            "raw_payload_ref": { "type": ["string", "null"] }
+            "raw_payload_ref": { "type": ["string", "null"] },
+            "raw_payload_hash": { "type": ["string", "null"] }
           }
+        },
+        "material_hash": { "type": ["string", "null"] },
+        "selection_context": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "feature_eligible": { "type": "boolean" },
+                "outcome_conditioned": { "type": "boolean" },
+                "selection_method": { "type": "string" },
+                "linked_from": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "uniqueItems": true
+                }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "source_timing": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source_published_at", "provider_observed_at", "availability_basis"],
+              "properties": {
+                "source_published_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+                "provider_observed_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+                "availability_basis": { "type": "string", "minLength": 1 }
+              }
+            },
+            { "type": "null" }
+          ]
         }
       }
     },
@@ -292,17 +379,35 @@
             },
             "root_evidence_id": { "type": "string", "minLength": 1 },
             "derivation": { "enum": ["primary_statement", "independent_observation", "quotes", "repost", "summarizes", "unknown"] },
-            "independence_group_id": { "type": "string", "minLength": 1 }
+            "independence_group_id": { "type": "string", "minLength": 1 },
+            "feature_eligible": { "type": "boolean" },
+            "selection_bias": { "type": ["string", "null"] },
+            "source_published_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+            "first_seen_at": { "$ref": "#/$defs/utcTimestamp" },
+            "recency_basis": {
+              "enum": [
+                "source_publication",
+                "attested_source_publication",
+                "collector_first_seen",
+                "asserted_time_range",
+                "unknown"
+              ]
+            },
+            "canonical_source_url": { "type": ["string", "null"] }
           }
         },
         "extraction": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["model", "model_version", "prompt_version", "confidence"],
+          "required": ["model", "model_version", "prompt_version", "semantic_policy_hash", "confidence"],
           "properties": {
             "model": { "type": "string" },
             "model_version": { "type": "string" },
             "prompt_version": { "type": "string" },
+            "semantic_policy_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
             "confidence": { "$ref": "#/$defs/probability" }
           }
         }
@@ -324,6 +429,7 @@
           ]
         },
         "event_cluster_id": { "type": "string", "minLength": 1 },
+        "identity_basis": { "type": "string", "minLength": 1 },
         "evidence": {
           "type": "array",
           "items": {
@@ -345,8 +451,45 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["status", "event_type", "scope", "occurred_time_range", "known_at", "label_grade", "verification", "candidate_refs"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "confirmed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["label_policy_version", "event_identity"],
+            "properties": {
+              "label_policy_version": { "const": "completed-direct/0.3.0" },
+              "event_identity": { "type": "string", "minLength": 1 },
+              "occurred_time_range": { "$ref": "#/$defs/timeRange" },
+              "candidate_refs": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "$ref": "#/$defs/recordRef" }
+              },
+              "verification": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "observation_ref", "independence_group_id"],
+                  "properties": {
+                    "kind": { "const": "official_confirmation" },
+                    "observation_ref": { "$ref": "#/$defs/recordRef" },
+                    "independence_group_id": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "status": { "enum": ["confirmed", "rejected", "cancelled"] },
+        "label_policy_version": { "type": ["string", "null"] },
+        "event_identity": { "type": "string", "minLength": 1 },
         "event_type": { "enum": ["quota_reset", "quota_refill", "capacity_restore"] },
         "scope": { "$ref": "#/$defs/scope" },
         "occurred_time_range": {
@@ -356,6 +499,12 @@
           ]
         },
         "known_at": { "$ref": "#/$defs/utcTimestamp" },
+        "replay_available_at": {
+          "oneOf": [
+            { "$ref": "#/$defs/utcTimestamp" },
+            { "type": "null" }
+          ]
+        },
         "label_grade": { "enum": ["gold", "silver"] },
         "verification": {
           "type": "array",
@@ -380,10 +529,21 @@
     "featureSnapshot": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["knowledge_cutoff", "feature_schema_version", "target", "features", "data_quality", "source_record_refs"],
+      "required": ["knowledge_cutoff", "config_hash", "feature_schema_version", "taxonomy_version", "deduplication_version", "timezone_database_version", "extractor_model", "extractor_model_version", "extractor_prompt_version", "extractor_semantic_policy_hash", "target", "features", "data_quality", "source_record_refs", "coverage_assertion_refs"],
       "properties": {
         "knowledge_cutoff": { "$ref": "#/$defs/utcTimestamp" },
+        "config_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "feature_schema_version": { "type": "string" },
+        "taxonomy_version": { "type": "string" },
+        "deduplication_version": { "type": "string" },
+        "timezone_database_version": { "type": "string" },
+        "extractor_model": { "type": "string", "minLength": 1 },
+        "extractor_model_version": { "type": "string", "minLength": 1 },
+        "extractor_prompt_version": { "type": "string", "minLength": 1 },
+        "extractor_semantic_policy_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
         "target": {
           "type": "object",
           "additionalProperties": false,
@@ -402,16 +562,23 @@
         "data_quality": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider_coverage", "max_delay_seconds", "out_of_distribution"],
+          "required": ["provider_coverage", "max_delay_seconds", "outcome_sample_count", "sample_sufficiency", "out_of_distribution"],
           "properties": {
             "provider_coverage": { "$ref": "#/$defs/probability" },
             "max_delay_seconds": { "type": "integer", "minimum": 0 },
+            "outcome_sample_count": { "type": "integer", "minimum": 0 },
+            "sample_sufficiency": { "$ref": "#/$defs/probability" },
             "out_of_distribution": { "type": "boolean" }
           }
         },
         "source_record_refs": {
           "type": "array",
           "items": { "$ref": "#/$defs/recordRef" }
+        },
+        "coverage_assertion_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/coverageAssertionRef" }
         }
       }
     },
@@ -425,15 +592,25 @@
         "hazard": { "$ref": "#/$defs/probability" },
         "first_reset_probability": { "$ref": "#/$defs/probability" },
         "reset_by_end_probability": { "$ref": "#/$defs/probability" },
-        "rolling_4h_probability": { "$ref": "#/$defs/probability" },
-        "epistemic_interval_80": {
-          "type": "array",
-          "prefixItems": [
+        "rolling_4h_probability": {
+          "oneOf": [
             { "$ref": "#/$defs/probability" },
-            { "$ref": "#/$defs/probability" }
-          ],
-          "minItems": 2,
-          "maxItems": 2
+            { "type": "null" }
+          ]
+        },
+        "epistemic_interval_80": {
+          "oneOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                { "$ref": "#/$defs/probability" },
+                { "$ref": "#/$defs/probability" }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            },
+            { "type": "null" }
+          ]
         }
       }
     },
@@ -477,29 +654,92 @@
         "data_quality": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["score", "provider_coverage", "independent_evidence_groups"],
+          "required": ["score", "provider_coverage", "outcome_sample_count", "sample_sufficiency", "independent_evidence_groups"],
           "properties": {
             "score": { "$ref": "#/$defs/probability" },
             "provider_coverage": { "$ref": "#/$defs/probability" },
+            "outcome_sample_count": { "type": "integer", "minimum": 0 },
+            "sample_sufficiency": { "$ref": "#/$defs/probability" },
             "independent_evidence_groups": { "type": "integer", "minimum": 0 }
           }
         },
         "feature_snapshot_refs": {
           "type": "array",
+          "minItems": 1,
+          "maxItems": 168,
+          "uniqueItems": true,
           "items": { "$ref": "#/$defs/recordRef" }
         },
         "model": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["family", "version", "training_cutoff", "calibrator_version", "training_data_hash"],
+          "required": ["family", "version", "artifact_hash", "model_contract_hash", "training_cutoff", "calibrator_version", "training_data_hash"],
           "properties": {
             "family": { "type": "string" },
             "version": { "type": "string" },
+            "artifact_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "model_contract_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
             "training_cutoff": { "$ref": "#/$defs/utcTimestamp" },
             "calibrator_version": { "type": ["string", "null"] },
             "training_data_hash": { "type": "string" }
           }
         }
+      }
+    },
+    "predictionSettlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prediction_ref",
+        "slot_index",
+        "window",
+        "display_horizon",
+        "status",
+        "settled_at",
+        "outcome_as_of_mode",
+        "coverage_as_of_mode",
+        "outcome_refs",
+        "coverage_assertion_refs",
+        "coverage_assertion_snapshot_hash",
+        "coverage",
+        "reason"
+      ],
+      "properties": {
+        "prediction_ref": { "$ref": "#/$defs/recordRef" },
+        "slot_index": { "type": "integer", "minimum": 0, "maximum": 167 },
+        "window": { "$ref": "#/$defs/timeRange" },
+        "display_horizon": { "const": "PT4H" },
+        "status": { "enum": ["positive", "negative", "pending", "censored"] },
+        "settled_at": { "$ref": "#/$defs/utcTimestamp" },
+        "outcome_as_of_mode": { "const": "live" },
+        "coverage_as_of_mode": { "const": "live" },
+        "outcome_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/recordRef" }
+        },
+        "coverage_assertion_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/coverageAssertionRef" }
+        },
+        "coverage_assertion_snapshot_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["complete", "providers"],
+          "properties": {
+            "complete": { "type": "boolean" },
+            "providers": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        },
+        "reason": { "type": "string", "minLength": 1 }
       }
     }
   }

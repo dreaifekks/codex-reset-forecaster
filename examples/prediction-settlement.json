@@ -1,0 +1,51 @@
+{
+  "schema_version": "reset-intel/0.2",
+  "record_type": "prediction_settlement",
+  "record_id": "set_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-23T11:00:00Z",
+  "producer": {
+    "name": "prediction-settler",
+    "version": "0.2.0",
+    "config_hash": "sha256:example"
+  },
+  "data": {
+    "prediction_ref": {
+      "record_id": "pred_example_001",
+      "revision": 1
+    },
+    "slot_index": 0,
+    "window": {
+      "start": "2026-07-23T07:00:00Z",
+      "end": "2026-07-23T11:00:00Z",
+      "boundary": "[start,end)",
+      "precision": "hour",
+      "timezone_basis": "UTC",
+      "original_text": null
+    },
+    "display_horizon": "PT4H",
+    "status": "positive",
+    "settled_at": "2026-07-23T11:00:00Z",
+    "outcome_as_of_mode": "live",
+    "coverage_as_of_mode": "live",
+    "outcome_refs": [
+      {
+        "record_id": "out_example_001",
+        "revision": 1
+      }
+    ],
+    "coverage_assertion_refs": [
+      {
+        "assertion_id": "coverage_x_example_001",
+        "revision": 1
+      }
+    ],
+    "coverage_assertion_snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "coverage": {
+      "complete": true,
+      "providers": ["x"]
+    },
+    "reason": "confirmed outcome overlaps the issued four-hour window"
+  }
+}

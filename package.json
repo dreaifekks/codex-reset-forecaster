@@ -1,0 +1,20 @@
+{
+  "name": "codex-reset-forecaster",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Provider-neutral hourly Codex platform reset forecaster",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "test": "node --test --test-reporter=spec",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "demo:seed": "node src/cli.mjs demo-seed",
+    "demo:start": "node src/server.mjs --demo",
+    "pipeline": "node src/cli.mjs pipeline",
+    "evaluate": "node src/cli.mjs evaluate",
+    "start": "node src/server.mjs"
+  }
+}

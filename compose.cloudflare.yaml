@@ -1,0 +1,12 @@
+services:
+  reset-forecaster:
+    networks:
+      default: {}
+      cloudflare-ingress:
+        aliases:
+          - codex-reset-forecaster
+
+networks:
+  cloudflare-ingress:
+    external: true
+    name: "${CLOUDFLARE_TUNNEL_NETWORK:-cloudflare_tunnel}"

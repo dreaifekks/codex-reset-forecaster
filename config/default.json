@@ -1,0 +1,149 @@
+{
+  "config_version": "provider-config/0.2.7",
+  "taxonomy_version": "reset-taxonomy/0.2.2",
+  "feature_schema_version": "reset-features/0.2.7",
+  "deduplication_version": "reset-dedup/0.2.1",
+  "timezone_database_version": "system",
+  "extractor": {
+    "model": "deterministic-rules",
+    "model_version": "0.2.5",
+    "prompt_version": "reset-extract/rules-0.2.5"
+  },
+  "target": {
+    "vendor": "openai",
+    "product": "codex",
+    "population": "platform",
+    "plans": ["paid"],
+    "regions": ["global"],
+    "quota_bucket": null
+  },
+  "providers": {
+    "x": {
+      "enabled": false,
+      "freshness_max_age_hours": 2.5,
+      "base_url": "https://api.x.com/2",
+      "token_file": null,
+      "search_endpoint": "/tweets/search/recent",
+      "max_pages_per_poll": 10,
+      "max_retries": 2,
+      "coverage_safety_lag_seconds": 0,
+      "outcome_exhaustiveness_contract": null,
+      "backfill_start": null,
+      "exclude_replies": false,
+      "confirmation_identities": [
+        {
+          "username": "thsottiaux",
+          "identity_id": "person_tibo_sottiaux",
+          "source_role": "product_lead"
+        }
+      ],
+      "context_identities": [
+        {
+          "username": "OpenAI",
+          "identity_id": "org_openai",
+          "source_role": "official"
+        }
+      ],
+      "context_queries": [
+        "(Codex OR OpenAI) (reset OR usage limits OR capacity OR outage) -is:retweet",
+        "(Claude OR Gemini OR Grok) (launch OR model OR usage limits) -is:retweet"
+      ]
+    },
+    "x_search_gateway": {
+      "enabled": false,
+      "freshness_max_age_hours": 2.5,
+      "base_url": "http://127.0.0.1:8788",
+      "upstream_provider": "hermes",
+      "token_file": null,
+      "request_timeout_ms": 190000,
+      "limit": 20,
+      "state_prefix": "codex-reset-forecaster",
+      "confirmation_identities": [
+        {
+          "username": "thsottiaux",
+          "identity_id": "person_tibo_sottiaux",
+          "source_role": "product_lead"
+        }
+      ],
+      "context_identities": [
+        {
+          "username": "OpenAI",
+          "identity_id": "org_openai",
+          "source_role": "official"
+        }
+      ],
+      "queries": [
+        {
+          "name": "tibo-reset-signals",
+          "query": "from:thsottiaux (Codex OR ChatGPT Work) (reset OR usage limits OR quota)",
+          "handles": ["thsottiaux"]
+        },
+        {
+          "name": "ecosystem-context",
+          "query": "(Codex OR Claude OR Gemini OR Grok) (launch OR model OR limits OR capacity)",
+          "handles": []
+        }
+      ]
+    },
+    "historical_monitor": {
+      "enabled": false,
+      "freshness_max_age_hours": 30,
+      "provider_name": "historical_monitor",
+      "base_url": "https://codex-resets.com/",
+      "format": "codex-resets-html-v1",
+      "x_oembed_url": "https://publish.twitter.com/oembed",
+      "verify_x_oembed": true,
+      "discover_linked_posts": false,
+      "coverage_adequacy": "outcome_only",
+      "coverage_completeness_attestation": null,
+      "verification_concurrency": 6,
+      "request_timeout_ms": 20000,
+      "refresh_interval_hours": 24,
+      "confirmation_identities": [
+        {
+          "username": "thsottiaux",
+          "identity_id": "person_tibo_sottiaux",
+          "source_role": "product_lead"
+        }
+      ],
+      "context_identities": []
+    }
+  },
+  "model": {
+    "family": "ridge_logistic_discrete_time_hazard",
+    "outcome_coverage_providers": ["x"],
+    "lambda": 2.0,
+    "learning_rate": 0.08,
+    "gradient_tolerance": 0.00001,
+    "objective_tolerance": 1e-10,
+    "hessian_step": 0.0001,
+    "max_iterations": 2500,
+    "coefficient_priors": {
+      "asserted_time_overlap": 0.5,
+      "official_reset_intent_decay": 0.2,
+      "official_incident_decay": 0.2,
+      "renewal_periodic_kernel": 1.0
+    },
+    "minimum_outcomes": 3,
+    "minimum_live_evaluation_windows": 1008,
+    "minimum_live_evaluation_events": 20,
+    "maximum_training_days": 180,
+    "promotion": {
+      "minimum_event_window_recall": 0.8,
+      "top_window_hours_per_week": 36,
+      "require_brier_skill_above": 0,
+      "maximum_expected_calibration_error": 0.1
+    }
+  },
+  "runtime": {
+    "data_dir": "data",
+    "host": "127.0.0.1",
+    "port": 8787,
+    "scheduler_enabled": false,
+    "run_on_start": true,
+    "scheduler_delay_seconds": 5,
+    "retrain_interval_hours": 24,
+    "forecast_fresh_age_hours": 1.5,
+    "forecast_stale_age_hours": 3
+  }
+}

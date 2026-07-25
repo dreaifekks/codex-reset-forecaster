@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="description" content="预测未来 7 天 Codex 全平台重置的可能性。">
+    <title>Codex 重置预测</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/" aria-label="Codex 重置预测首页">
+          <img class="brand-icon" src="/favicon.svg" alt="">
+          <span>Codex 重置预测</span>
+          <span class="beta-badge">实验版</span>
+        </a>
+        <nav aria-label="主导航">
+          <a class="active" href="/">预测</a>
+          <a href="/accuracy">历史精度</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow">CODEX · 付费计划全平台重置</p>
+          <h1>未来 7 天重置预测</h1>
+          <p class="lede">预测未来 168 小时内发生全平台重置的可能性。</p>
+        </div>
+        <div class="heading-meta">
+          <div class="timezone-display" id="timezone-display">时区 · —</div>
+          <div class="status-pill" id="source-status" role="status" aria-live="polite"><span aria-hidden="true"></span>正在加载预测</div>
+        </div>
+      </section>
+
+      <section class="panel watch-card" aria-label="当前重置预测">
+        <div class="watch-main">
+          <span class="badge">当前预测</span>
+          <p>未来 168 小时内的重置概率</p>
+          <div class="watch-value-row">
+            <strong id="probability-7d">—</strong>
+            <span>7 天累计</span>
+          </div>
+          <small class="interval-note" id="interval-7d">80% 不确定区间：等待数据</small>
+          <div class="publication-warning" id="publication-warning" role="alert" hidden></div>
+        </div>
+        <div class="watch-aside">
+          <span>预测区间</span>
+          <strong id="forecast-window">等待数据</strong>
+          <small>连续 168 小时</small>
+        </div>
+      </section>
+
+      <section class="summary-grid" aria-label="预测摘要">
+        <article class="summary-card">
+          <p>未来 4 小时</p>
+          <strong id="probability-4h">—</strong>
+          <small id="interval-4h">80% 不确定区间：等待数据</small>
+        </article>
+        <article class="summary-card">
+          <p>未来 24 小时</p>
+          <strong id="probability-24h">—</strong>
+          <small id="interval-24h">80% 不确定区间：等待数据</small>
+        </article>
+        <article class="summary-card">
+          <p>数据状态</p>
+          <strong id="data-quality">—</strong>
+          <small id="coverage">数据覆盖暂不可用</small>
+        </article>
+      </section>
+
+      <section class="panel forecast-audit" aria-labelledby="forecast-audit-title">
+        <div>
+          <p class="eyebrow">预测信息</p>
+          <h2 id="forecast-audit-title">时间与模型</h2>
+        </div>
+        <dl class="forecast-metadata">
+          <div><dt>预测发布</dt><dd id="forecast-issued-at">—</dd></div>
+          <div><dt>信息截止</dt><dd id="knowledge-cutoff">—</dd></div>
+          <div><dt>模型版本</dt><dd id="model-version">—</dd></div>
+          <div><dt>训练截止</dt><dd id="training-cutoff">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="trust-grid" aria-label="指标含义">
+        <article><h2>概率</h2><p>指定时间内发生重置的估计概率。</p></article>
+        <article><h2>不确定区间</h2><p id="uncertainty-explanation">表示模型对概率的不确定范围。</p></article>
+        <article><h2>数据质量</h2><p id="quality-explanation">综合历史覆盖、事件样本和来源新鲜度。</p></article>
+      </section>
+
+      <section class="panel forecast-panel" aria-labelledby="timeline-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">未来 7 天 · 每小时</p>
+            <h2 id="timeline-title">每小时重置概率</h2>
+            <p class="section-description">每格代表一个小时，颜色越亮概率越高。</p>
+          </div>
+        </div>
+        <div class="legend" aria-label="概率颜色图例">
+          <span>较低</span>
+          <span class="legend-cells" aria-hidden="true">
+            <i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i>
+          </span>
+          <span>较高</span>
+          <span class="legend-note">7 天内相对强度</span>
+        </div>
+        <div class="heatmap-scroll">
+          <div id="heatmap" class="heatmap" aria-live="polite"></div>
+        </div>
+        <div class="heat-detail" id="heat-detail" aria-live="polite">
+          <strong>—</strong>
+          <div><span>该小时首次重置概率</span><time>请选择一个小时</time></div>
+        </div>
+        <p class="hint">单格为该小时首次重置概率，7 天值为 168 小时累计概率；每天先读左列，再读右列。</p>
+      </section>
+
+      <section class="lower-grid signal-grid" aria-label="近期预测信号">
+        <article class="panel core-signal-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">核心来源</p>
+              <h2>Tibo 与官方动态</h2>
+              <p class="section-description">重置、产品发布和服务状态相关动态。</p>
+            </div>
+          </div>
+          <p class="cutoff-note" id="evidence-cutoff">仅显示预测信息截止时间前已知的信号。</p>
+          <ol class="evidence-list" id="core-signal-list" aria-live="polite"><li>正在加载核心信号…</li></ol>
+        </article>
+        <article class="panel reference-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">社区参考</p>
+              <h2>社区内容</h2>
+              <p class="section-description">社区讨论、竞品动态与使用反馈，仅供参考。</p>
+            </div>
+          </div>
+          <ol class="evidence-list" id="community-signal-list" aria-live="polite"><li>正在加载社区参考…</li></ol>
+        </article>
+      </section>
+
+      <section class="panel pending-panel" aria-labelledby="pending-title">
+        <div class="panel-heading compact">
+          <div>
+            <p class="eyebrow">新信号</p>
+            <h2 id="pending-title">下一轮纳入</h2>
+            <p class="section-description">晚于当前信息截止时间，将用于下一次预测。</p>
+          </div>
+        </div>
+        <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>正在检查截止时间后的信号…</li></ol>
+      </section>
+
+      <p class="disclaimer" id="no-reset">独立实验项目，与 OpenAI 无关联。未来 7 天未重置概率 —</p>
+    </main>
+  </body>
+</html>
