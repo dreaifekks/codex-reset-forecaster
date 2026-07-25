@@ -1,7 +1,9 @@
 # Codex Reset Forecaster
 
-Design baseline for a provider-neutral system that estimates when an official,
-platform-wide Codex quota reset or refill will occur.
+Design baseline for a provider-neutral system with a versioned forecast outcome.
+The live profile in `config/tibo-authority-live.json` estimates when the configured
+Tibo identity will publish a qualifying, platform-wide Codex reset/refill
+completion statement. It does not claim to observe every physical backend reset.
 
 The repository contains the contracts plus a zero-dependency Node.js prototype:
 direct X, X Search Gateway, historical-monitor, and fixture adapters; append-only
@@ -10,20 +12,21 @@ feature snapshots; a regularized hourly hazard model; a walk-forward promotion
 gate; JSON APIs; and the forecast/evaluation website. Personal quota integration
 remains deferred.
 
-The repository does not currently contain enough prospectively collected,
-negative-label-eligible real coverage to claim measured forecasting accuracy or
+The live profile is implemented, but a first deployment begins with pending daily
+coverage. The repository does not yet contain the 1,008 evaluated hourly windows
+and 20 eligible events required to claim measured forecasting accuracy or
 production publication readiness.
 
 ## Current decisions
 
-- The primary target is the time of an actual platform-level reset/refill, not the
-  time of a post announcing one.
-- A configured Tibo identity is one possible outcome-discovery source. An explicit
-  completion statement may verify a candidate outcome; a `started` statement,
-  schedule, rumor, or model judgment is not by itself a gold outcome.
+- Outcome meaning is versioned rather than tied to a provider adapter. The current
+  live deployment target is a qualifying completion statement from the configured
+  Tibo identity.
+- A `started` statement, schedule, expectation, rumor, summary, or model judgment
+  is not a positive outcome.
 - The internal time base is 168 hourly anchors per week.
-- At each hourly anchor, the product-facing forecast is the probability of a reset
-  during the next four hours.
+- At each hourly anchor, the product-facing forecast is the probability of the
+  selected qualifying outcome during the next four hours.
 - The website derives its next-4-hour, next-24-hour, and seven-day `[7][24]`
   heatmaps from the same 168-slot forecast rather than producing separate models.
 - Provider adapters only collect and normalize observations. Watchdogs, X feeds,
@@ -106,8 +109,8 @@ validate implementation mechanics only and are never accepted as real-world mode
 accuracy. The dedicated demo start command loads the same frozen model contract
 used by `demo:seed`; ordinary `npm start` deliberately keeps the live contract.
 
-To import the historical monitor as outcome-discovery evidence (network access
-required):
+To import the historical monitor as outcome-discovery evidence under the default
+archive profile (network access required):
 
 ```bash
 export RESET_CONFIG="$PWD/config/archive-evaluation.example.json"
@@ -126,6 +129,26 @@ unless a separate, explicit completeness attestation is configured and audited.
 Linked posts discovered from a known outcome are retained only as
 outcome-conditioned audit evidence and are excluded from forecast features.
 
+For the live Tibo-authority profile, select the checked-in deployment config
+explicitly:
+
+```bash
+export RESET_CONFIG="$PWD/config/tibo-authority-live.json"
+export RESET_DATA_DIR="$PWD/data/tibo-authority"
+node src/cli.mjs ingest-archive
+node src/cli.mjs process
+node src/cli.mjs status
+```
+
+This profile uses the archive's UTC daily grid as a versioned authority ledger,
+not as proof of every physical reset. A grid day can become
+`negative_label_eligible` only after day-end plus 36 hours and after at least two
+actual fetches of the same ledger separated by six hours or more. Dates before the
+grid begins remain outcome-discovery-only. The first live import therefore leaves
+eligible days pending, and any later promotion records its real fetch time instead
+of backdating coverage to day-end. See `docs/operations.md` for service switching
+and restart commands.
+
 ## Status
 
 Version `0.2.0` with canonical contract `reset-intel/0.2` implements the website
@@ -133,6 +156,8 @@ prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixture
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,
 deduplication, coverage, and evaluation contracts and must not be served as current
-evidence. Real acceptance remains pending until an exact source accumulates
-auditable complete coverage, enough outcomes and immutable as-issued forecasts,
-and the challenger passes the fixed-policy walk-forward and calibration gates.
+evidence. The Tibo-authority outcome definition and delayed daily-ledger coverage
+contract are checked in, but the current honest state remains not ready: initial
+coverage is pending, and publication still needs at least 1,008 evaluated hourly
+windows, 20 eligible events, and a compatible challenger that passes the
+fixed-policy walk-forward and calibration gates.

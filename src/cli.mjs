@@ -80,6 +80,8 @@ try {
   } else if (command === "ingest-archive") {
     output(await new HistoricalMonitorProvider({
       config: config.providers.historical_monitor,
+      target: config.target,
+      outcomeDefinition: config.outcome_definition,
     }).collect(store, { force: true }));
   } else if (command === "process") {
     output(await processRecords(store, config, { now }));

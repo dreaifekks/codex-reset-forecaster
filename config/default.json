@@ -1,13 +1,19 @@
 {
-  "config_version": "provider-config/0.2.7",
+  "config_version": "provider-config/0.2.8",
   "taxonomy_version": "reset-taxonomy/0.2.2",
   "feature_schema_version": "reset-features/0.2.7",
-  "deduplication_version": "reset-dedup/0.2.1",
+  "deduplication_version": "reset-dedup/0.2.2",
   "timezone_database_version": "system",
   "extractor": {
     "model": "deterministic-rules",
     "model_version": "0.2.5",
     "prompt_version": "reset-extract/rules-0.2.5"
+  },
+  "outcome_definition": {
+    "version": "actual-platform-reset/1",
+    "event_semantics": "actual_platform_reset",
+    "authority_identity_ids": [],
+    "negative_label_policy": "independent_outcome_completeness_required"
   },
   "target": {
     "vendor": "openai",
@@ -128,6 +134,11 @@
     "minimum_live_evaluation_windows": 1008,
     "minimum_live_evaluation_events": 20,
     "maximum_training_days": 180,
+    "calibrator": {
+      "version": "identity-hourly-hazard/1",
+      "method": "identity",
+      "fit_source": "none"
+    },
     "promotion": {
       "minimum_event_window_recall": 0.8,
       "top_window_hours_per_week": 36,

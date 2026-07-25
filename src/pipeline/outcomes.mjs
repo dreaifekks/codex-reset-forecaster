@@ -26,6 +26,49 @@ function preserveOutcomeRecordId(record, prior) {
   return prior ? { ...record, record_id: prior.record_id } : record;
 }
 
+export function outcomeAdjudicationContract(config) {
+  return {
+    version: "outcome-adjudication-contract/1",
+    adjudicator_version: OUTCOME_ADJUDICATOR_VERSION,
+    label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
+    outcome_definition: config.outcome_definition ?? null,
+    target: config.target ?? null,
+    taxonomy_version: config.taxonomy_version ?? null,
+    deduplication_version: config.deduplication_version ?? null,
+    extractor: extractorContract(config),
+    confirmation_identity_ids: [...confirmationIdentityIds(config)].sort(),
+  };
+}
+
+function initialDirectEvidenceReplayAvailableAt({
+  prior,
+  signal,
+  observation,
+}) {
+  const reference = signal.data.observation_refs[0];
+  const attestation = observation.data.availability_attestation;
+  if (
+    prior ||
+    reference?.revision !== 1 ||
+    observation.revision !== 1 ||
+    attestation?.basis !== "direct_source_publication" ||
+    typeof attestation.verification !== "string" ||
+    attestation.verification.length === 0 ||
+    !observation.data.published_at
+  ) {
+    return null;
+  }
+  const attestedAt = Date.parse(attestation.available_at);
+  if (
+    !Number.isFinite(attestedAt) ||
+    Date.parse(observation.data.published_at) !== attestedAt ||
+    Date.parse(signal.data.available_at) !== attestedAt
+  ) {
+    return null;
+  }
+  return new Date(attestedAt).toISOString();
+}
+
 export function buildOutcomeEligibilityContext({ observations, signals, config = null }) {
   const observationsByExactRef = new Map(
     observations.map((observation) => [exactRefKey(observation), observation]),
@@ -39,6 +82,13 @@ export function buildOutcomeEligibilityContext({ observations, signals, config =
     observationsByExactRef,
     currentSignalsByObservationId,
     expectedExtractor: config ? extractorContract(config) : null,
+    expectedAdjudicationContractHash: config
+      ? producer(
+          "outcome-adjudicator",
+          OUTCOME_ADJUDICATOR_VERSION,
+          outcomeAdjudicationContract(config),
+        ).config_hash
+      : null,
     target: config?.target ?? null,
   };
 }
@@ -48,6 +98,7 @@ export function isEligibleConfirmedOutcome(outcome, {
   currentSignalsByObservationId = new Map(),
   confirmationIdentityIds: allowedConfirmationIds = null,
   expectedExtractor = null,
+  expectedAdjudicationContractHash = null,
   target = null,
 } = {}) {
   if (
@@ -62,6 +113,11 @@ export function isEligibleConfirmedOutcome(outcome, {
     outcome.data.candidate_refs.length === 0 ||
     outcome.producer?.name !== "outcome-adjudicator" ||
     outcome.producer?.version !== OUTCOME_ADJUDICATOR_VERSION ||
+    (
+      expectedAdjudicationContractHash &&
+      outcome.producer?.config_hash !==
+        expectedAdjudicationContractHash
+    ) ||
     !expectedExtractor
   ) return false;
   if (
@@ -161,6 +217,11 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
     left.record_id.localeCompare(right.record_id)
   );
   const confirmationIds = confirmationIdentityIds(config);
+  const adjudicationProducer = producer(
+    "outcome-adjudicator",
+    OUTCOME_ADJUDICATOR_VERSION,
+    outcomeAdjudicationContract(config),
+  );
   const records = [];
   const confirmedEventIdentities = new Set();
   const claimedOutcomeKeys = new Set();
@@ -216,11 +277,6 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
       );
     const primary = verificationEntries[0];
     const occurrence = inferredOccurrenceRange(primary.signal, primary.observation);
-    const attestedAvailability = primary.observation.data.availability_attestation?.available_at;
-    const replayAvailableAt = attestedAvailability &&
-        Date.parse(attestedAvailability) < Date.parse(primary.observation.data.first_seen_at)
-      ? new Date(attestedAvailability).toISOString()
-      : null;
     const verificationObservationIds = new Set(
       verificationEntries.map(({ observation }) => observation.record_id),
     );
@@ -245,25 +301,43 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
       observation_ref: recordRef(observation),
       independence_group_id: signal.data.provenance.independence_group_id,
     }));
-    const desiredSignature = JSON.stringify({
+    const desiredCore = {
       event_identity: eventIdentity,
       label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
       event_type: primary.signal.data.claim.event_type,
       scope: candidate.data.scope,
       occurred_time_range: occurrence,
-      replay_available_at: replayAvailableAt,
+      adjudication_contract_hash: adjudicationProducer.config_hash,
       verification,
       candidate_ref: recordRef(candidate),
-    });
-    const priorSignature = prior ? JSON.stringify({
+    };
+    const priorCore = prior ? {
       event_identity: prior.data.event_identity,
       label_policy_version: prior.data.label_policy_version,
       event_type: prior.data.event_type,
       scope: prior.data.scope,
       occurred_time_range: prior.data.occurred_time_range,
-      replay_available_at: prior.data.replay_available_at ?? null,
+      adjudication_contract_hash: prior.producer?.config_hash ?? null,
       verification: prior.data.verification,
       candidate_ref: prior.data.candidate_refs?.[0] ?? null,
+    } : null;
+    const coreUnchanged =
+      priorCore !== null &&
+      JSON.stringify(desiredCore) === JSON.stringify(priorCore);
+    const replayAvailableAt = coreUnchanged
+      ? prior.data.replay_available_at ?? null
+      : initialDirectEvidenceReplayAvailableAt({
+          prior,
+          signal: primary.signal,
+          observation: primary.observation,
+        });
+    const desiredSignature = JSON.stringify({
+      ...desiredCore,
+      replay_available_at: replayAvailableAt,
+    });
+    const priorSignature = prior ? JSON.stringify({
+      ...priorCore,
+      replay_available_at: prior.data.replay_available_at ?? null,
     }) : null;
     if (desiredSignature === priorSignature) continue;
     const outcomeKnownAt = knownAt ?? now;
@@ -273,9 +347,7 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
       createdAt: outcomeKnownAt,
       revision: prior ? prior.revision + 1 : 1,
       supersedes: prior ? recordRef(prior) : null,
-      producer: producer("outcome-adjudicator", OUTCOME_ADJUDICATOR_VERSION, {
-        confirmation_policy: OUTCOME_LABEL_POLICY_VERSION,
-      }),
+      producer: adjudicationProducer,
       data: {
         status: "confirmed",
         label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
@@ -338,9 +410,7 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
       createdAt: outcomeKnownAt,
       revision: prior.revision + 1,
       supersedes: recordRef(prior),
-      producer: producer("outcome-adjudicator", OUTCOME_ADJUDICATOR_VERSION, {
-        confirmation_policy: OUTCOME_LABEL_POLICY_VERSION,
-      }),
+      producer: adjudicationProducer,
       data: {
         status: correction.signal.data.claim.phase === "cancelled"
           ? "cancelled"

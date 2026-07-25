@@ -2,8 +2,12 @@
 
 ## Prediction target
 
-The target is the actual start of a platform-level Codex quota reset/refill.
-Announcement time is a feature, not the target.
+The outcome definition is versioned and included in the model contract hash.
+Under `config/tibo-authority-live.json`, the target is a qualifying primary
+statement from the configured Tibo identity that a platform-wide Codex quota
+reset/refill completed. This is a deliberately observable operational label; it
+does not represent every physical backend reset. A `started`, scheduled, expected,
+rumor, summary, or model-generated claim is not a positive outcome.
 
 The internal resolution is one hour. A week therefore has 168 hourly anchor
 positions. At anchor `t`, the conditional hourly hazard is:
@@ -25,9 +29,10 @@ q_t = h_t * product(1 - h_j), j < t
 P(no reset in horizon) = product(1 - h_j), all horizon slots j
 ```
 
-The `q_t` values plus the no-reset probability sum to one. If recurrent resets are
-later supported, the record declares that event process explicitly and consumers
-must not apply the first-event identity.
+Here, `reset` is shorthand for the qualifying outcome defined by the selected
+versioned profile. The `q_t` values plus the no-outcome probability sum to one. If
+recurrent outcomes are later supported, the record declares that event process
+explicitly and consumers must not apply the first-event identity.
 
 ## Version 0.2 model
 
@@ -113,7 +118,10 @@ promoted only after walk-forward ablation demonstrates stable incremental value.
 ## Labels and censoring
 
 - Gold and silver outcomes may settle model labels with appropriate quality weight.
-- Rumors and predicted event candidates remain features only.
+- Under the live Tibo-authority profile, only a qualifying `completed` primary
+  statement from the configured identity can be positive. `started`, scheduled,
+  expected, rumor, summary, and predicted event candidates remain signals or
+  features only.
 - A reset known to occur within `[L, U)` uses one interval-censored likelihood over
   the eligible hourly hazards rather than one positive label per overlapping hour
   or an invented exact timestamp.
@@ -122,6 +130,13 @@ promoted only after walk-forward ablation demonstrates stable incremental value.
   pending period, not a negative.
 - Overlapping rolling four-hour views are derived outputs, not independent training
   samples.
+
+For the live profile, an absent qualifying statement becomes a negative only
+through the versioned UTC daily-ledger contract. A grid day must be observed at
+least twice across six actual hours, and its final observation must occur at least
+36 hours after day-end. Pre-grid time remains outcome-discovery-only. The
+promotion's actual fetch time is its replay availability, so the first deployment
+cannot manufacture earlier as-of coverage.
 
 ## Online lifecycle
 
@@ -169,6 +184,11 @@ Primary measures:
 Accuracy is not a primary measure. A flexible calibrator such as isotonic regression
 must wait until there are enough independent outcomes; initial calibration should be
 strongly regularized and trained only on historical out-of-sample predictions.
+Current model artifacts therefore record the explicit no-op calibrator
+`identity-hourly-hazard/1`. It does not fit calibration parameters on the present
+small sample; observed calibration is still measured by the promotion gate. A
+future non-identity calibrator must have its own version and must be fitted only
+from frozen out-of-fold predictions after the sample threshold is reached.
 
 ## Forecast output
 
@@ -217,6 +237,11 @@ for experimental fitting, but does not establish live probability validity.
 Feature snapshots and predictions expose `outcome_sample_count` and continuous
 `sample_sufficiency = min(1, outcome_sample_count / 20)`; forecasts remain
 out-of-distribution below 20 eligible historical outcomes.
+
+The checked-in Tibo-authority profile and its coverage policy do not satisfy these
+sample gates by themselves. Initial ledger observations are pending, and
+publication remains blocked until a compatible real-data evaluation reaches both
+thresholds and passes the quality and calibration gates.
 
 Every evaluation exposes an explicit, provider-neutral `evidence_mode`:
 `synthetic_replay`, `archive_replay`, `historical_walk_forward`, or `as_issued`.

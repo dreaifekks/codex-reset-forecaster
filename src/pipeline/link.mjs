@@ -34,21 +34,61 @@ function signalRange(signal) {
       source: asserted,
     };
   }
-  const start = Date.parse(signal.data.available_at);
+  const sourcePublished = Date.parse(
+    signal.data.provenance.source_published_at,
+  );
+  const start = Number.isFinite(sourcePublished)
+    ? sourcePublished
+    : Date.parse(signal.data.available_at);
   return { start, end: start + 3_600_000, source: null };
 }
 
+function timingPreference(left, right) {
+  const rank = (signal) => [
+    signal.data.provenance.derivation === "primary_statement" ? 0 : 1,
+    signal.data.provenance.source_role === "aggregator" ? 1 : 0,
+    signal.data.claim.asserted_time_range ? 0 : 1,
+    Number.isFinite(Date.parse(signal.data.provenance.source_published_at))
+      ? 0
+      : 1,
+    signal.data.available_at,
+    signal.record_id,
+  ];
+  const leftRank = rank(left);
+  const rightRank = rank(right);
+  for (let index = 0; index < leftRank.length; index += 1) {
+    if (leftRank[index] < rightRank[index]) return -1;
+    if (leftRank[index] > rightRank[index]) return 1;
+  }
+  return 0;
+}
+
 function clusterSignals(signals) {
+  const rangeBySignalId = new Map();
+  const evidenceRoots = Map.groupBy(signals, (signal) => [
+    scopeKey(signal),
+    signal.data.provenance.independence_group_id ??
+      signal.data.provenance.root_evidence_id ??
+      signal.record_id,
+  ].join(":"));
+  for (const rootSignals of evidenceRoots.values()) {
+    const preferred = [...rootSignals].sort(timingPreference)[0];
+    const preferredRange = signalRange(preferred);
+    for (const signal of rootSignals) {
+      rangeBySignalId.set(signal.record_id, preferredRange);
+    }
+  }
   const grouped = Map.groupBy(signals, scopeKey);
   const clusters = [];
   for (const [baseKey, group] of grouped) {
     const sorted = [...group].sort((left, right) =>
-      signalRange(left).start - signalRange(right).start ||
+      rangeBySignalId.get(left.record_id).start -
+        rangeBySignalId.get(right.record_id).start ||
       left.record_id.localeCompare(right.record_id)
     );
     let current = null;
     for (const signal of sorted) {
-      const range = signalRange(signal);
+      const range = rangeBySignalId.get(signal.record_id);
       const belongs = current &&
         range.start <= current.end + EVENT_LINK_GAP_MS &&
         Math.max(current.end, range.end) - Math.min(current.start, range.start) <= MAX_EVENT_SPAN_MS;
@@ -215,7 +255,7 @@ export async function linkEventCandidates(store, config, { asOf = new Date() } =
       createdAt: asOf,
       revision: prior ? prior.revision + 1 : 1,
       supersedes: prior ? recordRef(prior) : null,
-      producer: producer("event-linker", "0.3.0", {
+      producer: producer("event-linker", "0.3.1", {
         deduplication_version: config.deduplication_version,
       }),
       data: {

@@ -3,9 +3,10 @@
   "$id": "https://example.invalid/reset-intel/0.2/provider-config.schema.json",
   "title": "Reset Intelligence Provider Configuration",
   "type": "object",
-  "required": ["config_version", "target", "providers"],
+  "required": ["config_version", "outcome_definition", "target", "providers"],
   "properties": {
     "config_version": { "type": "string", "minLength": 1 },
+    "outcome_definition": { "$ref": "#/$defs/outcomeDefinition" },
     "target": { "$ref": "#/$defs/scope" },
     "providers": {
       "type": "object",
@@ -22,11 +23,45 @@
               ]
             }
           }
+        },
+        "historical_monitor": {
+          "type": "object",
+          "properties": {
+            "coverage_adequacy": {
+              "enum": ["outcome_only", "negative_label_eligible"]
+            },
+            "coverage_completeness_attestation": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/historicalDailyLedgerAttestation" }
+              ]
+            }
+          }
         }
       }
     }
   },
   "$defs": {
+    "outcomeDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "event_semantics",
+        "authority_identity_ids",
+        "negative_label_policy"
+      ],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "event_semantics": { "type": "string", "minLength": 1 },
+        "authority_identity_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "negative_label_policy": { "type": "string", "minLength": 1 }
+      }
+    },
     "scope": {
       "type": "object",
       "required": ["vendor", "product", "population"],
@@ -105,6 +140,49 @@
             "end": { "type": "string", "format": "date-time", "pattern": "Z$" },
             "boundary": { "const": "[start,end)" }
           }
+        }
+      }
+    },
+    "historicalDailyLedgerAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "provider",
+        "independent",
+        "attestor",
+        "method",
+        "exhaustive_for",
+        "target_scope",
+        "confirmation_identity_ids",
+        "day_close_lag_hours",
+        "minimum_stability_hours"
+      ],
+      "properties": {
+        "version": { "const": "historical-daily-authority-ledger/1" },
+        "provider": { "const": "historical_monitor" },
+        "independent": { "const": true },
+        "attestor": { "type": "string", "format": "uri" },
+        "method": { "const": "contiguous_daily_grid+x_oembed+snowflake" },
+        "exhaustive_for": {
+          "const": "qualifying_completed_platform_reset_outcomes"
+        },
+        "target_scope": { "$ref": "#/$defs/scope" },
+        "confirmation_identity_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "day_close_lag_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168
+        },
+        "minimum_stability_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168
         }
       }
     }

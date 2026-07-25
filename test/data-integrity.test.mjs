@@ -24,6 +24,11 @@ import {
   processRecords,
 } from "../src/pipeline/run.mjs";
 import { selectCurrentSignals } from "../src/pipeline/signal-selection.mjs";
+import {
+  AS_OF_MODE,
+  latestOutcomesAsOf,
+  outcomeAvailableAt,
+} from "../src/model/as-of.mjs";
 import { HistoricalMonitorProvider } from "../src/providers/historical-monitor-provider.mjs";
 import {
   appendRawObservationRevision,
@@ -549,6 +554,195 @@ test("a deduplication contract change starts a new candidate record without dupl
   assert.equal(outcomes[0].revision, 2);
 });
 
+test("a later extractor cannot backdate its first outcome to an archived publication", async (t) => {
+  const { directory, store } = await temporaryStore(t, "reset-late-extractor-outcome-");
+  const config = await loadConfig({ overrides: { runtime: { data_dir: directory } } });
+  const publishedAt = "2026-07-01T03:28:00.000Z";
+  const importedAt = "2026-07-20T03:29:00.000Z";
+  await appendRawObservationRevision(store, {
+    provider_item_id: "2090000000000000001",
+    canonical_url: "https://x.com/thsottiaux/status/2090000000000000001",
+    published_at: publishedAt,
+    availability_attestation: {
+      available_at: publishedAt,
+      basis: "direct_source_publication",
+      attestor_url: "https://x.com/thsottiaux/status/2090000000000000001",
+      verified_at: importedAt,
+      verification: "x_oembed+snowflake",
+    },
+    author: {
+      provider_author_id: "thsottiaux",
+      identity_id: "person_tibo_sottiaux",
+      display_handle: "@thsottiaux",
+    },
+    native_relations: [],
+    content: {
+      media_type: "text/plain",
+      text: "We have reset Codex usage limits across all paid plans.",
+      language: "en",
+    },
+  }, {
+    providerName: "historical_monitor",
+    providerVersion: "test",
+    config: {},
+    firstSeenAt: importedAt,
+    fetchedAt: importedAt,
+  });
+  await normalizeNewObservations(store, config, {
+    now: new Date("2026-07-20T03:30:00.000Z"),
+  });
+
+  const upgradedConfig = {
+    ...config,
+    extractor: {
+      ...config.extractor,
+      model_version: `${config.extractor.model_version}-next`,
+      prompt_version: `${config.extractor.prompt_version}-next`,
+    },
+  };
+  await processRecords(store, upgradedConfig, {
+    now: new Date("2026-07-25T12:00:00.000Z"),
+  });
+  const [outcome] = await store.all("reset_outcome");
+  assert.equal(outcome.revision, 1);
+  assert.equal(outcome.data.known_at, "2026-07-25T12:00:00.000Z");
+  assert.equal(outcome.data.replay_available_at, null);
+  assert.deepEqual(
+    latestOutcomesAsOf(
+      [outcome],
+      "2026-07-02T00:00:00.000Z",
+      AS_OF_MODE.ARCHIVE_REPLAY,
+    ),
+    [],
+  );
+});
+
+test("later extractor and outcome-policy revisions cannot enter earlier archive cutoffs", async (t) => {
+  const { directory, store } = await temporaryStore(t, "reset-outcome-replay-revisions-");
+  const config = await loadConfig({ overrides: { runtime: { data_dir: directory } } });
+  const publishedAt = "2026-07-01T03:28:00.000Z";
+  const importedAt = "2026-07-20T03:29:00.000Z";
+  await appendRawObservationRevision(store, {
+    provider_item_id: "2090000000000000002",
+    canonical_url: "https://x.com/thsottiaux/status/2090000000000000002",
+    published_at: publishedAt,
+    availability_attestation: {
+      available_at: publishedAt,
+      basis: "direct_source_publication",
+      attestor_url: "https://x.com/thsottiaux/status/2090000000000000002",
+      verified_at: importedAt,
+      verification: "x_oembed+snowflake",
+    },
+    author: {
+      provider_author_id: "thsottiaux",
+      identity_id: "person_tibo_sottiaux",
+      display_handle: "@thsottiaux",
+    },
+    native_relations: [],
+    content: {
+      media_type: "text/plain",
+      text: "We have reset Codex usage limits across all paid plans.",
+      language: "en",
+    },
+  }, {
+    providerName: "historical_monitor",
+    providerVersion: "test",
+    config: {},
+    firstSeenAt: importedAt,
+    fetchedAt: importedAt,
+  });
+  await processRecords(store, config, {
+    now: new Date("2026-07-20T03:30:00.000Z"),
+  });
+  const repeated = await processRecords(store, config, {
+    now: new Date("2026-07-20T03:31:00.000Z"),
+  });
+  assert.equal(repeated.outcomes.adjudicated, 0);
+  assert.equal(
+    (await store.all("reset_outcome"))[0].data.replay_available_at,
+    publishedAt,
+  );
+
+  const upgradedConfig = {
+    ...config,
+    extractor: {
+      ...config.extractor,
+      model_version: `${config.extractor.model_version}-next`,
+      prompt_version: `${config.extractor.prompt_version}-next`,
+    },
+  };
+  await processRecords(store, upgradedConfig, {
+    now: new Date("2026-07-25T12:00:00.000Z"),
+  });
+  const policyConfig = {
+    ...upgradedConfig,
+    outcome_definition: {
+      ...upgradedConfig.outcome_definition,
+      version: `${upgradedConfig.outcome_definition.version}-next`,
+    },
+  };
+  await adjudicateOutcomes(store, policyConfig, {
+    now: new Date("2026-07-26T12:00:00.000Z"),
+  });
+
+  const outcomes = await store.all("reset_outcome", { latestOnly: false });
+  assert.deepEqual(outcomes.map((outcome) => outcome.revision), [1, 2, 3]);
+  assert.equal(outcomes[0].data.replay_available_at, publishedAt);
+  assert.equal(outcomes[1].data.replay_available_at, null);
+  assert.equal(outcomes[2].data.replay_available_at, null);
+  assert.equal(new Set(outcomes.map((outcome) => outcome.producer.config_hash)).size, 3);
+  const eligibility = buildOutcomeEligibilityContext({
+    observations: await store.all("raw_observation", { latestOnly: false }),
+    signals: await store.all("normalized_signal", { latestOnly: false }),
+    config: policyConfig,
+  });
+  assert.equal(isEligibleConfirmedOutcome(outcomes[0], {
+    ...eligibility,
+    confirmationIdentityIds: new Set(["person_tibo_sottiaux"]),
+  }), false, "an outcome from the older adjudication contract is ineligible");
+  assert.equal(isEligibleConfirmedOutcome(outcomes[2], {
+    ...eligibility,
+    confirmationIdentityIds: new Set(["person_tibo_sottiaux"]),
+  }), true, "the current adjudication contract revision is eligible");
+
+  const staleReplayRevisions = outcomes.map((outcome) =>
+    outcome.revision === 1
+      ? outcome
+      : {
+          ...outcome,
+          data: { ...outcome.data, replay_available_at: publishedAt },
+        }
+  );
+  assert.equal(
+    outcomeAvailableAt(staleReplayRevisions[1], AS_OF_MODE.ARCHIVE_REPLAY),
+    "2026-07-25T12:00:00.000Z",
+  );
+  assert.equal(
+    latestOutcomesAsOf(
+      staleReplayRevisions,
+      "2026-07-02T00:00:00.000Z",
+      AS_OF_MODE.ARCHIVE_REPLAY,
+    )[0].revision,
+    1,
+  );
+  assert.equal(
+    latestOutcomesAsOf(
+      staleReplayRevisions,
+      "2026-07-25T18:00:00.000Z",
+      AS_OF_MODE.ARCHIVE_REPLAY,
+    )[0].revision,
+    2,
+  );
+  assert.equal(
+    latestOutcomesAsOf(
+      staleReplayRevisions,
+      "2026-07-26T18:00:00.000Z",
+      AS_OF_MODE.ARCHIVE_REPLAY,
+    )[0].revision,
+    3,
+  );
+});
+
 test("split clusters cannot claim the same existing candidate revision", async () => {
   const deduplicationVersion = "reset-dedup/test";
   const first = candidateTestSignal({
@@ -618,6 +812,86 @@ test("split clusters cannot claim the same existing candidate revision", async (
     record_id: existing.record_id,
     revision: 3,
   });
+});
+
+test("historical source times keep distinct reset roots apart when they are reprocessed together", async () => {
+  const fetchedAt = "2026-07-25T20:00:00.000Z";
+  const makeSignal = ({
+    id,
+    group,
+    root,
+    sourcePublishedAt,
+    derivation = "primary_statement",
+    role = "product_lead",
+  }) => {
+    const signal = candidateTestSignal({
+      id,
+      product: "codex",
+      at: fetchedAt,
+      group,
+      root,
+    });
+    signal.data.provenance.source_published_at = sourcePublishedAt;
+    signal.data.provenance.derivation = derivation;
+    signal.data.provenance.source_role = role;
+    return signal;
+  };
+  const signals = [
+    makeSignal({
+      id: "first-primary",
+      group: "ind_first_reset",
+      root: "x_post:first",
+      sourcePublishedAt: "2026-07-18T03:28:00.000Z",
+    }),
+    makeSignal({
+      id: "first-summary",
+      group: "ind_first_reset",
+      root: "x_post:first",
+      sourcePublishedAt: "2026-07-18T00:00:00.000Z",
+      derivation: "summarizes",
+      role: "aggregator",
+    }),
+    makeSignal({
+      id: "second-primary",
+      group: "ind_second_reset",
+      root: "x_post:second",
+      sourcePublishedAt: "2026-07-25T19:17:00.000Z",
+    }),
+    makeSignal({
+      id: "second-summary",
+      group: "ind_second_reset",
+      root: "x_post:second",
+      sourcePublishedAt: "2026-07-25T00:00:00.000Z",
+      derivation: "summarizes",
+      role: "aggregator",
+    }),
+  ];
+  let planned = [];
+  await linkEventCandidates({
+    async all(type) {
+      if (type === "normalized_signal") return signals;
+      if (type === "event_candidate") return [];
+      throw new Error(`Unexpected record type ${type}`);
+    },
+    async appendMany(records) {
+      planned = records;
+      return records.map((record) => ({ inserted: true, record }));
+    },
+  }, { deduplication_version: "reset-dedup/test" }, {
+    asOf: new Date(fetchedAt),
+  });
+
+  assert.equal(planned.length, 2);
+  assert.deepEqual(
+    planned
+      .map((candidate) =>
+        [...new Set(candidate.data.evidence.map((entry) =>
+          entry.independence_group_id
+        ))]
+      )
+      .sort((left, right) => left[0].localeCompare(right[0])),
+    [["ind_first_reset"], ["ind_second_reset"]],
+  );
 });
 
 test("candidate continuity cannot cross event scope boundaries", async () => {

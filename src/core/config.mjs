@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hashLabel } from "./hash.mjs";
+import { assertHistoricalDailyLedgerAttestation } from "./coverage-contract.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -30,6 +31,39 @@ function validateXOutcomeExhaustivenessContract(config) {
     );
   }
   contract.attestation_file = path.resolve(root, contract.attestation_file);
+}
+
+function validateHistoricalMonitorCoverage(config) {
+  const provider = config.providers.historical_monitor;
+  if (
+    provider.coverage_adequacy !== "negative_label_eligible" &&
+    provider.coverage_completeness_attestation == null
+  ) {
+    return;
+  }
+  assertHistoricalDailyLedgerAttestation({
+    attestation: provider.coverage_completeness_attestation,
+    outcomeDefinition: config.outcome_definition,
+    providerName: provider.provider_name ?? "historical_monitor",
+    sourceUrl: provider.base_url,
+    target: config.target,
+    confirmationIdentityIds: (provider.confirmation_identities ?? [])
+      .map((identity) => identity.identity_id)
+      .filter(Boolean),
+  });
+}
+
+function validateModelCalibrator(config) {
+  const calibrator = config.model?.calibrator;
+  if (
+    calibrator?.version !== "identity-hourly-hazard/1" ||
+    calibrator?.method !== "identity" ||
+    calibrator?.fit_source !== "none"
+  ) {
+    throw new TypeError(
+      "model.calibrator must use the supported identity-hourly-hazard/1 policy",
+    );
+  }
 }
 
 function semanticConfigHash(config) {
@@ -79,6 +113,8 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
     ? true
     : Boolean(config.providers.x.enabled);
   validateXOutcomeExhaustivenessContract(config);
+  validateHistoricalMonitorCoverage(config);
+  validateModelCalibrator(config);
   config.config_hash = semanticConfigHash(config);
   return config;
 }

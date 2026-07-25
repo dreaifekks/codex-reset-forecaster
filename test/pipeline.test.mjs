@@ -96,6 +96,8 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     model: {
       max_iterations: 450,
       minimum_outcomes: 3,
+      minimum_live_evaluation_windows: 1008,
+      minimum_live_evaluation_events: 6,
       outcome_coverage_providers: ["demo"],
       promotion: {
         minimum_event_window_recall: 0.8,
@@ -270,12 +272,20 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
-  const [healthResponse, forecastResponse, evaluationResponse, evidenceResponse, pageResponse] = await Promise.all([
+  const [
+    healthResponse,
+    forecastResponse,
+    evaluationResponse,
+    evidenceResponse,
+    pageResponse,
+    appScriptResponse,
+  ] = await Promise.all([
     fetch(`${base}/api/health`),
     fetch(`${base}/api/forecast/current`),
     fetch(`${base}/api/evaluation/summary`),
     fetch(`${base}/api/evidence/recent`),
     fetch(`${base}/`),
+    fetch(`${base}/app.js`),
   ]);
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
@@ -299,6 +309,12 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.ok(evidence.core.every((item) => item.source_identity_id === "person_tibo_sottiaux"));
   assert.ok(evidence.community.every((item) => item.source_identity_id !== "person_tibo_sottiaux"));
   assert.ok(evidence.items.every((item) => item.scope && "derivation" in item && "published_at" in item.source));
-  assert.match(await pageResponse.text(), /每小时重置概率/);
+  const page = await pageResponse.text();
+  const appScript = await appScriptResponse.text();
+  assert.match(page, /每小时重置概率/);
+  assert.match(page, /未来 7 天重置概率/);
+  assert.match(page, /未来 168 小时内发生重置的可能性/);
+  assert.doesNotMatch(page, /未来 168 小时内的重置概率|未重置概率|与 OpenAI 无关联/);
+  assert.doesNotMatch(appScript, /未重置概率|与 OpenAI 无关联/);
   assert.match(pageResponse.headers.get("content-security-policy"), /default-src 'self'/);
 });

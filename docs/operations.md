@@ -45,10 +45,12 @@ relations, stores raw payloads, and maintains `since_id` cursors. Override
 `config/default.json` with a file referenced by `RESET_CONFIG`; never put a token in
 that file.
 
-`config/live.example.json` is a starting override. Adjust its backfill start to the
-actual entitlement and copy `.env.example` to the ignored `.env` file for Docker
-Compose. Pagination exhaustion establishes only `outcome_only` discovery coverage
-by default. It must never be described as negative-label coverage.
+`config/live.example.json` is a generic direct-X starting override. Adjust its
+backfill start to the actual entitlement when using that profile.
+`.env.example` instead selects `config/tibo-authority-live.json`; copy it to the
+ignored `.env` file only when that narrower announcement target is intended.
+Pagination exhaustion establishes only `outcome_only` discovery coverage by
+default. It must never be described as negative-label coverage.
 
 An initial history import may set `providers.x.backfill_start` to an RFC 3339 UTC
 timestamp. Exhausting every page proves only that the configured timelines were
@@ -115,19 +117,82 @@ its historical publication time. The generated directory and raw payload blobs a
 ignored by Git; preserve them together for exact auditability because the external
 page can change.
 
-A contiguous archive date grid is not proof that every unlisted hour was observed.
-The adapter therefore writes an append-only `outcome_only` coverage assertion by
-default and cannot provide training negatives or settle a no-reset window. A
-`negative_label_eligible` assertion requires separate, explicit completeness
-evidence and is rejected when that evidence is absent. Posts discovered only by
-following links from known reset posts are marked outcome-conditioned and excluded
-from forecast features.
+A contiguous archive date grid is not proof that every unlisted physical reset was
+observed. Under the default archive profile, the adapter therefore writes an
+append-only `outcome_only` coverage assertion and cannot provide training negatives
+or settle a no-outcome window. A `negative_label_eligible` assertion requires a
+separate, explicit completeness contract for the exact operational target and is
+rejected when that contract is absent. Posts discovered only by following links
+from known reset posts are marked outcome-conditioned and excluded from forecast
+features.
 
 For a genuine archive walk-forward, that independent attestation must also provide
 `replay_available_at`: the UTC instant at which the covered interval was
 historically complete and knowable. It must be no earlier than the interval end and
 no later than the real import `asserted_at`. This clock is used only in archive
 replay; live settlement continues to use `asserted_at`.
+
+### Tibo-authority live profile
+
+`config/tibo-authority-live.json` is the checked-in deployment profile for the
+narrow operational target “a qualifying completion statement from the configured
+Tibo identity.” It does not claim to detect every physical backend reset. Only an
+exact primary statement that a platform-wide Codex reset/refill completed is a
+positive outcome. `started`, scheduled, expected, rumor, summary, and
+model-generated claims remain signals or candidates.
+
+The profile enables a versioned UTC daily authority ledger:
+
+- pre-grid dates remain outcome-discovery-only;
+- a grid day first becomes a pending candidate;
+- the same count-reconciled ledger must be seen in at least two actual fetches
+  separated by six hours or more;
+- the promoting fetch must occur at least 36 hours after UTC day-end;
+- `asserted_at` and `replay_available_at` use that real promoting fetch, never
+  day-end or the first deployment time.
+
+The configured refresh interval is 15 minutes, but elapsed stability is measured
+from real fetch timestamps. A first run cannot immediately create eligible
+negative history. Run the profile locally with a dedicated data root:
+
+```bash
+export RESET_CONFIG="$PWD/config/tibo-authority-live.json"
+export RESET_DATA_DIR="$PWD/data/tibo-authority"
+node src/cli.mjs ingest-archive
+node src/cli.mjs process
+node src/cli.mjs status
+```
+
+Keep the scheduler running for subsequent observations, or invoke
+`ingest-archive` again after the required elapsed time. Do not alter timestamps or
+reseed data to bypass the stability gate.
+
+To switch an existing Compose service, edit the ignored `.env` file:
+
+```dotenv
+RESET_CONFIG=/app/config/tibo-authority-live.json
+HISTORICAL_MONITOR_ENABLED=true
+```
+
+Then recreate only the application container while preserving the external data
+volume:
+
+```bash
+docker compose -f compose.yaml -f compose.cloudflare.yaml \
+  up --build -d --no-deps reset-forecaster
+curl http://127.0.0.1:8799/api/readiness
+```
+
+`run_on_start` performs the initial collection and seeds the pending ledger
+candidates. Do not start a second manual ingestion process while the scheduled
+pipeline is running.
+
+Do not run `down -v` and do not copy a seed over the existing volume. The outcome
+definition changes the model compatibility signature, so an older champion or
+evaluation is retained for audit but is not served as compatible evidence.
+Immediately after switching, pending coverage and HTTP 503/not-ready are expected.
+Publication still requires at least 1,008 evaluated hourly windows, 20 eligible
+events, and a passing compatible walk-forward/calibration evaluation.
 
 Useful commands:
 

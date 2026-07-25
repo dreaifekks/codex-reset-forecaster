@@ -14,7 +14,10 @@ import { confirmationIdentityIds } from "../core/sources.mjs";
 import { FEATURE_NAMES } from "../model/features.mjs";
 import { assertModelCompatibility } from "../model/logistic-hazard.mjs";
 import { assessPredictionIntegrity } from "../model/prediction-integrity.mjs";
-import { verifyEvaluationArtifact } from "../model/evaluation.mjs";
+import {
+  assessEvaluationSampleGate,
+  verifyEvaluationArtifact,
+} from "../model/evaluation.mjs";
 import {
   verifyIssuedEvaluationArtifact,
 } from "../model/issued-evaluation.mjs";
@@ -614,7 +617,11 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     store.all("prediction", { latestOnly: false }),
     store.all("feature_snapshot", { latestOnly: false }),
     store.all("prediction_settlement", { latestOnly: false }),
-    adequateCoverageIntervals(store, config.model.outcome_coverage_providers),
+    adequateCoverageIntervals(
+      store,
+      config.model.outcome_coverage_providers,
+      { config },
+    ),
     championRead,
     store.readState("walk-forward-summary", null),
     store.readState("champion-evaluation", null),
@@ -625,6 +632,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     verifiedCoverageAssertionRevisions(
       store,
       config.model.outcome_coverage_providers,
+      { config },
     ),
   ]);
   const champion = championResult.model;
@@ -759,11 +767,11 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
         issuedEvaluationArtifactVerification,
     },
   );
-  const liveSampleThresholdReached = Boolean(
-    issued &&
-    issued.metrics.evaluated_windows >= config.model.minimum_live_evaluation_windows &&
-    issued.metrics.evaluated_events >= config.model.minimum_live_evaluation_events,
+  const liveSampleGate = assessEvaluationSampleGate(
+    issued?.metrics,
+    config.model,
   );
+  const liveSampleThresholdReached = liveSampleGate.sample_threshold_passed;
   const liveThresholdReached = liveSampleThresholdReached && issuedCompatibility.compatible;
   const syntheticProviders = new Set(["demo", "fixture"]);
   const evaluatedCoverageProviders = walkForward?.outcome_coverage_providers ?? [];
@@ -776,6 +784,15 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     evaluatedCoverageProviders.every((provider) => !syntheticProviders.has(provider)) &&
     evaluatedCoverageProviders.every((provider) => (providerCounts[provider] ?? 0) > 0) &&
     coverage.length > 0,
+  );
+  const walkForwardSampleGate = assessEvaluationSampleGate(
+    walkForward?.metrics,
+    config.model,
+  );
+  const realWalkForwardAcceptanceProven = Boolean(
+    walkForwardUsesRealCoverage &&
+    walkForwardSampleGate.sample_threshold_passed &&
+    (walkForward?.gate?.passed ?? false),
   );
   const providersEnabled = Object.fromEntries(
     Object.entries(config.providers ?? {})
@@ -853,7 +870,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   if (syntheticOnly) publicationBlockers.push("synthetic_only");
   if (
     !liveSampleThresholdReached &&
-    (!walkForwardUsesRealCoverage || !(walkForward?.gate?.passed ?? false))
+    !realWalkForwardAcceptanceProven
   ) {
     publicationBlockers.push("real_walk_forward_not_proven");
   }
@@ -919,10 +936,11 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       walk_forward_compatibility: walkForwardCompatibility,
       champion_evaluation_compatibility: championEvaluationCompatibility,
       latest_challenger_evaluation_compatibility: latestWalkForwardCompatibility,
-      real_walk_forward_acceptance_proven:
-        walkForwardUsesRealCoverage && (walkForward?.gate?.passed ?? false),
+      walk_forward_sample_gate: walkForwardSampleGate,
+      real_walk_forward_acceptance_proven: realWalkForwardAcceptanceProven,
     },
     live_evaluation: {
+      sample_gate: liveSampleGate,
       sample_threshold_reached: liveSampleThresholdReached,
       threshold_reached: liveThresholdReached,
       gate_passed: liveThresholdReached && issued.gate.passed,

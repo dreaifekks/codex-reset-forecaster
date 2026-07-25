@@ -50,6 +50,7 @@ import { assessPredictionIntegrity } from "../src/model/prediction-integrity.mjs
 import { AS_OF_MODE } from "../src/model/as-of.mjs";
 import { COVERAGE_AS_OF_MODE } from "../src/model/coverage-as-of.mjs";
 import { adequateCoverageAssertionsAsOf } from "../src/model/coverage-as-of.mjs";
+import { outcomeAdjudicationContract } from "../src/pipeline/outcomes.mjs";
 
 const frozenEvaluationBlobs = new Map();
 const testCoverageEvidence = {
@@ -68,7 +69,11 @@ function testCompletenessEvidence(exhaustedAt) {
   }];
 }
 
-function bindFrozenEvaluation(evaluation) {
+function bindFrozenEvaluation(evaluation, {
+  minimumWindows = 2,
+  minimumEvents = 1,
+  eventCount = 1,
+} = {}) {
   const pairedStatus = evaluation.paired_comparison?.status ?? "not_applicable";
   const rows = evaluation.folds.flatMap((fold, foldIndex) => {
     const firstAnchor = new Date(Date.parse(fold.origin) + 3_600_000);
@@ -119,7 +124,7 @@ function bindFrozenEvaluation(evaluation) {
   const eventStart = new Date(
     Date.parse(rows.at(-1).anchor) + 30 * 60_000,
   );
-  const events = [{
+  const event = {
     fold_origin: rows.at(-1).fold_origin,
     hit: true,
     settlement: "hit",
@@ -142,7 +147,11 @@ function bindFrozenEvaluation(evaluation) {
       start: eventStart.toISOString(),
       end: new Date(eventStart.getTime() + 30 * 60_000).toISOString(),
     },
-  }];
+  };
+  const events = Array.from({ length: eventCount }, (_, index) => ({
+    ...event,
+    outcome_ref: { record_id: `outcome_sample_${index}`, revision: 1 },
+  }));
   const artifact = {
     artifact_version: "reset-evaluation-rows/0.1.0",
     candidate_artifact_hash: evaluation.candidate.artifact_hash,
@@ -156,6 +165,8 @@ function bindFrozenEvaluation(evaluation) {
       minimum_event_window_recall: 0,
       require_brier_skill_above: -1,
       maximum_expected_calibration_error: 1,
+      minimum_live_evaluation_windows: minimumWindows,
+      minimum_live_evaluation_events: minimumEvents,
     },
     paired_status: pairedStatus,
     rows,
@@ -271,12 +282,17 @@ function signal(id, source, {
 
 function outcome(id, source, range, knownAt = range.end, {
   replayAvailableAt = null,
+  config = modelConfig(),
 } = {}) {
   return createRecord({
     recordType: "reset_outcome",
     naturalKey: id,
     createdAt: knownAt,
-    producer: producer("outcome-adjudicator", OUTCOME_ADJUDICATOR_VERSION),
+    producer: producer(
+      "outcome-adjudicator",
+      OUTCOME_ADJUDICATOR_VERSION,
+      outcomeAdjudicationContract(config),
+    ),
     data: {
       status: "confirmed",
       label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
@@ -333,6 +349,8 @@ function modelConfig(overrides = {}) {
       max_iterations: 250,
       coefficient_priors: {},
       minimum_outcomes: 1,
+      minimum_live_evaluation_windows: 2,
+      minimum_live_evaluation_events: 1,
       maximum_training_days: 30,
       promotion: {
         minimum_event_window_recall: 0,
@@ -1329,6 +1347,15 @@ test("training artifact binds exact outcome and coverage revisions in its artifa
     model.training_coverage_assertion_snapshot_hash,
     hashLabel(model.training_coverage_assertion_refs),
   );
+  assert.equal(model.calibrator_version, "identity-hourly-hazard/1");
+  assert.deepEqual(model.calibrator, {
+    version: "identity-hourly-hazard/1",
+    method: "identity",
+    fit_source: "none",
+    fitted: false,
+    reason: "identity_policy_until_versioned_oof_calibrator_is_available",
+    minimum_out_of_fold_events: 1,
+  });
   const artifactPayload = { ...model };
   delete artifactPayload.artifact_hash;
   assert.equal(model.artifact_hash, sha256(stableStringify(artifactPayload)));
@@ -1725,7 +1752,7 @@ test("model compatibility and promotion reject mismatched contracts and artifact
     async readModel(name) {
       return name === "challenger" ? challenger : null;
     },
-  }, mismatchedEvaluation);
+  }, mismatchedEvaluation, modelConfig());
   assert.equal(result.promoted, false);
   assert.equal(result.reason, "evaluation_challenger_artifact_mismatch");
 });
@@ -1843,6 +1870,7 @@ test("a same-policy second train and promote refreshes the champion without fake
   const firstPromotion = await promoteChallenger(
     store,
     makeEvaluation(firstTraining, null, "not_applicable"),
+    config,
   );
   assert.equal(firstPromotion.promoted, true);
   assert.equal(firstPromotion.reason, "evaluation_gate_passed");
@@ -1852,6 +1880,7 @@ test("a same-policy second train and promote refreshes the champion without fake
   const secondPromotion = await promoteChallenger(
     store,
     makeEvaluation(secondTraining, firstChampion, "available"),
+    config,
   );
   assert.equal(secondPromotion.promoted, true);
   assert.equal(secondPromotion.reason, "champion_refit_refreshed");
@@ -1871,6 +1900,7 @@ test("a same-policy second train and promote refreshes the champion without fake
       models.champion,
       "champion_model_contract_incompatible",
     ),
+    config,
   );
   assert.equal(migrationResult.promoted, false);
   assert.equal(migrationResult.reason, "explicit_migration_required");
@@ -1934,7 +1964,7 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
     origin: "2026-07-06T00:00:00.000Z",
     end: "2026-07-13T00:00:00.000Z",
   }];
-  const evaluation = {
+  const evaluationTemplate = {
     evaluation_version: "reset-evaluation/0.3.0",
     evaluation_cutoff: "2026-07-20T00:00:00.000Z",
     outcome_coverage_providers: ["fixture"],
@@ -1983,7 +2013,22 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
       expected_calibration_error: 0.05,
     },
   };
-  bindFrozenEvaluation(evaluation);
+  const promotionConfig = modelConfig({
+    minimum_live_evaluation_windows: 2,
+    minimum_live_evaluation_events: 20,
+  });
+  const insufficientEvaluation = bindFrozenEvaluation(
+    structuredClone(evaluationTemplate),
+    { minimumWindows: 2, minimumEvents: 20, eventCount: 19 },
+  );
+  const evaluation = bindFrozenEvaluation(
+    evaluationTemplate,
+    { minimumWindows: 2, minimumEvents: 20, eventCount: 20 },
+  );
+  assert.equal(insufficientEvaluation.metrics.evaluated_events, 19);
+  assert.equal(insufficientEvaluation.gate.sample_threshold_passed, false);
+  assert.equal(evaluation.metrics.evaluated_events, 20);
+  assert.equal(evaluation.gate.sample_threshold_passed, true);
   let writes = 0;
   const store = {
     async readModel(name) {
@@ -2003,7 +2048,20 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
     },
     async writeState() {},
   };
-  const result = await promoteChallenger(store, evaluation);
+  const insufficientResult = await promoteChallenger(
+    store,
+    insufficientEvaluation,
+    promotionConfig,
+  );
+  assert.equal(insufficientResult.promoted, false);
+  assert.equal(
+    insufficientResult.reason,
+    "evaluation_sample_threshold_not_met",
+  );
+  assert.equal(insufficientResult.sample_gate.evaluated_events_passed, false);
+  assert.equal(writes, 0);
+
+  const result = await promoteChallenger(store, evaluation, promotionConfig);
   assert.equal(result.promoted, true);
   assert.equal(writes, 1);
   const archiveEvaluation = structuredClone(evaluation);
@@ -2014,7 +2072,11 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
     COVERAGE_AS_OF_MODE.ARCHIVE_REPLAY;
   archiveEvaluation.evaluation_artifact_hash =
     evaluationArtifactHash(archiveEvaluation);
-  const archiveResult = await promoteChallenger(store, archiveEvaluation);
+  const archiveResult = await promoteChallenger(
+    store,
+    archiveEvaluation,
+    promotionConfig,
+  );
   assert.equal(archiveResult.promoted, true);
   assert.equal(writes, 2);
 
@@ -2022,7 +2084,11 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
   tamperedGate.gate.passed = false;
   tamperedGate.evaluation_artifact_hash =
     evaluationArtifactHash(tamperedGate);
-  const tamperedGateResult = await promoteChallenger(store, tamperedGate);
+  const tamperedGateResult = await promoteChallenger(
+    store,
+    tamperedGate,
+    promotionConfig,
+  );
   assert.equal(tamperedGateResult.promoted, false);
   assert.equal(
     tamperedGateResult.reason,
@@ -2032,7 +2098,11 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
   tamperedMetric.metrics.brier_score = 0.9;
   tamperedMetric.evaluation_artifact_hash =
     evaluationArtifactHash(tamperedMetric);
-  const tamperedMetricResult = await promoteChallenger(store, tamperedMetric);
+  const tamperedMetricResult = await promoteChallenger(
+    store,
+    tamperedMetric,
+    promotionConfig,
+  );
   assert.equal(tamperedMetricResult.promoted, false);
   assert.equal(
     tamperedMetricResult.reason,
@@ -2046,7 +2116,7 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
     async all(type) {
       return type === "reset_outcome" ? [changedOutcome] : [];
     },
-  }, evaluation);
+  }, evaluation, promotionConfig);
   assert.equal(changed.promoted, false);
   assert.equal(changed.reason, "evaluation_outcome_revision_changed");
 
@@ -2060,7 +2130,7 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
     async allAudit() {
       return [usedAssertion, unrelatedAssertion, revokedCoverage];
     },
-  }, evaluation);
+  }, evaluation, promotionConfig);
   assert.equal(supersededCoverageResult.promoted, false);
   assert.equal(
     supersededCoverageResult.reason,
@@ -2074,7 +2144,7 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
     async all(type) {
       return type === "reset_outcome" ? [exactOutcome, newerOutcome] : [];
     },
-  }, evaluation);
+  }, evaluation, promotionConfig);
   assert.equal(supersededOutcomeResult.promoted, false);
   assert.equal(
     supersededOutcomeResult.reason,

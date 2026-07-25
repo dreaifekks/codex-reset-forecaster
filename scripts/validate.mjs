@@ -176,13 +176,32 @@ const providerSchema = readJson(providerSchemaPath);
 if (
   providerSchema.$schema !== "https://json-schema.org/draft/2020-12/schema" ||
   !providerSchema.$defs?.xOutcomeExhaustivenessContract ||
-  !providerSchema.$defs?.xOutcomeExhaustivenessAttestation
+  !providerSchema.$defs?.xOutcomeExhaustivenessAttestation ||
+  !providerSchema.$defs?.historicalDailyLedgerAttestation ||
+  !providerSchema.$defs?.outcomeDefinition
 ) {
-  fail("schemas/provider-config.schema.json is missing the X exhaustiveness contract");
+  fail("schemas/provider-config.schema.json is missing an outcome coverage contract");
 }
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
 if (!Object.hasOwn(defaultConfig.providers?.x ?? {}, "outcome_exhaustiveness_contract")) {
   fail("config/default.json must fail closed with an explicit X exhaustiveness contract field");
+}
+if (
+  !defaultConfig.outcome_definition?.version ||
+  !Object.hasOwn(
+    defaultConfig.providers?.historical_monitor ?? {},
+    "coverage_completeness_attestation",
+  )
+) {
+  fail("config/default.json must declare its outcome definition and historical coverage policy");
+}
+if (
+  defaultConfig.model?.calibrator?.version !==
+    "identity-hourly-hazard/1" ||
+  defaultConfig.model?.calibrator?.method !== "identity" ||
+  defaultConfig.model?.calibrator?.fit_source !== "none"
+) {
+  fail("config/default.json must declare the supported versioned identity calibrator");
 }
 
 const exampleFiles = fs.readdirSync(examplesDir).filter((name) => name.endsWith(".json")).sort();

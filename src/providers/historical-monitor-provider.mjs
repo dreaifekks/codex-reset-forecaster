@@ -2,7 +2,13 @@ import { hashLabel } from "../core/hash.mjs";
 import {
   addCoverageAssertion,
   COVERAGE_ADEQUACY,
+  coverageAssertions,
 } from "../pipeline/coverage.mjs";
+import {
+  historicalDailyLedgerContractHash,
+  HISTORICAL_DAILY_LEDGER_EVIDENCE_VERSION,
+  HISTORICAL_DAILY_LEDGER_OBSERVATION_VERSION,
+} from "../core/coverage-contract.mjs";
 import {
   appendRawObservationRevision,
   rawObservationFromItem,
@@ -97,6 +103,7 @@ export function parseHistoricalMonitorHtml(html) {
     }
   }
   for (const [date, parsedCount] of parsedCountByDate) {
+    if (date < coverageDates[0]) continue;
     if (!coverageByDate.has(date)) {
       throw new Error(
         `Historical monitor parsed ${parsedCount} item(s) outside coverage grid for ${date}`,
@@ -117,11 +124,341 @@ function shortLinksFromOEmbed(payload) {
 }
 
 export class HistoricalMonitorProvider {
-  constructor({ config, fetchFn = fetch, now = () => new Date() }) {
+  constructor({
+    config,
+    target = null,
+    outcomeDefinition = null,
+    fetchFn = fetch,
+    now = () => new Date(),
+  }) {
     this.config = config;
+    this.target = target;
+    this.outcomeDefinition = outcomeDefinition;
     this.fetch = fetchFn;
     this.now = now;
     this.providerName = config.provider_name ?? "historical_monitor";
+  }
+
+  async authoritativeDailyCoverage(store, {
+    parsed,
+    verifiedItems,
+    archiveSnapshotRef,
+    htmlHash,
+    coverageGridHash,
+    fetchedAt,
+    attestation,
+    coverageContractHash,
+  }) {
+    const closeLagMs = attestation.day_close_lag_hours * 3_600_000;
+    const stabilityMs = attestation.minimum_stability_hours * 3_600_000;
+    const candidateLeadMs = closeLagMs - stabilityMs;
+    const policyHash = hashLabel(attestation);
+    const mode = "authoritative_daily_tibo_ledger";
+    const previousAssertions = await coverageAssertions(store, [this.providerName]);
+    const candidateState = await store.readState(
+      "historical-monitor-coverage-candidates",
+      { schema_version: "historical-coverage-candidates/1", days: {} },
+    );
+    candidateState.schema_version = "historical-coverage-candidates/1";
+    candidateState.days ??= {};
+    const coveredDates = new Set(parsed.coverageDates);
+    for (const date of Object.keys(candidateState.days)) {
+      if (!coveredDates.has(date)) delete candidateState.days[date];
+    }
+    const ledgersByDate = new Map(parsed.coverageDates.map((date) => {
+      const dayItems = verifiedItems
+        .filter((item) => item.published_at.slice(0, 10) === date)
+        .map((item) => ({
+          provider_item_id: item.id,
+          canonical_url: item.url,
+          published_at: item.published_at,
+          content_hash: hashLabel(item.text),
+          verification: item.oembed
+            ? "x_oembed+snowflake"
+            : "archive_text+snowflake",
+        }))
+        .sort((left, right) =>
+          left.published_at.localeCompare(right.published_at) ||
+          left.provider_item_id.localeCompare(right.provider_item_id)
+        );
+      const ledger = {
+        date,
+        expected_count: parsed.coverageByDate.get(date),
+        verified_items: dayItems,
+      };
+      return [date, { ledger, hash: hashLabel(ledger) }];
+    }));
+    const revokedAssertionIds = new Set();
+    for (const previous of previousAssertions.filter((assertion) =>
+      assertion.provider === this.providerName &&
+      assertion.mode === mode &&
+      assertion.adequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
+      assertion.revoked !== true
+    )) {
+      const date = previous.start.slice(0, 10);
+      const ledger = ledgersByDate.get(date);
+      const stillMatches = ledger && previous.evidence_refs?.some((evidence) =>
+        evidence.kind === "independent_completeness_attestation" &&
+        evidence.coverage_contract_hash === coverageContractHash &&
+        evidence.authority_policy_hash === policyHash &&
+        evidence.day_ledger_hash === ledger.hash
+      );
+      if (stillMatches) continue;
+      await addCoverageAssertion(store, {
+        provider: this.providerName,
+        start: previous.start,
+        end: previous.end,
+        mode,
+        adequacy: COVERAGE_ADEQUACY.OUTCOME_ONLY,
+        evidenceRefs: [{
+          kind: "archive_snapshot",
+          ref: archiveSnapshotRef,
+          html_sha256: htmlHash,
+          coverage_grid_sha256: coverageGridHash,
+        }],
+        rationale: ledger
+          ? "The authority-ledger policy or day contents changed and are pending a new stability window."
+          : "The previously attested UTC day is absent from the current authority ledger.",
+        assertedAt: fetchedAt,
+        replayAvailableAt: null,
+        assertionId: previous.assertion_id,
+      });
+      revokedAssertionIds.add(previous.assertion_id);
+    }
+    for (const date of parsed.coverageDates) {
+      const start = `${date}T00:00:00.000Z`;
+      const end = new Date(Date.parse(start) + DAY_MS).toISOString();
+      if (Date.parse(end) + candidateLeadMs > fetchedAt.getTime()) continue;
+      const { ledger: dayLedger, hash: dayLedgerHash } =
+        ledgersByDate.get(date);
+      const previous = previousAssertions.find((assertion) =>
+        assertion.provider === this.providerName &&
+        assertion.mode === mode &&
+        assertion.start === start &&
+        assertion.end === end
+      );
+      const previousEvidence = previous?.evidence_refs?.find((evidence) =>
+        evidence.kind === "independent_completeness_attestation" &&
+        evidence.coverage_contract_hash === coverageContractHash &&
+        evidence.authority_policy_hash === policyHash &&
+        evidence.day_ledger_hash === dayLedgerHash
+      );
+      if (
+        previous?.adequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
+        previous.revoked !== true &&
+        previousEvidence
+      ) {
+        delete candidateState.days[date];
+        continue;
+      }
+      if (
+        previous?.adequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
+        previous.revoked !== true &&
+        !revokedAssertionIds.has(previous.assertion_id)
+      ) {
+        await addCoverageAssertion(store, {
+          provider: this.providerName,
+          start,
+          end,
+          mode,
+          adequacy: COVERAGE_ADEQUACY.OUTCOME_ONLY,
+          evidenceRefs: [{
+            kind: "archive_snapshot",
+            ref: archiveSnapshotRef,
+            html_sha256: htmlHash,
+            coverage_grid_sha256: coverageGridHash,
+          }],
+          rationale:
+            "The daily authority ledger changed and is pending a new stability window.",
+          assertedAt: fetchedAt,
+          replayAvailableAt: null,
+          assertionId: previous.assertion_id,
+        });
+      }
+      const candidate = candidateState.days[date];
+      if (
+        !candidate ||
+        candidate.coverage_contract_hash !== coverageContractHash ||
+        candidate.authority_policy_hash !== policyHash ||
+        candidate.day_ledger_hash !== dayLedgerHash
+      ) {
+        const firstObservation = {
+          observation_version:
+            HISTORICAL_DAILY_LEDGER_OBSERVATION_VERSION,
+          provider: this.providerName,
+          source_url: this.config.base_url,
+          observed_at: fetchedAt.toISOString(),
+          coverage_contract_hash: coverageContractHash,
+          authority_policy_hash: policyHash,
+          day_ledger: dayLedger,
+          day_ledger_hash: dayLedgerHash,
+          archive_snapshot_ref: archiveSnapshotRef,
+          archive_html_sha256: htmlHash,
+          archive_coverage_grid_sha256: coverageGridHash,
+        };
+        const firstObservationHash = hashLabel(firstObservation);
+        const firstObservationRef = await store.writeBlob(
+          `${this.providerName}-coverage-observations`,
+          `${date}:${policyHash}:${dayLedgerHash}:${fetchedAt.toISOString()}`,
+          firstObservation,
+        );
+        candidateState.days[date] = {
+          coverage_contract_hash: coverageContractHash,
+          authority_policy_hash: policyHash,
+          day_ledger_hash: dayLedgerHash,
+          first_observed_at: fetchedAt.toISOString(),
+          first_observation_ref: firstObservationRef,
+          first_observation_hash: firstObservationHash,
+          last_observed_at: fetchedAt.toISOString(),
+          observation_count: 1,
+        };
+        continue;
+      }
+      candidate.last_observed_at = fetchedAt.toISOString();
+      candidate.observation_count += 1;
+      if (
+        fetchedAt.getTime() < Date.parse(end) + closeLagMs ||
+        fetchedAt.getTime() - Date.parse(candidate.first_observed_at) < stabilityMs
+      ) {
+        continue;
+      }
+      const replayAvailableAt = fetchedAt.toISOString();
+      const completenessPayload = {
+        evidence_version: HISTORICAL_DAILY_LEDGER_EVIDENCE_VERSION,
+        provider: this.providerName,
+        source_url: this.config.base_url,
+        outcome_definition: this.outcomeDefinition,
+        coverage_contract_hash: coverageContractHash,
+        target_scope: this.target,
+        confirmation_identity_ids: [...attestation.confirmation_identity_ids].sort(),
+        interval: { start, end, boundary: "[start,end)" },
+        asserted_at: fetchedAt.toISOString(),
+        exhausted_at: replayAvailableAt,
+        replay_available_at: replayAvailableAt,
+        archive_snapshot_ref: archiveSnapshotRef,
+        archive_html_sha256: htmlHash,
+        archive_coverage_grid_sha256: coverageGridHash,
+        authority_policy: attestation,
+        authority_policy_hash: policyHash,
+        day_ledger: dayLedger,
+        day_ledger_hash: dayLedgerHash,
+        stability_observation: {
+          first_observed_at: candidate.first_observed_at,
+          ref: candidate.first_observation_ref,
+          sha256: candidate.first_observation_hash,
+          stable_for_hours:
+            (fetchedAt.getTime() -
+              Date.parse(candidate.first_observed_at)) / 3_600_000,
+        },
+      };
+      const completenessHash = hashLabel(completenessPayload);
+      const completenessRef = await store.writeBlob(
+        `${this.providerName}-coverage-attestations`,
+        `${date}:${policyHash}:${dayLedgerHash}:${fetchedAt.toISOString()}`,
+        completenessPayload,
+      );
+      await addCoverageAssertion(store, {
+        provider: this.providerName,
+        start,
+        end,
+        mode,
+        adequacy: COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE,
+        evidenceRefs: [{
+          kind: "independent_completeness_attestation",
+          ref: completenessRef,
+          sha256: completenessHash,
+          method: attestation.method,
+          exhausted_at: replayAvailableAt,
+          replay_available_at: replayAvailableAt,
+          coverage_contract_hash: coverageContractHash,
+          authority_policy_hash: policyHash,
+          day_ledger_hash: dayLedgerHash,
+        }],
+        rationale:
+          "A versioned independent daily authority ledger was count-reconciled and each listed source post was verified.",
+        assertedAt: fetchedAt,
+        replayAvailableAt,
+        assertionId: previous?.assertion_id ?? null,
+      });
+      delete candidateState.days[date];
+    }
+    candidateState.updated_at = fetchedAt.toISOString();
+    await store.writeState(
+      "historical-monitor-coverage-candidates",
+      candidateState,
+    );
+    return (await coverageAssertions(store, [this.providerName]))
+      .filter((assertion) =>
+        assertion.mode === mode &&
+        assertion.adequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
+        assertion.revoked !== true
+      )
+      .sort((left, right) => left.start.localeCompare(right.start));
+  }
+
+  async invalidateIncompatibleAuthorityCoverage(store, {
+    coverageContractHash,
+    assertedAt,
+  }) {
+    const mode = "authoritative_daily_tibo_ledger";
+    const assertions = await coverageAssertions(store, [this.providerName]);
+    let invalidated = 0;
+    for (const assertion of assertions.filter((entry) =>
+      entry.mode === mode &&
+      entry.adequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
+      entry.revoked !== true
+    )) {
+      const evidence = assertion.evidence_refs?.find((entry) =>
+        entry.kind === "independent_completeness_attestation"
+      );
+      if (
+        coverageContractHash !== null &&
+        evidence?.coverage_contract_hash === coverageContractHash
+      ) {
+        continue;
+      }
+      await addCoverageAssertion(store, {
+        provider: this.providerName,
+        start: assertion.start,
+        end: assertion.end,
+        mode,
+        adequacy: COVERAGE_ADEQUACY.OUTCOME_ONLY,
+        evidenceRefs: [{
+          kind: "coverage_contract_transition",
+          previous_coverage_contract_hash:
+            evidence?.coverage_contract_hash ?? null,
+          current_coverage_contract_hash: coverageContractHash,
+        }],
+        rationale:
+          "The current outcome and coverage contract no longer matches this attestation.",
+        assertedAt,
+        replayAvailableAt: null,
+        assertionId: assertion.assertion_id,
+      });
+      invalidated += 1;
+    }
+    const candidateState = await store.readState(
+      "historical-monitor-coverage-candidates",
+      { schema_version: "historical-coverage-candidates/1", days: {} },
+    );
+    let candidatesChanged = false;
+    for (const [date, candidate] of Object.entries(candidateState.days ?? {})) {
+      if (
+        coverageContractHash === null ||
+        candidate.coverage_contract_hash !== coverageContractHash
+      ) {
+        delete candidateState.days[date];
+        candidatesChanged = true;
+      }
+    }
+    if (candidatesChanged) {
+      candidateState.updated_at = new Date(assertedAt).toISOString();
+      await store.writeState(
+        "historical-monitor-coverage-candidates",
+        candidateState,
+      );
+    }
+    return invalidated;
   }
 
   async request(url, options = {}) {
@@ -262,39 +599,40 @@ export class HistoricalMonitorProvider {
   async collect(store, { force = false } = {}) {
     const startedAt = this.now();
     const previousState = await store.readState("historical-monitor-provider", {});
+    const requestedAdequacy = this.config.coverage_adequacy;
+    const completenessAttestation =
+      this.config.coverage_completeness_attestation;
+    const coverageContractHash =
+      requestedAdequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE
+        ? historicalDailyLedgerContractHash({
+            attestation: completenessAttestation,
+            outcomeDefinition: this.outcomeDefinition,
+            providerName: this.providerName,
+            sourceUrl: this.config.base_url,
+            target: this.target,
+            confirmationIdentityIds: (
+              this.config.confirmation_identities ?? []
+            )
+              .map((identity) => identity.identity_id)
+              .filter(Boolean),
+          })
+        : null;
+    const invalidatedCoverageAssertions =
+      await this.invalidateIncompatibleAuthorityCoverage(store, {
+        coverageContractHash,
+        assertedAt: startedAt,
+      });
     const refreshMs = (this.config.refresh_interval_hours ?? 24) * 3_600_000;
     if (!force && previousState.last_success_at &&
         startedAt.getTime() - Date.parse(previousState.last_success_at) < refreshMs) {
-      return { collected: 0, skipped: "refresh_interval", health: { ok: true, delay_seconds: 0 } };
+      return {
+        collected: 0,
+        skipped: "refresh_interval",
+        invalidated_coverage_assertions: invalidatedCoverageAssertions,
+        health: { ok: true, delay_seconds: 0 },
+      };
     }
     try {
-      const requestedAdequacy = this.config.coverage_adequacy;
-      const completenessAttestation = this.config.coverage_completeness_attestation;
-      const attestationExhaustedAt = completenessAttestation?.exhausted_at;
-      const attestationReplayAvailableAt =
-        completenessAttestation?.replay_available_at ?? null;
-      const validCompletenessAttestation =
-        completenessAttestation &&
-        typeof completenessAttestation === "object" &&
-        typeof completenessAttestation.method === "string" &&
-        completenessAttestation.method.length > 0 &&
-        typeof attestationExhaustedAt === "string" &&
-        !Number.isNaN(Date.parse(attestationExhaustedAt)) &&
-        (
-          attestationReplayAvailableAt === null ||
-          (
-            typeof attestationReplayAvailableAt === "string" &&
-            !Number.isNaN(Date.parse(attestationReplayAvailableAt))
-          )
-        );
-      if (
-        requestedAdequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
-        !validCompletenessAttestation
-      ) {
-        throw new Error(
-          "historical_monitor negative_label_eligible requires a structured coverage_completeness_attestation with method and exhausted_at",
-        );
-      }
       const response = await this.request(this.config.base_url);
       const html = await response.text();
       const parsed = parseHistoricalMonitorHtml(html);
@@ -366,7 +704,7 @@ export class HistoricalMonitorProvider {
           selection_context: item.selection_context ?? null,
         }, {
           providerName: this.providerName,
-          providerVersion: "0.2.0",
+          providerVersion: "0.3.0",
           config: this.config,
           firstSeenAt: fetchedAt,
           fetchedAt,
@@ -405,7 +743,7 @@ export class HistoricalMonitorProvider {
           },
         }, {
           providerName: this.providerName,
-          providerVersion: "0.2.0",
+          providerVersion: "0.3.0",
           config: this.config,
           firstSeenAt: observation.data.first_seen_at,
           fetchedAt,
@@ -430,59 +768,44 @@ export class HistoricalMonitorProvider {
       }
       const negativeLabelEligible =
         requestedAdequacy === COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE &&
-        validCompletenessAttestation;
+        completenessAttestation;
       const coverageAdequacy = negativeLabelEligible
         ? COVERAGE_ADEQUACY.NEGATIVE_LABEL_ELIGIBLE
         : COVERAGE_ADEQUACY.OUTCOME_ONLY;
-      let completenessEvidence = [];
+      let runCoverageAssertions;
       if (negativeLabelEligible) {
-        const completenessPayload = {
-          provider: this.providerName,
-          archive_snapshot_ref: archiveSnapshotRef,
-          archive_html_sha256: htmlHash,
-          interval: { start: coverageStart, end: coverageEnd },
+        runCoverageAssertions = await this.authoritativeDailyCoverage(store, {
+          parsed,
+          verifiedItems: baseItems,
+          archiveSnapshotRef,
+          htmlHash,
+          coverageGridHash,
+          fetchedAt,
           attestation: completenessAttestation,
-        };
-        const completenessHash = hashLabel(completenessPayload);
-        const completenessRef = await store.writeBlob(
-          `${this.providerName}-coverage-attestations`,
-          `${coverageStart}:${coverageEnd}:${completenessHash}`,
-          completenessPayload,
-        );
-        completenessEvidence = [{
-          kind: "independent_completeness_attestation",
-          ref: completenessRef,
-          sha256: completenessHash,
-          method: completenessAttestation.method,
-          exhausted_at: new Date(attestationExhaustedAt).toISOString(),
-          replay_available_at: attestationReplayAvailableAt === null
-            ? null
-            : new Date(attestationReplayAvailableAt).toISOString(),
-        }];
-      }
-      const coverageAssertion = await addCoverageAssertion(store, {
-        provider: this.providerName,
-        start: coverageStart,
-        end: coverageEnd,
-        mode: "historical_archive_date_grid",
-        adequacy: coverageAdequacy,
-        evidenceRefs: [
-          {
+          coverageContractHash,
+        });
+      } else {
+        runCoverageAssertions = [await addCoverageAssertion(store, {
+          provider: this.providerName,
+          start: coverageStart,
+          end: coverageEnd,
+          mode: "historical_archive_date_grid",
+          adequacy: coverageAdequacy,
+          evidenceRefs: [{
             kind: "archive_snapshot",
             ref: archiveSnapshotRef,
             html_sha256: htmlHash,
             coverage_grid_sha256: coverageGridHash,
-          },
-          ...completenessEvidence,
-        ],
-        rationale: negativeLabelEligible
-          ? "Archive coverage has an explicit independent completeness attestation."
-          : "A contiguous archive date grid proves outcome discovery only, not complete negative-label coverage.",
-        assertedAt: fetchedAt,
-        replayAvailableAt: negativeLabelEligible
-          ? attestationReplayAvailableAt
-          : null,
-      });
+          }],
+          rationale:
+            "A contiguous archive date grid proves outcome discovery only, not complete negative-label coverage.",
+          assertedAt: fetchedAt,
+          replayAvailableAt: null,
+        })];
+      }
+      const coverageAssertion = runCoverageAssertions.at(-1) ?? null;
+      const effectiveCoverageStart = runCoverageAssertions[0]?.start ?? null;
+      const effectiveCoverageEnd = coverageAssertion?.end ?? null;
       const delaySeconds = Math.max(0, Math.round((fetchedAt - startedAt) / 1000));
       await store.append(this.healthObservation({ ok: true, at: fetchedAt, delaySeconds }));
       await store.writeState("historical-monitor-provider", {
@@ -493,12 +816,13 @@ export class HistoricalMonitorProvider {
         verified_archive_items: baseItems.length,
         discovered_linked_items: linkedItems.length,
         linked_item_errors: linkedErrors,
-        coverage_start: coverageStart,
-        coverage_end: coverageEnd,
-        coverage_mode: coverageAssertion.mode,
-        coverage_adequacy: coverageAssertion.adequacy,
-        coverage_assertion_id: coverageAssertion.assertion_id,
-        coverage_assertion_revision: coverageAssertion.revision,
+        coverage_start: effectiveCoverageStart,
+        coverage_end: effectiveCoverageEnd,
+        coverage_mode: coverageAssertion?.mode ?? null,
+        coverage_adequacy: coverageAssertion?.adequacy ?? null,
+        coverage_assertion_id: coverageAssertion?.assertion_id ?? null,
+        coverage_assertion_revision: coverageAssertion?.revision ?? null,
+        coverage_assertion_count: runCoverageAssertions.length,
         archive_snapshot_ref: archiveSnapshotRef,
         archive_html_sha256: htmlHash,
         archive_coverage_grid_sha256: coverageGridHash,
@@ -511,8 +835,11 @@ export class HistoricalMonitorProvider {
         verified_archive_items: baseItems.length,
         discovered_linked_items: linkedItems.length,
         linked_item_errors: linkedErrors,
-        coverage: { start: coverageStart, end: coverageEnd },
+        coverage: { start: effectiveCoverageStart, end: effectiveCoverageEnd },
         coverage_assertion: coverageAssertion,
+        coverage_assertions: runCoverageAssertions,
+        coverage_pending: negativeLabelEligible && runCoverageAssertions.length === 0,
+        invalidated_coverage_assertions: invalidatedCoverageAssertions,
         archive_snapshot_ref: archiveSnapshotRef,
         health: { ok: true, delay_seconds: delaySeconds },
       };

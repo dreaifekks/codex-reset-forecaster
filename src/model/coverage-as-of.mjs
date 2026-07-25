@@ -41,8 +41,12 @@ function providerSelected(assertion, providers) {
   return !providers || providers.includes(assertion.provider);
 }
 
-export async function coverageAssertionRevisions(store, providers = null) {
-  return (await verifiedCoverageAssertionRevisions(store, providers))
+export async function coverageAssertionRevisions(
+  store,
+  providers = null,
+  options = {},
+) {
+  return (await verifiedCoverageAssertionRevisions(store, providers, options))
     .filter((assertion) => providerSelected(assertion, providers));
 }
 

@@ -465,6 +465,15 @@ export function predictHazard(model, row) {
   const x = transform(row, model.means, model.scales);
   const linear = dot(model.weights, x);
   const probability = sigmoid(linear);
+  if (
+    model.calibrator &&
+    (
+      model.calibrator.method !== "identity" ||
+      model.calibrator_version !== model.calibrator.version
+    )
+  ) {
+    throw new Error("Unsupported or inconsistent model calibrator");
+  }
   if (model.covariance === null || model.uncertainty?.status === "unavailable") {
     return {
       probability,

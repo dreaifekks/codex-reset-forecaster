@@ -5,6 +5,7 @@ import { assertModelCompatibility, trainLogisticHazard } from "./logistic-hazard
 import { confirmationIdentityIds } from "../core/sources.mjs";
 import { extractorContract } from "../core/extractor-contract.mjs";
 import {
+  calibratorPolicy,
   evaluationContractHash,
   modelContractHash,
   modelVersionFor,
@@ -95,6 +96,7 @@ export async function buildTrainingExamples(store, config, {
     featureCoverageAssertions = await coverageAssertionRevisions(
       store,
       config.model.outcome_coverage_providers,
+      { config },
     );
   }
   const resolvedCoverageAsOfMode = coverageAsOfMode ?? (
@@ -375,6 +377,14 @@ export async function trainChallenger(store, config, options = {}) {
       hashLabel(trainingCoverageAssertionRefs),
     fit_artifact_hash: fitArtifactHash,
     ...modelFields,
+    calibrator_version: calibratorPolicy(config).version,
+    calibrator: {
+      ...calibratorPolicy(config),
+      fitted: false,
+      reason: "identity_policy_until_versioned_oof_calibrator_is_available",
+      minimum_out_of_fold_events:
+        config.model.minimum_live_evaluation_events,
+    },
   };
   artifact.artifact_hash = sha256(stableStringify(artifact));
   assertModelCompatibility(artifact, {

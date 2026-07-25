@@ -471,6 +471,10 @@ test("evaluation cache compatibility and outcome/source revisions are exact", as
         appConfig.model.promotion.require_brier_skill_above,
       maximum_expected_calibration_error:
         appConfig.model.promotion.maximum_expected_calibration_error,
+      minimum_live_evaluation_windows:
+        appConfig.model.minimum_live_evaluation_windows,
+      minimum_live_evaluation_events:
+        appConfig.model.minimum_live_evaluation_events,
     },
     paired_status: "not_applicable",
     rows: frozenRows,
@@ -567,6 +571,17 @@ test("evaluation cache compatibility and outcome/source revisions are exact", as
       [frozenArtifactRef]: frozenArtifact,
     },
   });
+  const readiness = await getReadiness(store, appConfig, {
+    now: new Date("2026-07-25T10:10:00.000Z"),
+  });
+  assert.equal(
+    readiness.model.walk_forward_sample_gate.sample_threshold_passed,
+    false,
+  );
+  assert.equal(readiness.model.real_walk_forward_acceptance_proven, false);
+  assert.ok(
+    readiness.publication_blockers.includes("real_walk_forward_not_proven"),
+  );
   const base = await serverFor(t, store, appConfig, "2026-07-25T10:10:00.000Z");
   const [summaryResponse, eventsResponse] = await Promise.all([
     fetch(`${base}/api/evaluation/summary`),

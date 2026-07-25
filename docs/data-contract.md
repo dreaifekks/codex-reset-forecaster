@@ -68,14 +68,16 @@ entries explicitly state their provenance relationship and independence group.
 
 ### `reset_outcome`
 
-The only record that can settle the target. It includes the observed occurrence
-interval, when that result became known, label grade, verification evidence, scope,
-and related candidates.
+The only record that can settle the selected, versioned target. It includes the
+observed occurrence interval, when that result became known, label grade,
+verification evidence, scope, and related candidates.
 
-In the MVP, a configured Tibo X post may supply gold verification only when it
-explicitly confirms that a platform-wide reset/refill completed. A `started`
-statement may support a candidate but does not alone create a gold outcome. The
-provider post still remains a `raw_observation`; adjudication creates the separate
+Under `config/tibo-authority-live.json`, the operational target is a qualifying
+primary statement from the configured Tibo identity that a platform-wide Codex
+reset/refill completed. It is not a claim that every physical backend reset is
+covered. A `started`, scheduled, expected, rumor, summary, or model-generated
+statement may support a candidate but does not create a gold outcome. The provider
+post still remains a `raw_observation`; adjudication creates the separate
 `reset_outcome` record.
 
 `event_identity` is stable across repeated observations of the same platform event.
@@ -119,7 +121,7 @@ The following values must never be substituted for one another:
 | `availability_attestation.available_at` | Independently verified historical time at which the exact source was public; optional and never the time this collector first saw it |
 | `available_at` | Time normalized information became model-usable |
 | `asserted_time_range` | Time range claimed by the source |
-| `occurred_time_range` | Later adjudicated reset interval |
+| `occurred_time_range` | Later adjudicated interval for the selected operational outcome |
 | `known_at` | Time the outcome became known to the system |
 | `replay_available_at` | Optional independently attested historical availability used only for an explicitly labeled archive replay; never a replacement for `known_at` |
 | `knowledge_cutoff` | Latest information a forecast may use |
@@ -262,6 +264,28 @@ confirmation identity set, the asserted interval, and its validity/expiry.
 Live processing always uses `asserted_at`. Archive replay may use
 `replay_available_at` only when the exact evidence entry is an independently
 attested completeness manifest; otherwise it also falls back to `asserted_at`.
+
+The Tibo-authority live profile defines one narrow completeness manifest:
+`historical-daily-authority-ledger/1`. It applies only to the operational outcome
+“qualifying completion statement from the configured Tibo identity” and never
+claims exhaustive knowledge of physical backend resets. Its rules are:
+
+- each assertion covers exactly one half-open UTC day from the archive's daily
+  grid and binds the reconciled `data-count`, verified source items, target scope,
+  identity set, policy, source HTML, and hashes;
+- dates before the first grid date may discover positive outcomes but cannot
+  create negative-label coverage;
+- a new or changed day ledger begins as a pending candidate;
+- promotion requires at least two actual fetch observations of the unchanged
+  ledger spanning six hours or more, with the promoting fetch no earlier than 36
+  hours after day-end;
+- `asserted_at`, evidence exhaustion time, and `replay_available_at` all use that
+  real promoting fetch time. They are never replaced with day-end or an earlier
+  first-deployment time.
+
+This contract permits an absent qualifying statement on a stable closed ledger to
+form a negative label for that operational target only. A changed ledger
+invalidates the prior evidence and begins a new stability window.
 
 ## Provider separation
 

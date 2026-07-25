@@ -4,9 +4,23 @@ import { FEATURE_NAMES } from "./features.mjs";
 import { OUTCOME_LABEL_POLICY_VERSION } from "../core/outcome-contract.mjs";
 import { canonicalSourceIdentityPolicy } from "../core/sources.mjs";
 
+const DEFAULT_CALIBRATOR_POLICY = Object.freeze({
+  version: "identity-hourly-hazard/1",
+  method: "identity",
+  fit_source: "none",
+});
+
+export function calibratorPolicy(config) {
+  return {
+    ...DEFAULT_CALIBRATOR_POLICY,
+    ...(config.model.calibrator ?? {}),
+  };
+}
+
 export function modelContractHash(config) {
   return hashLabel({
     target: config.target,
+    outcome_definition: config.outcome_definition,
     taxonomy_version: config.taxonomy_version,
     feature_schema_version: config.feature_schema_version,
     deduplication_version: config.deduplication_version,
@@ -44,6 +58,11 @@ export function modelContractHash(config) {
       max_iterations: config.model.max_iterations,
     },
     interval_likelihood: "exposure-weighted/1",
+    calibrator: {
+      ...calibratorPolicy(config),
+      minimum_out_of_fold_events:
+        config.model.minimum_live_evaluation_events,
+    },
     uncertainty_policy:
       "inverse-observed-numerical-hessian-or-explicitly-unavailable/1",
   });

@@ -1,6 +1,10 @@
 import { addHours, clamp, floorHour, toUtcIso } from "../core/time.mjs";
 import { hashLabel, sha256, stableStringify } from "../core/hash.mjs";
-import { coverageAssertions, normalizeCoverageIntervals } from "../pipeline/coverage.mjs";
+import {
+  coverageAssertions,
+  normalizeCoverageIntervals,
+  verifyCoverageAssertionEvidence,
+} from "../pipeline/coverage.mjs";
 import { FEATURE_NAMES, featureVectorAt, featuresToArray } from "./features.mjs";
 import {
   assertModelCompatibility,
@@ -207,6 +211,32 @@ function trainingOptionsFromArtifact(model, config) {
 const PAIRED_NON_REGRESSION_TOLERANCE = 1e-12;
 const FROZEN_EVALUATION_VERSION = "reset-evaluation-rows/0.1.0";
 
+export function assessEvaluationSampleGate(metrics, thresholds) {
+  const minimumWindows = thresholds?.minimum_live_evaluation_windows;
+  const minimumEvents = thresholds?.minimum_live_evaluation_events;
+  if (
+    !Number.isInteger(minimumWindows) ||
+    minimumWindows < 1 ||
+    !Number.isInteger(minimumEvents) ||
+    minimumEvents < 1
+  ) {
+    throw new TypeError("Evaluation sample thresholds must be positive integers");
+  }
+  const evaluatedWindows = metrics?.evaluated_windows;
+  const evaluatedEvents = metrics?.evaluated_events;
+  const windowsPassed = Number.isInteger(evaluatedWindows) &&
+    evaluatedWindows >= minimumWindows;
+  const eventsPassed = Number.isInteger(evaluatedEvents) &&
+    evaluatedEvents >= minimumEvents;
+  return {
+    minimum_live_evaluation_windows: minimumWindows,
+    minimum_live_evaluation_events: minimumEvents,
+    evaluated_windows_passed: windowsPassed,
+    evaluated_events_passed: eventsPassed,
+    sample_threshold_passed: windowsPassed && eventsPassed,
+  };
+}
+
 export function recomputeFrozenEvaluationArtifact(artifact) {
   if (artifact?.artifact_version !== FROZEN_EVALUATION_VERSION) {
     throw new Error("Unsupported frozen evaluation artifact version");
@@ -374,6 +404,7 @@ export function recomputeFrozenEvaluationArtifact(artifact) {
   ) {
     throw new Error("Frozen evaluation thresholds are invalid");
   }
+  const sampleGate = assessEvaluationSampleGate(metrics, thresholds);
   const dispositionSummary = summarizeFoldDispositions(
     artifact.fold_dispositions,
   );
@@ -395,12 +426,14 @@ export function recomputeFrozenEvaluationArtifact(artifact) {
       ) &&
       artifact.folds.every((fold) => fold.coverage_fraction === 1),
     fold_disposition_passed: dispositionSummary.passed,
+    ...sampleGate,
   };
   gate.passed = gate.event_window_recall_passed &&
     gate.brier_skill_passed &&
     gate.calibration_passed &&
     gate.coverage_passed &&
-    gate.fold_disposition_passed;
+    gate.fold_disposition_passed &&
+    gate.sample_threshold_passed;
   let pairedChampionMetrics = null;
   let pairedMetricDeltas = null;
   if (
@@ -546,7 +579,11 @@ export async function evaluateWalkForward(store, config, {
     store.all("normalized_signal", { latestOnly: false }),
     store.all("reset_outcome", { latestOnly: false }),
     store.all("raw_observation", { latestOnly: false }),
-    coverageAssertionRevisions(store, config.model.outcome_coverage_providers),
+    coverageAssertionRevisions(
+      store,
+      config.model.outcome_coverage_providers,
+      { config },
+    ),
     store.readModel("challenger"),
     store.readModel("champion", { invalidAsNull: true }),
   ]);
@@ -1012,12 +1049,17 @@ export async function evaluateWalkForward(store, config, {
       folds.every((fold) => fold.coverage_fraction === 1),
     fold_disposition_passed:
       summarizeFoldDispositions(foldDispositions).passed,
+    ...assessEvaluationSampleGate({
+      evaluated_windows: allRows.length,
+      evaluated_events: eventResults.length,
+    }, config.model),
   };
   gate.passed = gate.event_window_recall_passed &&
     gate.brier_skill_passed &&
     gate.calibration_passed &&
     gate.coverage_passed &&
-    gate.fold_disposition_passed;
+    gate.fold_disposition_passed &&
+    gate.sample_threshold_passed;
   const modelVersions = [...new Set(
     folds.map((fold) => fold.model_version).filter(Boolean),
   )].sort();
@@ -1106,6 +1148,10 @@ export async function evaluateWalkForward(store, config, {
         config.model.promotion.require_brier_skill_above,
       maximum_expected_calibration_error:
         config.model.promotion.maximum_expected_calibration_error,
+      minimum_live_evaluation_windows:
+        config.model.minimum_live_evaluation_windows,
+      minimum_live_evaluation_events:
+        config.model.minimum_live_evaluation_events,
     },
     paired_status: pairedStatus,
     rows: allRows,
@@ -1214,7 +1260,7 @@ export async function evaluateWalkForward(store, config, {
   return summary;
 }
 
-export async function promoteChallenger(store, evaluation) {
+export async function promoteChallenger(store, evaluation, config) {
   const challenger = await store.readModel("challenger");
   if (!challenger) throw new Error("No challenger model exists");
   const challengerPayload = { ...challenger };
@@ -1272,6 +1318,23 @@ export async function promoteChallenger(store, evaluation) {
   ) {
     return incompatible("evaluation_row_sample_hash_mismatch");
   }
+  let configuredSampleGate;
+  try {
+    configuredSampleGate = assessEvaluationSampleGate(
+      evaluation.metrics,
+      config?.model,
+    );
+  } catch {
+    return incompatible("promotion_sample_threshold_config_invalid");
+  }
+  if (
+    frozenEvaluationArtifact.thresholds?.minimum_live_evaluation_windows !==
+      configuredSampleGate.minimum_live_evaluation_windows ||
+    frozenEvaluationArtifact.thresholds?.minimum_live_evaluation_events !==
+      configuredSampleGate.minimum_live_evaluation_events
+  ) {
+    return incompatible("evaluation_sample_threshold_mismatch");
+  }
   let recomputedEvaluation;
   try {
     recomputedEvaluation = recomputeFrozenEvaluationArtifact(
@@ -1303,6 +1366,14 @@ export async function promoteChallenger(store, evaluation) {
       hashLabel(evaluation.paired_comparison?.metric_deltas ?? null)
   ) {
     return incompatible("evaluation_recomputed_summary_mismatch");
+  }
+  if (!configuredSampleGate.sample_threshold_passed) {
+    return {
+      promoted: false,
+      reason: "evaluation_sample_threshold_not_met",
+      model: challenger,
+      sample_gate: configuredSampleGate,
+    };
   }
   const expectedOutcomeAsOfMode =
     evaluation.evidence_mode === "archive_replay"
@@ -1360,6 +1431,16 @@ export async function promoteChallenger(store, evaluation) {
       assertion.assertion_id === ref.assertion_id && assertion.revision === ref.revision,
     );
     if (!exact) return incompatible("evaluation_coverage_assertion_missing");
+    if (
+      exact.mode === "authoritative_daily_tibo_ledger" &&
+      !(await verifyCoverageAssertionEvidence(
+        store,
+        exact,
+        { config },
+      )).valid
+    ) {
+      return incompatible("evaluation_coverage_assertion_contract_mismatch");
+    }
     referencedCoverageAssertions.push(exact);
   }
   const maximumReferencedCoverageRevision = new Map();

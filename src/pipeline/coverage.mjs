@@ -1,8 +1,16 @@
 import { toUtcIso } from "../core/time.mjs";
 import { hashLabel, sha256, stableStringify } from "../core/hash.mjs";
+import {
+  historicalDailyLedgerContractHash,
+  HISTORICAL_DAILY_LEDGER_ATTESTATION_VERSION,
+  HISTORICAL_DAILY_LEDGER_EVIDENCE_VERSION,
+  HISTORICAL_DAILY_LEDGER_METHOD,
+  HISTORICAL_DAILY_LEDGER_OBSERVATION_VERSION,
+} from "../core/coverage-contract.mjs";
 
 const NEGATIVE_LABEL_ELIGIBLE = "negative_label_eligible";
 const OUTCOME_ONLY = "outcome_only";
+const HISTORICAL_DAILY_LEDGER_MODE = "authoritative_daily_tibo_ledger";
 
 function latestAssertions(assertions) {
   const latest = new Map();
@@ -29,6 +37,230 @@ function assertionSignature(assertion) {
   });
 }
 
+async function historicalDailyLedgerEvidenceReasons(
+  store,
+  assertion,
+  entry,
+  payload,
+  config,
+) {
+  if (payload?.evidence_version !== HISTORICAL_DAILY_LEDGER_EVIDENCE_VERSION) {
+    return assertion.mode === HISTORICAL_DAILY_LEDGER_MODE
+      ? ["historical_daily_ledger_evidence_version_unsupported"]
+      : [];
+  }
+  const reasons = [];
+  const policy = payload.authority_policy;
+  const interval = payload.interval;
+  const ledger = payload.day_ledger;
+  const items = ledger?.verified_items;
+  const stability = payload.stability_observation;
+  let expectedCoverageContractHash = null;
+  try {
+    const provider = config?.providers?.historical_monitor;
+    if (
+      provider &&
+      provider.coverage_adequacy === NEGATIVE_LABEL_ELIGIBLE &&
+      (provider.provider_name ?? "historical_monitor") === assertion.provider
+    ) {
+      expectedCoverageContractHash = historicalDailyLedgerContractHash({
+        attestation: provider.coverage_completeness_attestation,
+        outcomeDefinition: config.outcome_definition,
+        providerName: assertion.provider,
+        sourceUrl: provider.base_url,
+        target: config.target,
+        confirmationIdentityIds: (provider.confirmation_identities ?? [])
+          .map((identity) => identity.identity_id)
+          .filter(Boolean),
+      });
+    }
+  } catch {
+    expectedCoverageContractHash = null;
+  }
+  if (
+    !expectedCoverageContractHash ||
+    payload.coverage_contract_hash !== expectedCoverageContractHash ||
+    entry.coverage_contract_hash !== expectedCoverageContractHash ||
+    hashLabel(payload.outcome_definition) !==
+      hashLabel(config?.outcome_definition)
+  ) {
+    reasons.push("historical_daily_ledger_current_contract_mismatch");
+  }
+  if (
+    payload.provider !== assertion.provider ||
+    interval?.start !== assertion.start ||
+    interval?.end !== assertion.end ||
+    interval?.boundary !== "[start,end)" ||
+    payload.asserted_at !== assertion.asserted_at ||
+    payload.exhausted_at !== entry.exhausted_at ||
+    payload.replay_available_at !== assertion.replay_available_at ||
+    entry.replay_available_at !== assertion.replay_available_at
+  ) {
+    reasons.push("historical_daily_ledger_clocks_or_scope_mismatch");
+  }
+  if (
+    policy?.version !== HISTORICAL_DAILY_LEDGER_ATTESTATION_VERSION ||
+    policy?.provider !== assertion.provider ||
+    policy?.independent !== true ||
+    policy?.attestor !== payload.source_url ||
+    policy?.method !== HISTORICAL_DAILY_LEDGER_METHOD ||
+    policy?.exhaustive_for !==
+      "qualifying_completed_platform_reset_outcomes" ||
+    hashLabel(policy?.target_scope) !== hashLabel(payload.target_scope) ||
+    hashLabel([...(policy?.confirmation_identity_ids ?? [])].sort()) !==
+      hashLabel([...(payload.confirmation_identity_ids ?? [])].sort()) ||
+    hashLabel(policy) !== payload.authority_policy_hash ||
+    payload.authority_policy_hash !== entry.authority_policy_hash
+  ) {
+    reasons.push("historical_daily_ledger_authority_policy_invalid");
+  }
+  if (
+    !Number.isInteger(policy?.day_close_lag_hours) ||
+    !Number.isInteger(policy?.minimum_stability_hours) ||
+    policy.minimum_stability_hours < 1 ||
+    policy.minimum_stability_hours > policy.day_close_lag_hours
+  ) {
+    reasons.push("historical_daily_ledger_stability_policy_invalid");
+  }
+  const firstObservedMs = Date.parse(stability?.first_observed_at);
+  const assertedMs = Date.parse(assertion.asserted_at);
+  const intervalEndMs = Date.parse(assertion.end);
+  const stableForHours =
+    (assertedMs - firstObservedMs) / 3_600_000;
+  if (
+    !stability ||
+    !Number.isFinite(firstObservedMs) ||
+    typeof stability.ref !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(stability.sha256 ?? "") ||
+    !Number.isFinite(stability.stable_for_hours) ||
+    Math.abs(stability.stable_for_hours - stableForHours) > 1e-9 ||
+    stableForHours < policy?.minimum_stability_hours ||
+    firstObservedMs <
+      intervalEndMs +
+        (policy?.day_close_lag_hours -
+          policy?.minimum_stability_hours) *
+          3_600_000 ||
+    assertedMs <
+      intervalEndMs + policy?.day_close_lag_hours * 3_600_000
+  ) {
+    reasons.push("historical_daily_ledger_stability_evidence_invalid");
+  } else {
+    try {
+      const firstObservation = await store.readBlob(stability.ref);
+      if (
+        hashLabel(firstObservation) !== stability.sha256 ||
+        firstObservation.observation_version !==
+          HISTORICAL_DAILY_LEDGER_OBSERVATION_VERSION ||
+        firstObservation.provider !== assertion.provider ||
+        firstObservation.source_url !== payload.source_url ||
+        firstObservation.observed_at !== stability.first_observed_at ||
+        firstObservation.coverage_contract_hash !==
+          expectedCoverageContractHash ||
+        firstObservation.authority_policy_hash !==
+          payload.authority_policy_hash ||
+        firstObservation.day_ledger_hash !== payload.day_ledger_hash ||
+        hashLabel(firstObservation.day_ledger) !==
+          payload.day_ledger_hash
+      ) {
+        reasons.push("historical_daily_ledger_first_observation_invalid");
+      } else {
+        try {
+          const firstSnapshot = await store.readBlob(
+            firstObservation.archive_snapshot_ref,
+          );
+          const firstGridEntry = firstSnapshot.coverage_grid?.find((row) =>
+            row.date === ledger?.date
+          );
+          if (
+            firstSnapshot.source_url !== payload.source_url ||
+            firstSnapshot.fetched_at !== firstObservation.observed_at ||
+            firstSnapshot.html_sha256 !==
+              firstObservation.archive_html_sha256 ||
+            firstSnapshot.coverage_grid_sha256 !==
+              firstObservation.archive_coverage_grid_sha256 ||
+            hashLabel(firstSnapshot.html) !==
+              firstObservation.archive_html_sha256 ||
+            hashLabel(firstSnapshot.coverage_grid) !==
+              firstObservation.archive_coverage_grid_sha256 ||
+            firstGridEntry?.count !== ledger?.expected_count
+          ) {
+            reasons.push(
+              "historical_daily_ledger_first_archive_snapshot_mismatch",
+            );
+          }
+        } catch {
+          reasons.push(
+            "historical_daily_ledger_first_archive_snapshot_unreadable",
+          );
+        }
+      }
+    } catch {
+      reasons.push("historical_daily_ledger_first_observation_unreadable");
+    }
+  }
+  if (
+    !ledger ||
+    ledger.date !== assertion.start.slice(0, 10) ||
+    !Number.isInteger(ledger.expected_count) ||
+    !Array.isArray(items) ||
+    ledger.expected_count !== items.length ||
+    hashLabel(ledger) !== payload.day_ledger_hash ||
+    payload.day_ledger_hash !== entry.day_ledger_hash
+  ) {
+    reasons.push("historical_daily_ledger_manifest_invalid");
+  } else {
+    const itemIds = items.map((item) => item.provider_item_id);
+    if (
+      new Set(itemIds).size !== itemIds.length ||
+      items.some((item) =>
+        typeof item.provider_item_id !== "string" ||
+        typeof item.canonical_url !== "string" ||
+        typeof item.published_at !== "string" ||
+        Date.parse(item.published_at) < Date.parse(assertion.start) ||
+        Date.parse(item.published_at) >= Date.parse(assertion.end) ||
+        !/^sha256:[a-f0-9]{64}$/.test(item.content_hash ?? "") ||
+        !["x_oembed+snowflake", "archive_text+snowflake"].includes(
+          item.verification,
+        )
+      )
+    ) {
+      reasons.push("historical_daily_ledger_items_invalid");
+    }
+  }
+  if (
+    typeof payload.archive_snapshot_ref !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(payload.archive_html_sha256 ?? "") ||
+    !/^sha256:[a-f0-9]{64}$/.test(
+      payload.archive_coverage_grid_sha256 ?? "",
+    )
+  ) {
+    reasons.push("historical_daily_ledger_archive_reference_invalid");
+  } else {
+    try {
+      const snapshot = await store.readBlob(payload.archive_snapshot_ref);
+      const gridEntry = snapshot.coverage_grid?.find((row) =>
+        row.date === ledger?.date
+      );
+      if (
+        snapshot.source_url !== payload.source_url ||
+        snapshot.fetched_at !== payload.asserted_at ||
+        snapshot.html_sha256 !== payload.archive_html_sha256 ||
+        snapshot.coverage_grid_sha256 !==
+          payload.archive_coverage_grid_sha256 ||
+        hashLabel(snapshot.html) !== payload.archive_html_sha256 ||
+        hashLabel(snapshot.coverage_grid) !==
+          payload.archive_coverage_grid_sha256 ||
+        gridEntry?.count !== ledger?.expected_count
+      ) {
+        reasons.push("historical_daily_ledger_archive_snapshot_mismatch");
+      }
+    } catch {
+      reasons.push("historical_daily_ledger_archive_snapshot_unreadable");
+    }
+  }
+  return reasons;
+}
+
 export async function coverageAssertionRevisions(store, providers = null) {
   let assertions = typeof store.allAudit === "function"
     ? await store.allAudit("coverage_assertion")
@@ -53,7 +285,11 @@ export async function coverageAssertions(store, providers = null) {
   return latestAssertions(await coverageAssertionRevisions(store, providers));
 }
 
-export async function verifyCoverageAssertionEvidence(store, assertion) {
+export async function verifyCoverageAssertionEvidence(
+  store,
+  assertion,
+  { config = null } = {},
+) {
   if (assertion?.adequacy !== NEGATIVE_LABEL_ELIGIBLE || assertion.revoked === true) {
     return { valid: true, reasons: [] };
   }
@@ -87,6 +323,16 @@ export async function verifyCoverageAssertionEvidence(store, assertion) {
       const payload = await store.readBlob(entry.ref);
       if (hashLabel(payload) !== entry.sha256) {
         reasons.push("coverage_completeness_evidence_hash_mismatch");
+      } else {
+        reasons.push(
+          ...await historicalDailyLedgerEvidenceReasons(
+            store,
+            assertion,
+            entry,
+            payload,
+            config,
+          ),
+        );
       }
     } catch {
       reasons.push("coverage_completeness_evidence_unreadable");
@@ -95,11 +341,19 @@ export async function verifyCoverageAssertionEvidence(store, assertion) {
   return { valid: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
-export async function verifiedCoverageAssertionRevisions(store, providers = null) {
+export async function verifiedCoverageAssertionRevisions(
+  store,
+  providers = null,
+  options = {},
+) {
   const assertions = await coverageAssertionRevisions(store, providers);
   const verified = [];
   for (const assertion of assertions) {
-    const verification = await verifyCoverageAssertionEvidence(store, assertion);
+    const verification = await verifyCoverageAssertionEvidence(
+      store,
+      assertion,
+      options,
+    );
     verified.push(verification.valid
       ? assertion
       : {
@@ -111,11 +365,15 @@ export async function verifiedCoverageAssertionRevisions(store, providers = null
   return verified;
 }
 
-export async function verifiedCoverageAssertions(store, providers = null) {
+export async function verifiedCoverageAssertions(
+  store,
+  providers = null,
+  options = {},
+) {
   const assertions = await coverageAssertions(store, providers);
   const verified = [];
   for (const assertion of assertions) {
-    if ((await verifyCoverageAssertionEvidence(store, assertion)).valid) {
+    if ((await verifyCoverageAssertionEvidence(store, assertion, options)).valid) {
       verified.push(assertion);
     }
   }
@@ -324,8 +582,12 @@ export async function markCurrentPollCoverage(store, provider, at = new Date(), 
   return addCoverageInterval(store, provider, options.previous_success_at, at, options);
 }
 
-export async function adequateCoverageIntervals(store, providers = null) {
-  const assertions = await verifiedCoverageAssertions(store, providers);
+export async function adequateCoverageIntervals(
+  store,
+  providers = null,
+  options = {},
+) {
+  const assertions = await verifiedCoverageAssertions(store, providers, options);
   return normalizeCoverageIntervals(assertions.filter((assertion) =>
     assertion.adequacy === NEGATIVE_LABEL_ELIGIBLE &&
     assertion.revoked !== true

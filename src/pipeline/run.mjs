@@ -25,7 +25,7 @@ export async function trainEvaluatePromote(store, config, { now = new Date() } =
   const cutoff = floorHour(now);
   const training = await trainChallenger(store, config, { trainingCutoff: cutoff });
   const evaluation = await evaluateWalkForward(store, config, { evaluationCutoff: cutoff });
-  const promotion = await promoteChallenger(store, evaluation);
+  const promotion = await promoteChallenger(store, evaluation, config);
   return { training, evaluation, promotion };
 }
 
@@ -83,6 +83,8 @@ export async function collectConfiguredProviders(store, config, { instances = {}
   if (config.providers.historical_monitor.enabled) {
     const provider = instances.historical_monitor ?? new HistoricalMonitorProvider({
       config: config.providers.historical_monitor,
+      target: config.target,
+      outcomeDefinition: config.outcome_definition,
     });
     addProvider(
       "historical_monitor",

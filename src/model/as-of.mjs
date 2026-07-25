@@ -29,6 +29,13 @@ function latestByAvailability(records, cutoff, availableAt) {
 
 export function outcomeAvailableAt(outcome, mode = AS_OF_MODE.LIVE) {
   assertAsOfMode(mode);
+  // Only an initial adjudication may use an attested historical replay clock.
+  // Corrections and policy/config/extractor-driven revisions become available
+  // when that revision was actually adjudicated, even if they retain a stale
+  // replay_available_at from an older record or import.
+  if (outcome.revision !== 1 || outcome.supersedes !== null) {
+    return outcome.data.known_at;
+  }
   if (mode === AS_OF_MODE.ARCHIVE_REPLAY) {
     return outcome.data.replay_available_at ?? outcome.data.known_at;
   }

@@ -2,9 +2,11 @@
 
 ## Objective
 
-Estimate the conditional probability that an actual platform-level Codex quota
-reset or refill will occur in each upcoming time slot, with a primary product view
-of the next seven days.
+Estimate the conditional probability of a versioned operational outcome in each
+upcoming time slot, with a primary product view of the next seven days. The current
+live profile defines that outcome as a qualifying platform-wide Codex reset/refill
+completion statement from the configured Tibo identity; it is not a claim about
+every physical backend reset.
 
 The initial product is a website with current 4-hour, 24-hour, and seven-day
 heatmaps plus a historical forecast-evaluation page. Personal quota and voucher
@@ -53,12 +55,21 @@ not an exhaustive timeline.
 The disabled-by-default historical-monitor adapter is an outcome-discovery source.
 It saves the complete source HTML and parsed grid, verifies archived source
 identities and timestamps, requires each UTC day's parsed item count to match the
-page's `data-count`, and emits an append-only coverage assertion. Its daily
-grid is `outcome_only`; contiguity does not prove the absence of an unlisted event
-and cannot establish negative labels. Links followed from known outcome posts are
-explicitly outcome-conditioned and feature-ineligible. Only a separate,
-independently auditable completeness attestation may support a
-`negative_label_eligible` assertion.
+page's `data-count`, and emits append-only coverage assertions. Under
+`config/archive-evaluation.example.json`, its daily grid remains `outcome_only`;
+contiguity alone does not prove the absence of an unlisted event. Links followed
+from known outcome posts are explicitly outcome-conditioned and
+feature-ineligible.
+
+`config/tibo-authority-live.json` adds a narrower, versioned contract for the
+qualifying-Tibo-completion target. Each grid day has one count-reconciled authority
+ledger. It may advance from pending discovery to
+`negative_label_eligible` only after the ledger is observed in at least two real
+fetches separated by six hours or more and the final fetch is no earlier than 36
+hours after UTC day-end. Days before the archive's first grid date remain
+outcome-discovery-only. The promotion time is the actual later fetch time, so an
+initial deployment cannot backfill those days as information that was known at
+day-end.
 
 Direct X timeline pagination also defaults to `outcome_only`: exhausting every
 page proves what an account posted, not that every platform reset must have been
@@ -139,16 +150,19 @@ only to saved out-of-sample predictions.
 
 ### 7. Outcome adjudication and settlement
 
-Announcements are evidence, not outcomes. Outcomes are confirmed from direct
-platform observations or sufficiently strong independent confirmation and retain an
-observed time interval and label grade. Missing coverage yields censored windows.
+A source post remains evidence rather than being stored directly as an outcome.
+The versioned adjudicator creates the separate canonical outcome only when the
+configured operational definition is satisfied, and it retains the observed time
+interval and label grade. Missing coverage yields censored windows.
 
-For the MVP, an exact configured-source post that explicitly confirms a
-platform-wide reset/refill completed may verify an outcome. A `started` statement
-remains a candidate unless direct platform observation or genuinely independent
-evidence settles it. Expectations, hints, rumors, summaries, and scheduled claims
-do not. The post publication time remains distinct from the adjudicated occurrence
-interval.
+For `config/tibo-authority-live.json`, an exact primary statement from the
+configured Tibo identity must explicitly say that a platform-wide Codex
+reset/refill completed. That qualifying statement is the operational target; it
+does not imply that the system covers every physical backend reset. A `started`
+statement, schedule, expectation, hint, rumor, summary, or model judgment remains
+a candidate or signal and cannot create a positive outcome. Publication time,
+asserted event time, canonical occurrence interval, availability, and system
+knowledge time remain distinct.
 
 Each issued forecast's current four-hour window receives an append-only settlement.
 Before maturity it is pending; after maturity it is positive, negative, or censored

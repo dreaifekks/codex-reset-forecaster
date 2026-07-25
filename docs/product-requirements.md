@@ -2,9 +2,12 @@
 
 ## Product objective
 
-The MVP is a public reset-forecast website. It estimates when an official,
-platform-wide Codex quota reset or refill will occur during the next seven days.
-It does not predict a user's ordinary five-hour or weekly quota-window rollover.
+The MVP is a public reset-forecast website with a versioned operational outcome.
+The current live profile estimates when the configured Tibo identity will publish
+a qualifying statement that a platform-wide Codex quota reset/refill completed
+during the next seven days. It does not claim to cover every physical backend
+reset, and it does not predict a user's ordinary five-hour or weekly quota-window
+rollover.
 
 The first release has two product surfaces:
 
@@ -20,12 +23,11 @@ These are adapter configuration, not platform-wide core abstractions.
 
 ### Confirmation source
 
-A configured Tibo identity is one operational outcome-discovery source. An exact
-post may verify an outcome when it explicitly states that a platform-wide Codex
-reset/refill completed. A `started` statement remains a candidate until direct
-platform observation or genuinely independent evidence settles it. Summaries,
-rumors, expectations, hints, and scheduled claims remain signals and cannot settle
-a forecast.
+A configured Tibo identity defines the operational outcome in
+`config/tibo-authority-live.json`. An exact primary statement becomes a positive
+outcome only when it explicitly states that a platform-wide Codex reset/refill
+completed. A `started` statement, summary, rumor, expectation, hint, schedule, or
+model judgment remains a signal or candidate and cannot settle a forecast.
 
 The confirmation post's publication time and the adjudicated event time remain
 separate. When the post provides no exact occurrence timestamp, a versioned
@@ -48,14 +50,23 @@ For development-time outcome discovery, the historical-monitor adapter may impor
 an external daily archive only after it verifies the configured author, exact
 source ID, and publication timestamp against the direct X representation. This is
 an adapter and not a privileged core source. Its attested publication time supports
-record reconstruction; its actual import time remains `first_seen_at`. The archive
-date grid is not negative-label coverage, and links selected from known outcome
-posts are never forecast features.
+record reconstruction; its actual import time remains `first_seen_at`. Under the
+default archive profile, the date grid is `outcome_only`, and links selected from
+known outcome posts are never forecast features.
+
+The live Tibo-authority profile applies a separate daily-ledger completeness
+contract to grid dates only. A UTC day remains pending until the same
+count-reconciled ledger has been fetched at least twice over six actual hours and
+the final fetch occurs at least 36 hours after day-end. Only then may its absence
+of a qualifying completion statement become `negative_label_eligible`. Dates
+before the grid begins support outcome discovery only. The later fetch time is
+recorded as availability; first deployment never rewrites those days as if they
+had already been known.
 
 ## Forecast lifecycle
 
 ```text
-configured X sources
+configured provider adapters
   -> append-only raw observations
   -> normalized claims
   -> evidence dependency and event linking
@@ -64,14 +75,14 @@ configured X sources
   -> one 168-hour forecast
   -> website views and later settlement
 
-qualifying Tibo confirmation
+qualifying Tibo completion statement
   -> reset outcome
   -> historical settlement, evaluation, and controlled retraining
 ```
 
-A qualifying confirmation for an event may settle that event, but it must not be
-included as an input to a forecast issued before the confirmation was available.
-Historical training and evaluation use only records with
+A qualifying completion statement may settle the operational outcome, but it must
+not be included as an input to a forecast issued before the statement was
+available. Historical training and evaluation use only records with
 `available_at <= knowledge_cutoff`.
 
 ## Model scope
@@ -157,7 +168,11 @@ its probabilities or retraining its model.
 - A healthy run produces a saved forecast of 168 consecutive hourly slots.
 - The 4-hour, 24-hour, and seven-day displays are projections of the same forecast.
 - Every displayed forecast identifies its knowledge cutoff and source freshness.
-- Only a qualifying confirmation can create a confirmed reset outcome.
+- Only a qualifying completion statement can create a positive operational
+  outcome under the live profile.
+- A first Tibo-authority deployment leaves daily ledger coverage pending; a
+  negative-eligible day needs day-end plus 36 hours and at least two actual fetches
+  spanning six hours.
 - All live historical scores are computed from immutable as-issued predictions;
   walk-forward validation is labeled separately.
 - Provider failure or incomplete observation coverage is represented as degraded
@@ -165,7 +180,8 @@ its probabilities or retraining its model.
 - Model acceptance on real data requires optimizer convergence, at least 80%
   event-window recall under the configured shared alert budget, positive Brier
   skill over the historical baseline, and expected calibration error no greater
-  than 0.10. The same selected alert set is used to count false alerts. Rows
-  learned after an event never become inputs to an earlier forecast.
+  than 0.10, evaluated over at least 1,008 hourly windows and 20 eligible events.
+  The same selected alert set is used to count false alerts. Rows learned after an
+  event never become inputs to an earlier forecast.
   Synthetic fixtures can exercise this gate but can never satisfy real-world
   acceptance.

@@ -43,10 +43,10 @@
       <section class="panel watch-card" aria-label="当前重置预测">
         <div class="watch-main">
           <span class="badge">当前预测</span>
-          <p>未来 168 小时内的重置概率</p>
+          <p>未来 7 天重置概率</p>
           <div class="watch-value-row">
             <strong id="probability-7d">—</strong>
-            <span>7 天累计</span>
+            <span>未来 168 小时内发生重置的可能性</span>
           </div>
           <small class="interval-note" id="interval-7d">80% 不确定区间：等待数据</small>
           <div class="publication-warning" id="publication-warning" role="alert" hidden></div>
@@ -118,7 +118,7 @@
           <strong>—</strong>
           <div><span>该小时首次重置概率</span><time>请选择一个小时</time></div>
         </div>
-        <p class="hint">单格为该小时首次重置概率，7 天值为 168 小时累计概率；每天先读左列，再读右列。</p>
+        <p class="hint">每格是该小时首次重置概率；7 天是未来 168 小时累计概率。</p>
       </section>
 
       <section class="lower-grid signal-grid" aria-label="近期预测信号">
@@ -155,8 +155,6 @@
         </div>
         <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>正在检查截止时间后的信号…</li></ol>
       </section>
-
-      <p class="disclaimer" id="no-reset">独立实验项目，与 OpenAI 无关联。未来 7 天未重置概率 —</p>
     </main>
   </body>
 </html>

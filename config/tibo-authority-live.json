@@ -1,0 +1,43 @@
+{
+  "outcome_definition": {
+    "version": "authority-announced-platform-reset/1",
+    "event_semantics": "qualifying_authority_completion_statement",
+    "authority_identity_ids": ["person_tibo_sottiaux"],
+    "negative_label_policy": "authoritative_daily_ledger_absence"
+  },
+  "providers": {
+    "historical_monitor": {
+      "enabled": true,
+      "discover_linked_posts": false,
+      "freshness_max_age_hours": 1,
+      "refresh_interval_hours": 0.25,
+      "coverage_adequacy": "negative_label_eligible",
+      "coverage_completeness_attestation": {
+        "version": "historical-daily-authority-ledger/1",
+        "provider": "historical_monitor",
+        "independent": true,
+        "attestor": "https://codex-resets.com/",
+        "method": "contiguous_daily_grid+x_oembed+snowflake",
+        "exhaustive_for": "qualifying_completed_platform_reset_outcomes",
+        "target_scope": {
+          "vendor": "openai",
+          "product": "codex",
+          "population": "platform",
+          "plans": ["paid"],
+          "regions": ["global"],
+          "quota_bucket": null
+        },
+        "confirmation_identity_ids": ["person_tibo_sottiaux"],
+        "day_close_lag_hours": 36,
+        "minimum_stability_hours": 6
+      }
+    }
+  },
+  "model": {
+    "outcome_coverage_providers": ["historical_monitor"]
+  },
+  "runtime": {
+    "scheduler_enabled": true,
+    "run_on_start": true
+  }
+}

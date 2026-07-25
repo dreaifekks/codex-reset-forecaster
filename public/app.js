@@ -404,8 +404,6 @@ function renderForecast(forecast) {
     intervalText(cumulativeInterval(forecast, "twenty_four_hours"));
   document.querySelector("#interval-7d").textContent =
     intervalText(cumulativeInterval(forecast, "horizon"));
-  document.querySelector("#no-reset").textContent =
-    `独立实验项目，与 OpenAI 无关联。未来 7 天未重置概率 ${percent(forecast.data.no_reset_probability, 1)}。`;
   document.querySelector("#data-quality").textContent =
     percent(forecast.data.data_quality?.score, 0);
   const coverageFreshness = forecast.data.data_quality?.provider_coverage;
@@ -449,8 +447,6 @@ function renderForecastError(message, forecast = null) {
     forecast?.data?.model?.training_cutoff
       ? formatTime(forecast.data.model.training_cutoff)
       : "—";
-  document.querySelector("#no-reset").textContent =
-    "独立实验项目，与 OpenAI 无关联。当前预测不可用。";
   document.querySelector("#heatmap").innerHTML =
     `<div class="empty-state error-state"><strong>预测尚未就绪</strong><p>${escapeHtml(message)}</p></div>`;
   document.querySelector("#heat-detail").innerHTML =

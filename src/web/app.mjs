@@ -69,6 +69,7 @@ async function currentEvaluation(store, config) {
     verifiedCoverageAssertionRevisions(
       store,
       config.model.outcome_coverage_providers,
+      { config },
     ),
     championRead,
     store.all("reset_outcome", { latestOnly: false }),

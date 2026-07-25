@@ -394,7 +394,11 @@ export async function evaluateIssuedForecasts(store, config, {
     store.all("reset_outcome", { latestOnly: false }),
     store.all("normalized_signal", { latestOnly: false }),
     store.all("raw_observation", { latestOnly: false }),
-    coverageAssertionRevisions(store, config.model.outcome_coverage_providers),
+    coverageAssertionRevisions(
+      store,
+      config.model.outcome_coverage_providers,
+      { config },
+    ),
     store.all("prediction_settlement", { latestOnly: false }),
   ]);
   const currentPredictions = latestRevisionsAsOf(

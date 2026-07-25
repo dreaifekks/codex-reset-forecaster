@@ -431,7 +431,11 @@ export async function buildForecastFeatureSnapshots(store, config, {
     store.all("reset_outcome", { latestOnly: false }),
     store.all("raw_observation", { latestOnly: false }),
     store.all("feature_snapshot"),
-    coverageAssertionRevisions(store, config.model.outcome_coverage_providers),
+    coverageAssertionRevisions(
+      store,
+      config.model.outcome_coverage_providers,
+      { config },
+    ),
   ]);
   const confirmationIds = confirmationIdentityIds(config);
   const cutoff = new Date(knowledgeCutoff);
