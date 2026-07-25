@@ -84,25 +84,59 @@ function hypothesizedRange(cluster) {
   };
 }
 
-function clusterIdentity(cluster, existing, claimedExistingIds) {
-  const independenceGroups = new Set(
-    cluster.signals.map((signal) => signal.data.provenance.independence_group_id),
-  );
-  const prior = existing
-    .filter((candidate) => candidate.data.evidence.some((entry) =>
-      independenceGroups.has(entry.independence_group_id)
-    ) && !claimedExistingIds.has(candidate.data.event_cluster_id))
-    .sort((left, right) => left.created_at.localeCompare(right.created_at))[0];
-  if (prior) {
-    claimedExistingIds.add(prior.data.event_cluster_id);
-    return prior.data.event_cluster_id;
-  }
+function defaultClusterIdentity(cluster) {
   const anchor = cluster.signals[0];
   return makeRecordId("event", [
     cluster.baseKey,
     anchor.data.provenance.root_evidence_id,
     new Date(cluster.start).toISOString(),
   ].join(":"));
+}
+
+function splitClusterIdentity(cluster) {
+  const roots = [...new Set(cluster.signals.map((signal) =>
+    signal.data.provenance.root_evidence_id
+  ))].sort();
+  return makeRecordId("event", [
+    "split",
+    cluster.baseKey,
+    new Date(cluster.start).toISOString(),
+    new Date(cluster.end).toISOString(),
+    roots.join(","),
+  ].join(":"));
+}
+
+function clusterIdentity(
+  cluster,
+  existing,
+  claimedExistingIds,
+  reservedIdentityOwners,
+) {
+  const independenceGroups = new Set(
+    cluster.signals.map((signal) => signal.data.provenance.independence_group_id),
+  );
+  const prior = existing
+    .filter((candidate) => candidate.data.evidence.some((entry) =>
+      independenceGroups.has(entry.independence_group_id)
+    ) &&
+      !claimedExistingIds.has(candidate.data.event_cluster_id) &&
+      (
+        !reservedIdentityOwners.has(candidate.data.event_cluster_id) ||
+        reservedIdentityOwners.get(candidate.data.event_cluster_id) === cluster
+      ))
+    .sort((left, right) => left.created_at.localeCompare(right.created_at))[0];
+  if (prior) {
+    claimedExistingIds.add(prior.data.event_cluster_id);
+    return prior.data.event_cluster_id;
+  }
+  const defaultIdentity = defaultClusterIdentity(cluster);
+  if (!claimedExistingIds.has(defaultIdentity)) {
+    claimedExistingIds.add(defaultIdentity);
+    return defaultIdentity;
+  }
+  const splitIdentity = splitClusterIdentity(cluster);
+  claimedExistingIds.add(splitIdentity);
+  return splitIdentity;
 }
 
 function candidateState(signals) {
@@ -121,9 +155,28 @@ export async function linkEventCandidates(store, config, { asOf = new Date() } =
   const existing = await store.all("event_candidate");
   const records = [];
   const claimedExistingIds = new Set();
+  const clusters = clusterSignals(signals);
+  const reservedIdentityOwners = new Map();
+  const existingIdentityIds = new Set(
+    existing.map((candidate) => candidate.data.event_cluster_id),
+  );
+  for (const cluster of clusters) {
+    const defaultIdentity = defaultClusterIdentity(cluster);
+    if (
+      existingIdentityIds.has(defaultIdentity) &&
+      !reservedIdentityOwners.has(defaultIdentity)
+    ) {
+      reservedIdentityOwners.set(defaultIdentity, cluster);
+    }
+  }
 
-  for (const cluster of clusterSignals(signals)) {
-    const key = clusterIdentity(cluster, existing, claimedExistingIds);
+  for (const cluster of clusters) {
+    const key = clusterIdentity(
+      cluster,
+      existing,
+      claimedExistingIds,
+      reservedIdentityOwners,
+    );
     const naturalKey = `${config.deduplication_version}:${key}`;
     const nextRecordId = makeRecordId("evt", naturalKey);
     const prior = existing.find((candidate) => candidate.record_id === nextRecordId);

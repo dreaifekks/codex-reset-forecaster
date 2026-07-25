@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { hashLabel } from "../src/core/hash.mjs";
+import { hashLabel, makeRecordId } from "../src/core/hash.mjs";
 import { loadConfig } from "../src/core/config.mjs";
 import { createRecord } from "../src/core/records.mjs";
 import {
@@ -511,6 +511,108 @@ test("a deduplication contract change starts a new candidate record without dupl
   assert.equal(outcomes.length, 1);
   assert.equal(outcomes[0].record_id, originalOutcome.record_id);
   assert.equal(outcomes[0].revision, 2);
+});
+
+test("split clusters cannot claim the same existing candidate revision", async () => {
+  const deduplicationVersion = "reset-dedup/test";
+  const makeSignal = ({ id, product, at, group, root }) => ({
+    record_id: `sig_${id}`,
+    revision: 1,
+    created_at: at,
+    data: {
+      available_at: at,
+      observation_refs: [{ record_id: `obs_${id}`, revision: 1 }],
+      claim: {
+        event_type: "quota_reset",
+        phase: "completed",
+        stance: "supports",
+        scope: {
+          vendor: "openai",
+          product,
+          population: "platform",
+          plans: ["paid"],
+          regions: ["global"],
+          quota_bucket: null,
+        },
+        asserted_time_range: null,
+      },
+      provenance: {
+        independence_group_id: group,
+        root_evidence_id: root,
+        derivation: "primary_statement",
+        feature_eligible: true,
+      },
+      extraction: {
+        model_version: "test",
+        prompt_version: "test",
+      },
+    },
+  });
+  const first = makeSignal({
+    id: "new-scope",
+    product: "multi_product",
+    at: "2026-07-20T09:00:00.000Z",
+    group: "ind_shared_new",
+    root: "root_new",
+  });
+  const originalAnchor = makeSignal({
+    id: "original-anchor",
+    product: "codex",
+    at: "2026-07-20T10:00:00.000Z",
+    group: "ind_original",
+    root: "root_original",
+  });
+  const originalIdentity = makeRecordId("event", [
+    "openai:codex:platform:paid:all:quota_reset",
+    "root_original",
+    originalAnchor.data.available_at,
+  ].join(":"));
+  const existing = {
+    record_id: makeRecordId(
+      "evt",
+      `${deduplicationVersion}:${originalIdentity}`,
+    ),
+    revision: 3,
+    created_at: "2026-07-20T08:00:00.000Z",
+    data: {
+      event_cluster_id: originalIdentity,
+      evidence: [
+        { independence_group_id: first.data.provenance.independence_group_id },
+        { independence_group_id: originalAnchor.data.provenance.independence_group_id },
+      ],
+      hypothesized_time_range: null,
+      state: "closed",
+    },
+  };
+  let planned = [];
+  const store = {
+    async all(type) {
+      if (type === "normalized_signal") return [first, originalAnchor];
+      if (type === "event_candidate") return [existing];
+      throw new Error(`Unexpected record type ${type}`);
+    },
+    async appendMany(records) {
+      planned = records;
+      return records.map((record) => ({ inserted: true, record }));
+    },
+  };
+
+  await linkEventCandidates(store, { deduplication_version: deduplicationVersion }, {
+    asOf: new Date("2026-07-20T11:00:00.000Z"),
+  });
+  assert.equal(planned.length, 2);
+  assert.equal(
+    new Set(planned.map((candidate) =>
+      `${candidate.record_id}@${candidate.revision}`
+    )).size,
+    2,
+  );
+  const revision = planned.find((candidate) => candidate.record_id === existing.record_id);
+  assert.equal(revision.revision, 4);
+  assert.deepEqual(revision.supersedes, {
+    record_id: existing.record_id,
+    revision: 3,
+  });
 });
 
 test("outcome revisions preserve a legacy record ID after a natural-key migration", async (t) => {
