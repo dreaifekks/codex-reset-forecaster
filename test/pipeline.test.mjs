@@ -9,7 +9,11 @@ import { addHours, floorHour } from "../src/core/time.mjs";
 import { generateDemoHistory } from "../src/demo/history.mjs";
 import { issueForecast } from "../src/model/forecast.mjs";
 import { FixtureProvider } from "../src/providers/fixture-provider.mjs";
-import { processRecords, trainEvaluatePromote } from "../src/pipeline/run.mjs";
+import {
+  processRecords,
+  runPipeline,
+  trainEvaluatePromote,
+} from "../src/pipeline/run.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
 import { createRequestHandler, evidenceTierForSignal } from "../src/web/app.mjs";
 import { addCoverageInterval } from "../src/pipeline/coverage.mjs";
@@ -317,4 +321,68 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.doesNotMatch(page, /未来 168 小时内的重置概率|未重置概率|与 OpenAI 无关联/);
   assert.doesNotMatch(appScript, /未重置概率|与 OpenAI 无关联/);
   assert.match(pageResponse.headers.get("content-security-policy"), /default-src 'self'/);
+});
+
+test("live coverage can fit a challenger while causal walk-forward remains pending", async (t) => {
+  const directory = await fs.mkdtemp(path.join(
+    os.tmpdir(),
+    "reset-forecaster-evaluation-wait-",
+  ));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const config = await loadConfig({ overrides: {
+    runtime: { data_dir: directory },
+    model: {
+      max_iterations: 450,
+      minimum_outcomes: 3,
+      minimum_live_evaluation_windows: 1008,
+      minimum_live_evaluation_events: 20,
+      outcome_coverage_providers: ["x"],
+    },
+  } });
+  const store = await new JsonlStore(directory).init();
+  const now = new Date("2026-07-25T20:00:00.000Z");
+  const fixture = generateDemoHistory({ now, days: 42 });
+  await new FixtureProvider({
+    items: fixture,
+    name: "x",
+    now: () => now,
+  }).collect(store);
+
+  const result = await runPipeline(store, config, {
+    now,
+    collect: false,
+    retrain: true,
+  });
+
+  assert.equal(result.status, "waiting_for_evaluation");
+  assert.equal(result.training.succeeded, true);
+  assert.equal(result.training.status, "waiting_for_evaluation");
+  assert.equal(
+    result.evaluation_waiting.reason_code,
+    "walk_forward_fold_pending",
+  );
+  assert.equal(result.evaluation_waiting.evaluated_windows, 0);
+  assert.equal(result.evaluation_waiting.minimum_evaluation_windows, 1008);
+  assert.equal(result.evaluation_waiting.minimum_evaluation_events, 20);
+  assert.equal(result.forecast, null);
+  assert.ok(await store.readModel("challenger"));
+  assert.equal(
+    await store.readModel("champion", { invalidAsNull: true }),
+    null,
+  );
+  assert.deepEqual(await store.all("prediction"), []);
+
+  const firstChallenger = await store.readModel("challenger");
+  const repeated = await runPipeline(store, config, {
+    now: addHours(now, 1),
+    collect: false,
+    retrain: false,
+  });
+  const reusedChallenger = await store.readModel("challenger");
+  assert.equal(repeated.status, "waiting_for_evaluation");
+  assert.equal(repeated.training.succeeded, false);
+  assert.equal(repeated.training.skipped, true);
+  assert.equal(repeated.training.reused_challenger, true);
+  assert.equal(reusedChallenger.artifact_hash, firstChallenger.artifact_hash);
+  assert.equal(reusedChallenger.trained_at, firstChallenger.trained_at);
 });

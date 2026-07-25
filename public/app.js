@@ -65,6 +65,8 @@ const publicationBlockerLabels = {
   real_walk_forward_not_proven: "真实数据评估不足",
   live_evaluation_incompatible: "发布评估需要更新",
   live_evaluation_gate_failed: "发布评估未通过",
+  model_evaluation_pending: "模型评估数据积累中",
+  negative_label_coverage_pending: "历史覆盖正在复验",
   negative_label_coverage_missing: "历史覆盖数据不足",
   required_outcome_source_not_fresh: "核心来源更新不及时",
   exact_source_not_fresh: "核心来源更新不及时",
@@ -72,10 +74,12 @@ const publicationBlockerLabels = {
 };
 
 const publicationBlockerPriority = [
+  "negative_label_coverage_pending",
   "negative_label_coverage_missing",
   "required_outcome_source_not_fresh",
   "exact_source_not_fresh",
   "pipeline_error",
+  "model_evaluation_pending",
   "champion_missing",
   "champion_incompatible",
 ];
@@ -423,7 +427,7 @@ function renderForecast(forecast) {
   renderHeatmap(slots);
 }
 
-function renderForecastError(message, forecast = null) {
+function renderForecastError(message) {
   for (const selector of [
     "#probability-4h",
     "#probability-24h",
@@ -437,20 +441,14 @@ function renderForecastError(message, forecast = null) {
   document.querySelector("#interval-7d").textContent = "当前预测不可用";
   document.querySelector("#coverage").textContent = "数据覆盖暂不可用";
   document.querySelector("#forecast-window").textContent = "当前预测区间不可用";
-  document.querySelector("#forecast-issued-at").textContent =
-    forecast?.data?.issued_at ? formatTime(forecast.data.issued_at) : "—";
-  document.querySelector("#knowledge-cutoff").textContent =
-    forecast?.data?.knowledge_cutoff ? formatTime(forecast.data.knowledge_cutoff) : "—";
-  document.querySelector("#model-version").textContent =
-    forecast?.data?.model?.version ?? "—";
-  document.querySelector("#training-cutoff").textContent =
-    forecast?.data?.model?.training_cutoff
-      ? formatTime(forecast.data.model.training_cutoff)
-      : "—";
+  document.querySelector("#forecast-issued-at").textContent = "—";
+  document.querySelector("#knowledge-cutoff").textContent = "—";
+  document.querySelector("#model-version").textContent = "—";
+  document.querySelector("#training-cutoff").textContent = "—";
   document.querySelector("#heatmap").innerHTML =
     `<div class="empty-state error-state"><strong>预测尚未就绪</strong><p>${escapeHtml(message)}</p></div>`;
   document.querySelector("#heat-detail").innerHTML =
-    "<strong>—</strong><div><span>当前预测不可用</span><time>等待下一次兼容且新鲜的预测</time></div>";
+    "<strong>—</strong><div><span>当前预测不可用</span><time>等待新预测</time></div>";
 }
 
 function renderPublicationWarning(forecastResult, readinessResult) {
@@ -481,7 +479,17 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   const exactLastSuccess = exact?.last_success_at;
   const synthetic = Boolean(readiness.synthetic_only);
   const servingStatus = forecast?.serving?.status ?? readiness.current_forecast?.status;
-  if (!forecast?.data) {
+  const coverageWaiting = readiness.coverage_waiting ?? health.coverage_waiting;
+  const evaluationWaiting =
+    readiness.evaluation_waiting ?? health.evaluation_waiting;
+  if (coverageWaiting || evaluationWaiting) {
+    setStatus(
+      "warning",
+      coverageWaiting
+        ? `历史覆盖复验中 · 最早 ${formatCompactTime(coverageWaiting.earliest_recheck_at)}`
+        : "模型评估数据积累中",
+    );
+  } else if (!forecast?.data) {
     setStatus("error", "预测暂不可用");
   } else if (["stale", "invalid"].includes(servingStatus) || health.status === "stale") {
     setStatus("error", `预测已过期 · 发布于 ${formatCompactTime(forecast.data.issued_at)}`);
@@ -510,8 +518,7 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   const exactText = exact
     ? `核心来源：${providerStatusLabels[exact.status] ?? exact.status}${exactLastSuccess ? `，更新于 ${formatCompactTime(exactLastSuccess)}` : ""}`
     : "核心来源：不可用";
-  document.querySelector("#quality-explanation").textContent =
-    `数据质量综合历史覆盖、事件样本和来源新鲜度。${exactText}。`;
+  document.querySelector("#quality-explanation").textContent = `${exactText}。`;
 }
 
 function renderEvidenceResponse(result) {
@@ -567,10 +574,7 @@ async function load() {
     ) {
       renderForecast(forecastResult.data);
     } else {
-      renderForecastError(
-        forecastErrorText(forecastResult),
-        forecastResult.data,
-      );
+      renderForecastError(forecastErrorText(forecastResult));
     }
     renderPublicationWarning(forecastResult, readinessResult);
     renderEvidenceResponse(evidenceResult);

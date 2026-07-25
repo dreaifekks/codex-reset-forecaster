@@ -1,8 +1,9 @@
 {
   "outcome_definition": {
-    "version": "authority-announced-platform-reset/1",
+    "version": "authority-announced-platform-reset/2",
     "event_semantics": "qualifying_authority_completion_statement",
     "authority_identity_ids": ["person_tibo_sottiaux"],
+    "scope_policy": "explicit-platform-or-authority-general-codex/1",
     "negative_label_policy": "authoritative_daily_ledger_absence"
   },
   "providers": {

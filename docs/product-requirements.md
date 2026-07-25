@@ -4,10 +4,10 @@
 
 The MVP is a public reset-forecast website with a versioned operational outcome.
 The current live profile estimates when the configured Tibo identity will publish
-a qualifying statement that a platform-wide Codex quota reset/refill completed
-during the next seven days. It does not claim to cover every physical backend
-reset, and it does not predict a user's ordinary five-hour or weekly quota-window
-rollover.
+a qualifying statement that a platform-wide or otherwise unqualified general
+Codex quota reset/refill completed during the next seven days. It does not claim
+to cover every physical backend reset, and it does not predict a user's ordinary
+five-hour or weekly quota-window rollover.
 
 The first release has two product surfaces:
 
@@ -24,10 +24,12 @@ These are adapter configuration, not platform-wide core abstractions.
 ### Confirmation source
 
 A configured Tibo identity defines the operational outcome in
-`config/tibo-authority-live.json`. An exact primary statement becomes a positive
-outcome only when it explicitly states that a platform-wide Codex reset/refill
-completed. A `started` statement, summary, rumor, expectation, hint, schedule, or
-model judgment remains a signal or candidate and cannot settle a forecast.
+`config/tibo-authority-live.json`. An exact primary completion statement becomes
+a positive outcome when it explicitly covers the platform or describes a general
+Codex reset without a narrower plan, account, or region qualifier. Banked
+vouchers, narrower segments, `started` statements, summaries, rumors,
+expectations, hints, schedules, and model judgments remain signals or candidates
+and cannot settle a forecast.
 
 The confirmation post's publication time and the adjudicated event time remain
 separate. When the post provides no exact occurrence timestamp, a versioned

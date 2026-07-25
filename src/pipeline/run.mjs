@@ -5,7 +5,12 @@ import { normalizeNewObservations } from "./extract.mjs";
 import { linkEventCandidates } from "./link.mjs";
 import { adjudicateOutcomes } from "./outcomes.mjs";
 import { trainChallenger } from "../model/training.mjs";
-import { evaluateWalkForward, promoteChallenger } from "../model/evaluation.mjs";
+import {
+  EVALUATION_WAITING_SCHEMA_VERSION,
+  evaluateWalkForward,
+  evaluationWaitingFromError,
+  promoteChallenger,
+} from "../model/evaluation.mjs";
 import { issueForecast } from "../model/forecast.mjs";
 import { ceilHour, floorHour } from "../core/time.mjs";
 import { evaluateIssuedForecasts } from "../model/issued-evaluation.mjs";
@@ -13,6 +18,44 @@ import { settleIssuedPredictions } from "../model/settlement.mjs";
 import { FEATURE_NAMES } from "../model/features.mjs";
 import { assertModelCompatibility } from "../model/logistic-hazard.mjs";
 import { modelContractHash } from "../model/contract.mjs";
+import { adequateCoverageIntervals } from "./coverage.mjs";
+import {
+  aggregateCoverageWaiting,
+  normalizeProviderCoverageWaiting,
+} from "../core/coverage-waiting.mjs";
+
+function providerStateKey(name) {
+  return `${name.replaceAll("_", "-")}-provider`;
+}
+
+async function configuredCoverageWaiting(store, config, collection, now) {
+  const requiredProviders = new Set(
+    config.model.outcome_coverage_providers ?? [],
+  );
+  const collectionWaiting = Object.values(collection ?? {})
+    .filter((entry) => entry?.required === true)
+    .map((entry) => entry.coverage_waiting);
+  const providerWaiting = await Promise.all(
+    Object.entries(config.providers ?? {})
+      .filter(([, provider]) =>
+        provider &&
+        typeof provider === "object" &&
+        !Array.isArray(provider) &&
+        provider.enabled
+      )
+      .map(async ([name]) => {
+        const state = await store.readState(providerStateKey(name), {});
+        const waiting = normalizeProviderCoverageWaiting(state.coverage_waiting);
+        return waiting && requiredProviders.has(waiting.provider_id)
+          ? waiting
+          : null;
+      }),
+  );
+  return aggregateCoverageWaiting(
+    [...collectionWaiting, ...providerWaiting],
+    { now },
+  );
+}
 
 export async function processRecords(store, config, { now = new Date() } = {}) {
   const normalized = await normalizeNewObservations(store, config, { now });
@@ -21,12 +64,86 @@ export async function processRecords(store, config, { now = new Date() } = {}) {
   return { normalized, linked, outcomes };
 }
 
-export async function trainEvaluatePromote(store, config, { now = new Date() } = {}) {
+function assertCompatibleModel(model, config) {
+  assertModelCompatibility(model, {
+    featureNames: FEATURE_NAMES,
+    featureSchemaVersion: config.feature_schema_version,
+    modelContractHash: modelContractHash(config),
+    requireConverged: true,
+  });
+  return model;
+}
+
+async function compatibleStoredModel(store, name, config) {
+  const model = await store.readModel(name, { invalidAsNull: true });
+  if (!model) return null;
+  try {
+    return assertCompatibleModel(model, config);
+  } catch {
+    return null;
+  }
+}
+
+function sampleEvaluationWaiting(evaluation, promotion) {
+  if (promotion?.reason !== "evaluation_sample_threshold_not_met") return null;
+  return {
+    schema_version: EVALUATION_WAITING_SCHEMA_VERSION,
+    status: "waiting_for_evaluation",
+    reason_code: promotion.reason,
+    evaluation_cutoff: evaluation.evaluation_cutoff,
+    accepted_fold_count: evaluation.folds?.length ?? 0,
+    rejected_fold_count: evaluation.rejected_folds?.length ?? 0,
+    evaluated_windows: evaluation.metrics?.evaluated_windows ?? 0,
+    evaluated_events: evaluation.metrics?.evaluated_events ?? 0,
+    minimum_evaluation_windows:
+      promotion.sample_gate.minimum_live_evaluation_windows,
+    minimum_evaluation_events:
+      promotion.sample_gate.minimum_live_evaluation_events,
+  };
+}
+
+export async function trainEvaluatePromote(store, config, {
+  now = new Date(),
+  train = true,
+} = {}) {
   const cutoff = floorHour(now);
-  const training = await trainChallenger(store, config, { trainingCutoff: cutoff });
-  const evaluation = await evaluateWalkForward(store, config, { evaluationCutoff: cutoff });
+  const training = train
+    ? await trainChallenger(store, config, { trainingCutoff: cutoff })
+    : null;
+  if (!training) {
+    const challenger = await store.readModel("challenger", {
+      invalidAsNull: true,
+    });
+    if (!challenger) {
+      throw new Error("No compatible challenger exists for evaluation");
+    }
+    assertCompatibleModel(challenger, config);
+  }
+  let evaluation;
+  try {
+    evaluation = await evaluateWalkForward(store, config, {
+      evaluationCutoff: cutoff,
+    });
+  } catch (error) {
+    const evaluationWaiting = evaluationWaitingFromError(error);
+    if (!evaluationWaiting) throw error;
+    return {
+      status: "waiting_for_evaluation",
+      training,
+      evaluation: null,
+      promotion: null,
+      evaluation_waiting: evaluationWaiting,
+    };
+  }
   const promotion = await promoteChallenger(store, evaluation, config);
-  return { training, evaluation, promotion };
+  const evaluationWaiting = sampleEvaluationWaiting(evaluation, promotion);
+  return {
+    status: evaluationWaiting ? "waiting_for_evaluation" : "completed",
+    training,
+    evaluation,
+    promotion,
+    evaluation_waiting: evaluationWaiting,
+  };
 }
 
 export async function collectConfiguredProviders(store, config, { instances = {} } = {}) {
@@ -123,10 +240,13 @@ export async function runPipeline(store, config, {
     return new Date(value);
   };
   const result = {
+    status: "running",
     collection: null,
     processing: null,
     training: null,
     forecast: null,
+    coverage_waiting: null,
+    evaluation_waiting: null,
     issuedEvaluation: null,
     settlements: null,
     timing: {
@@ -149,42 +269,66 @@ export async function runPipeline(store, config, {
   result.timing.processing_completed_at = knowledgeCutoff.toISOString();
   result.timing.knowledge_cutoff = knowledgeCutoff.toISOString();
   result.timing.horizon_start = horizonStart.toISOString();
-  let champion = await store.readModel("champion", { invalidAsNull: true });
-  let championCompatible = false;
-  if (champion) {
-    try {
-      assertModelCompatibility(champion, {
-        featureNames: FEATURE_NAMES,
-        featureSchemaVersion: config.feature_schema_version,
-        modelContractHash: modelContractHash(config),
-        requireConverged: true,
-      });
-      championCompatible = true;
-    } catch {
-      championCompatible = false;
-    }
-  }
-  if (retrain || !champion || !championCompatible) {
-    try {
-      result.training = {
-        succeeded: true,
-        ...await trainEvaluatePromote(store, config, { now: currentTime() }),
-      };
-    } catch (error) {
-      if (!champion || !championCompatible) throw error;
+  const coverageWaiting = await configuredCoverageWaiting(
+    store,
+    config,
+    result.collection,
+    knowledgeCutoff,
+  );
+  if (coverageWaiting) {
+    const coverage = await adequateCoverageIntervals(
+      store,
+      config.model.outcome_coverage_providers,
+      { config },
+    );
+    if (coverage.length === 0) {
+      result.status = "waiting_for_coverage";
+      result.coverage_waiting = coverageWaiting;
       result.training = {
         succeeded: false,
+        skipped: true,
+        reason_code: coverageWaiting.reason_code,
+      };
+      result.timing.completed_at = currentTime().toISOString();
+      return result;
+    }
+  }
+  let champion = await compatibleStoredModel(store, "champion", config);
+  const challenger = await compatibleStoredModel(store, "challenger", config);
+  if (retrain || !champion) {
+    const train = retrain || !challenger;
+    let attempt;
+    try {
+      attempt = await trainEvaluatePromote(store, config, {
+        now: currentTime(),
+        train,
+      });
+    } catch (error) {
+      if (!champion) throw error;
+      result.training = {
+        status: "failed",
+        succeeded: false,
+        skipped: false,
+        reused_challenger: false,
         error: error.message,
       };
     }
-    champion = await store.readModel("champion", { invalidAsNull: true });
-    if (champion) {
-      assertModelCompatibility(champion, {
-        featureNames: FEATURE_NAMES,
-        featureSchemaVersion: config.feature_schema_version,
-        modelContractHash: modelContractHash(config),
-        requireConverged: true,
-      });
+    if (attempt) {
+      result.training = {
+        succeeded: Boolean(attempt.training),
+        skipped: !attempt.training,
+        reused_challenger: !attempt.training,
+        ...attempt,
+      };
+      result.evaluation_waiting = attempt.evaluation_waiting;
+    }
+    champion = await compatibleStoredModel(store, "champion", config);
+    if (attempt?.status === "waiting_for_evaluation") {
+      result.status = "waiting_for_evaluation";
+      if (!champion) {
+        result.timing.completed_at = currentTime().toISOString();
+        return result;
+      }
     }
   }
   if (!champion) {
@@ -205,6 +349,11 @@ export async function runPipeline(store, config, {
   result.issuedEvaluation = await evaluateIssuedForecasts(store, config, {
     evaluationCutoff,
   });
+  result.status = result.training?.status === "failed"
+    ? "completed_with_training_error"
+    : result.evaluation_waiting
+      ? "waiting_for_evaluation"
+      : "completed";
   result.timing.completed_at = currentTime().toISOString();
   return result;
 }

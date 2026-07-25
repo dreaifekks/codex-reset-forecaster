@@ -46,6 +46,74 @@ import {
   coverageAssertionRevisions,
 } from "./coverage-as-of.mjs";
 
+export const EVALUATION_WAITING_SCHEMA_VERSION = "evaluation-waiting/1";
+
+export class EvaluationPendingError extends Error {
+  constructor(reasonCode, details = {}) {
+    super("Walk-forward evaluation is waiting for causal test data");
+    this.name = "EvaluationPendingError";
+    this.code = "evaluation_pending";
+    this.status = "waiting_for_evaluation";
+    this.reasonCode = reasonCode;
+    this.details = structuredClone(details);
+  }
+
+  toJSON() {
+    return {
+      schema_version: EVALUATION_WAITING_SCHEMA_VERSION,
+      status: this.status,
+      reason_code: this.reasonCode,
+      ...structuredClone(this.details),
+    };
+  }
+}
+
+export function evaluationWaitingFromError(error) {
+  return error instanceof EvaluationPendingError
+    ? error.toJSON()
+    : null;
+}
+
+export function normalizeEvaluationWaiting(value) {
+  if (
+    !value ||
+    value.schema_version !== EVALUATION_WAITING_SCHEMA_VERSION ||
+    value.status !== "waiting_for_evaluation" ||
+    typeof value.reason_code !== "string" ||
+    typeof value.evaluation_cutoff !== "string" ||
+    !Number.isFinite(Date.parse(value.evaluation_cutoff))
+  ) {
+    return null;
+  }
+  const normalized = {
+    schema_version: EVALUATION_WAITING_SCHEMA_VERSION,
+    status: "waiting_for_evaluation",
+    reason_code: value.reason_code,
+    evaluation_cutoff: new Date(value.evaluation_cutoff).toISOString(),
+    accepted_fold_count: Number.isInteger(value.accepted_fold_count)
+      ? Math.max(0, value.accepted_fold_count)
+      : 0,
+    rejected_fold_count: Number.isInteger(value.rejected_fold_count)
+      ? Math.max(0, value.rejected_fold_count)
+      : 0,
+    evaluated_windows: Number.isInteger(value.evaluated_windows)
+      ? Math.max(0, value.evaluated_windows)
+      : 0,
+    evaluated_events: Number.isInteger(value.evaluated_events)
+      ? Math.max(0, value.evaluated_events)
+      : 0,
+    minimum_evaluation_windows:
+      Number.isInteger(value.minimum_evaluation_windows)
+        ? Math.max(0, value.minimum_evaluation_windows)
+        : null,
+    minimum_evaluation_events:
+      Number.isInteger(value.minimum_evaluation_events)
+        ? Math.max(0, value.minimum_evaluation_events)
+        : null,
+  };
+  return normalized;
+}
+
 function overlaps(start, end, range) {
   return Date.parse(start) < Date.parse(range.end) && Date.parse(end) > Date.parse(range.start);
 }
@@ -678,6 +746,7 @@ export async function evaluateWalkForward(store, config, {
   const allRows = [];
   const allAlertRows = [];
   const eventResults = [];
+  const evaluationFailures = [];
   const outcomeSnapshotByRef = new Map(
     outcomeCandidates
       .filter((outcome) =>
@@ -728,6 +797,16 @@ export async function evaluateWalkForward(store, config, {
     const foldCoverage = assessFoldCoverage(origin, testEnd, coverage);
     const allFoldAnchors = foldCoverage.anchors;
     const coveredFoldAnchors = foldCoverage.coveredAnchors;
+    const causalTrainingCoverage = adequateCoverageAssertionsAsOf(
+      assertions,
+      origin,
+      config.model.outcome_coverage_providers,
+      coverageAsOfMode,
+    );
+    if (causalTrainingCoverage.length === 0) {
+      origin = addHours(origin, 168);
+      continue;
+    }
     let training;
     try {
       training = await buildTrainingExamples(store, config, {
@@ -738,6 +817,7 @@ export async function evaluateWalkForward(store, config, {
         coverageAsOfMode,
       });
     } catch (error) {
+      evaluationFailures.push(error);
       if (burnInReached) {
         rejectFold(origin, testEnd, "training_example_build_failed", {
           error_name: error?.name ?? "Error",
@@ -785,6 +865,7 @@ export async function evaluateWalkForward(store, config, {
         coefficientPriors: config.model.coefficient_priors,
       });
     } catch (error) {
+      evaluationFailures.push(error);
       rejectFold(origin, testEnd, "challenger_training_failed", {
         error_name: error?.name ?? "Error",
         error_message_hash: hashLabel(String(error?.message ?? error)),
@@ -793,6 +874,9 @@ export async function evaluateWalkForward(store, config, {
       continue;
     }
     if (!model.converged) {
+      evaluationFailures.push(
+        new Error(`Walk-forward challenger did not converge: ${model.stop_reason}`),
+      );
       rejectFold(origin, testEnd, "challenger_nonconverged", {
         stop_reason: model.stop_reason,
         training_event_count: training.eventCount,
@@ -1005,14 +1089,33 @@ export async function evaluateWalkForward(store, config, {
   }
 
   if (folds.length === 0) {
-    if (foldDispositions.length > 0) {
-      await store.writeState("walk-forward-rejections", {
-        evaluation_cutoff: toUtcIso(cutoff),
-        fold_dispositions: foldDispositions,
-        ...summarizeFoldDispositions(foldDispositions),
-      });
+    const dispositionSummary = summarizeFoldDispositions(foldDispositions);
+    if (evaluationFailures.length > 0) {
+      throw new AggregateError(
+        evaluationFailures,
+        "Walk-forward evaluation failed before any fold could be accepted",
+      );
     }
-    throw new Error("Not enough covered history and confirmed outcomes for a walk-forward fold");
+    const waiting = new EvaluationPendingError(
+      "walk_forward_fold_pending",
+      {
+        evaluation_cutoff: toUtcIso(cutoff),
+        accepted_fold_count: 0,
+        rejected_fold_count: dispositionSummary.rejected_count,
+        evaluated_windows: 0,
+        evaluated_events: 0,
+        minimum_evaluation_windows:
+          config.model.minimum_live_evaluation_windows,
+        minimum_evaluation_events:
+          config.model.minimum_live_evaluation_events,
+      },
+    );
+    await store.writeState("walk-forward-rejections", {
+      ...waiting.toJSON(),
+      fold_dispositions: foldDispositions,
+      ...dispositionSummary,
+    });
+    throw waiting;
   }
   const brier = mean(allRows.map((row) => (row.probability - row.label) ** 2));
   const baselineBrier = mean(allRows.map((row) => (row.baseline_probability - row.label) ** 2));

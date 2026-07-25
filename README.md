@@ -4,6 +4,9 @@ Design baseline for a provider-neutral system with a versioned forecast outcome.
 The live profile in `config/tibo-authority-live.json` estimates when the configured
 Tibo identity will publish a qualifying, platform-wide Codex reset/refill
 completion statement. It does not claim to observe every physical backend reset.
+The versioned live scope policy accepts either an explicit platform-wide statement
+or a completed general Codex reset statement with no narrower plan, account, or
+region qualifier. Banked vouchers and narrower segments stay outside the target.
 
 The repository contains the contracts plus a zero-dependency Node.js prototype:
 direct X, X Search Gateway, historical-monitor, and fixture adapters; append-only

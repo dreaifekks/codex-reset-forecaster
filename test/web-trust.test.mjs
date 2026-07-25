@@ -338,12 +338,168 @@ test("stale forecasts are explicit and cannot make health or publication readine
     fetch(`${base}/api/health`),
   ]);
   assert.equal(forecastResponse.status, 503);
-  assert.equal((await forecastResponse.json()).serving.status, "stale");
+  const forecast = await forecastResponse.json();
+  assert.equal(forecast.serving.status, "stale");
+  assert.equal(forecast.data, undefined);
+  assert.deepEqual(forecast.saved_prediction_ref, {
+    record_id: stalePrediction.record_id,
+    revision: stalePrediction.revision,
+    issued_at: stalePrediction.data.issued_at,
+    knowledge_cutoff: stalePrediction.data.knowledge_cutoff,
+  });
   assert.equal(healthResponse.status, 503);
   const health = await healthResponse.json();
   assert.equal(health.status, "stale");
   assert.equal(health.effective_stale, true);
   assert.equal(health.publication_ready, false);
+});
+
+test("coverage stability observation is a machine-readable wait, not a pipeline error", async (t) => {
+  const providerWaiting = {
+    schema_version: "coverage-waiting/1",
+    status: "observing",
+    reason_code: "coverage_stability_observation_pending",
+    provider_id: "authority_ledger",
+    candidate_count: 180,
+    earliest_first_observed_at: "2026-07-25T20:00:00.000Z",
+    earliest_recheck_at: "2026-07-26T02:00:00.000Z",
+    observed_at: "2026-07-25T20:00:00.000Z",
+  };
+  const appConfig = config({
+    providers: {
+      authority_adapter: {
+        enabled: true,
+        provider_name: "authority_ledger",
+        freshness_max_age_hours: 2,
+        confirmation_identities: [],
+        context_identities: [],
+        context_queries: [],
+      },
+    },
+    model: {
+      ...config().model,
+      outcome_coverage_providers: ["authority_ledger"],
+    },
+  });
+  const store = new MemoryStore({
+    states: {
+      "authority-adapter-provider": {
+        provider: "authority_ledger",
+        last_success_at: "2026-07-25T20:00:00.000Z",
+        last_error: null,
+        coverage_waiting: providerWaiting,
+      },
+      runtime: {
+        last_success_at: "2026-07-25T20:00:00.000Z",
+        last_status: "waiting_for_coverage",
+        last_error: null,
+      },
+    },
+  });
+  const now = new Date("2026-07-25T21:00:00.000Z");
+  const readiness = await getReadiness(store, appConfig, { now });
+  assert.equal(readiness.pipeline_status, "waiting_for_coverage");
+  assert.equal(readiness.outcome_coverage.status, "waiting_for_stability");
+  assert.equal(readiness.coverage_waiting.candidate_count, 180);
+  assert.equal(
+    readiness.coverage_waiting.earliest_first_observed_at,
+    "2026-07-25T20:00:00.000Z",
+  );
+  assert.equal(
+    readiness.coverage_waiting.earliest_recheck_at,
+    "2026-07-26T02:00:00.000Z",
+  );
+  assert.equal(readiness.coverage_waiting.recheck_due, false);
+  assert.equal(readiness.publication_ready, false);
+  assert.ok(
+    readiness.publication_blockers.includes("negative_label_coverage_pending"),
+  );
+  assert.ok(
+    !readiness.publication_blockers.includes("negative_label_coverage_missing"),
+  );
+  assert.ok(!readiness.publication_blockers.includes("pipeline_error"));
+
+  const base = await serverFor(t, store, appConfig, now);
+  const [healthResponse, forecastResponse] = await Promise.all([
+    fetch(`${base}/api/health`),
+    fetch(`${base}/api/forecast/current`),
+  ]);
+  assert.equal(healthResponse.status, 503);
+  const health = await healthResponse.json();
+  assert.equal(health.status, "waiting");
+  assert.equal(health.pipeline_status, "waiting_for_coverage");
+  assert.equal(health.pipeline_last_error, null);
+  assert.equal(health.coverage_waiting.candidate_count, 180);
+  assert.equal(forecastResponse.status, 503);
+  const forecast = await forecastResponse.json();
+  assert.equal(forecast.pipeline_status, "waiting_for_coverage");
+  assert.equal(forecast.coverage_waiting.candidate_count, 180);
+});
+
+test("walk-forward accumulation is exposed as evaluation waiting, not pipeline error", async (t) => {
+  const evaluationWaiting = {
+    schema_version: "evaluation-waiting/1",
+    status: "waiting_for_evaluation",
+    reason_code: "walk_forward_fold_pending",
+    evaluation_cutoff: "2026-07-25T10:00:00.000Z",
+    accepted_fold_count: 0,
+    rejected_fold_count: 0,
+    evaluated_windows: 0,
+    evaluated_events: 0,
+    minimum_evaluation_windows: 1008,
+    minimum_evaluation_events: 20,
+  };
+  const assertion = coverageAssertion();
+  const appConfig = config();
+  const store = new MemoryStore({
+    records: {
+      raw_observation: [observation(
+        "obs_x",
+        1,
+        "Exact X source",
+        "2026-07-25T09:30:00.000Z",
+      )],
+    },
+    states: {
+      coverage: { providers: { x: [assertion] } },
+      "x-provider": {
+        last_success_at: "2026-07-25T09:55:00.000Z",
+        last_error: null,
+      },
+      runtime: {
+        last_success_at: "2026-07-25T10:00:00.000Z",
+        last_status: "waiting_for_evaluation",
+        last_evaluation_waiting: evaluationWaiting,
+        last_error: null,
+      },
+    },
+    blobs: {
+      "blob://test/coverage.json": coverageBlob(),
+    },
+  });
+  const now = new Date("2026-07-25T10:10:00.000Z");
+  const readiness = await getReadiness(store, appConfig, { now });
+  assert.equal(readiness.pipeline_status, "waiting_for_evaluation");
+  assert.deepEqual(readiness.evaluation_waiting, evaluationWaiting);
+  assert.equal(readiness.publication_ready, false);
+  assert.ok(readiness.publication_blockers.includes("model_evaluation_pending"));
+  assert.ok(!readiness.publication_blockers.includes("pipeline_error"));
+
+  const base = await serverFor(t, store, appConfig, now);
+  const [healthResponse, forecastResponse] = await Promise.all([
+    fetch(`${base}/api/health`),
+    fetch(`${base}/api/forecast/current`),
+  ]);
+  assert.equal(healthResponse.status, 503);
+  const health = await healthResponse.json();
+  assert.equal(health.status, "waiting");
+  assert.equal(health.pipeline_status, "waiting_for_evaluation");
+  assert.deepEqual(health.evaluation_waiting, evaluationWaiting);
+  assert.equal(health.pipeline_last_error, null);
+  assert.equal(forecastResponse.status, 503);
+  const forecast = await forecastResponse.json();
+  assert.equal(forecast.pipeline_status, "waiting_for_evaluation");
+  assert.deepEqual(forecast.evaluation_waiting, evaluationWaiting);
 });
 
 test("a corrupt champion is reported as incompatible instead of crashing health", async (t) => {

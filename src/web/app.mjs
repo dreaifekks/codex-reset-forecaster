@@ -245,14 +245,20 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         const forecastStatus = readiness.current_forecast.status;
         const contextStatus = readiness.provider_freshness.groups.context.status;
         const optionalContextDegraded = !["fresh", "disabled"].includes(contextStatus);
-        const status = !prediction
-          ? "not_ready"
+        const waitingForPipeline = [
+          "waiting_for_coverage",
+          "waiting_for_evaluation",
+        ].includes(readiness.pipeline_status);
+        const status = waitingForPipeline && !prediction
+          ? "waiting"
+          : !prediction
+            ? "not_ready"
           : ["stale", "invalid"].includes(forecastStatus)
             ? "stale"
             : readiness.publication_ready && !optionalContextDegraded
               ? "ok"
               : "degraded";
-        sendJson(response, ["not_ready", "stale"].includes(status) ? 503 : 200, {
+        sendJson(response, ["not_ready", "stale", "waiting"].includes(status) ? 503 : 200, {
           status,
           effective_stale: status !== "ok",
           now: requestNow.toISOString(),
@@ -266,6 +272,9 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           pipeline_last_success_at: runtimeState.last_success_at ?? null,
           pipeline_last_failure_at: runtimeState.last_failure_at ?? null,
           pipeline_last_error: runtimeState.last_error ?? null,
+          pipeline_status: readiness.pipeline_status,
+          coverage_waiting: readiness.coverage_waiting,
+          evaluation_waiting: readiness.evaluation_waiting,
           evaluation_gate_passed: evaluationResult.evaluation?.gate?.passed ?? false,
           evaluation_invalidated: evaluationResult.invalidated,
           publication_ready: readiness.publication_ready,
@@ -282,7 +291,15 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         if (!prediction) {
           sendJson(response, 503, {
             error: "forecast_not_ready",
-            message: "No promoted model forecast has been issued yet.",
+            message: readiness.coverage_waiting
+              ? "Outcome coverage candidates are still completing their stability observation."
+              : readiness.evaluation_waiting
+                ? "The model is waiting for enough causal walk-forward evaluation data."
+                : "No promoted model forecast has been issued yet.",
+            pipeline_status: readiness.pipeline_status,
+            coverage_waiting: readiness.coverage_waiting,
+            evaluation_waiting: readiness.evaluation_waiting,
+            publication_blockers: readiness.publication_blockers,
           });
           return;
         }
@@ -317,10 +334,8 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           publication_blockers: readiness.publication_blockers,
           synthetic_demo: syntheticDemo,
         };
-        sendJson(response, unavailable ? 503 : 200, {
-          ...prediction,
-          serving,
-          ...(unavailable ? {
+        if (unavailable) {
+          sendJson(response, 503, {
             error: incompatible
               ? "forecast_incompatible"
               : stale
@@ -331,7 +346,22 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
               : stale
                 ? "The latest saved forecast is no longer a current rolling 168-hour forecast."
                 : `Forecast publication is blocked: ${readiness.publication_blockers.join(", ")}.`,
-          } : {}),
+            saved_prediction_ref: {
+              record_id: prediction.record_id,
+              revision: prediction.revision,
+              issued_at: prediction.data.issued_at,
+              knowledge_cutoff: prediction.data.knowledge_cutoff,
+            },
+            serving,
+            pipeline_status: readiness.pipeline_status,
+            coverage_waiting: readiness.coverage_waiting,
+            evaluation_waiting: readiness.evaluation_waiting,
+          });
+          return;
+        }
+        sendJson(response, 200, {
+          ...prediction,
+          serving,
         });
         return;
       }

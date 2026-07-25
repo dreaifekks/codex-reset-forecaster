@@ -1,7 +1,8 @@
 import { hashLabel } from "./hash.mjs";
+import { AUTHORITY_SCOPE_POLICY } from "./extractor-contract.mjs";
 
 export const AUTHORITY_OUTCOME_DEFINITION_VERSION =
-  "authority-announced-platform-reset/1";
+  "authority-announced-platform-reset/2";
 export const HISTORICAL_DAILY_LEDGER_ATTESTATION_VERSION =
   "historical-daily-authority-ledger/1";
 export const HISTORICAL_DAILY_LEDGER_EVIDENCE_VERSION =
@@ -48,6 +49,9 @@ export function historicalDailyLedgerAttestationReasons({
       "qualifying_authority_completion_statement"
   ) {
     reasons.push("outcome_definition_semantics_invalid");
+  }
+  if (outcomeDefinition?.scope_policy !== AUTHORITY_SCOPE_POLICY) {
+    reasons.push("outcome_definition_scope_policy_invalid");
   }
   if (
     outcomeDefinition?.negative_label_policy !==

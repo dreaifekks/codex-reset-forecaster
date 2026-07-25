@@ -74,11 +74,13 @@ verification evidence, scope, and related candidates.
 
 Under `config/tibo-authority-live.json`, the operational target is a qualifying
 primary statement from the configured Tibo identity that a platform-wide Codex
-reset/refill completed. It is not a claim that every physical backend reset is
-covered. A `started`, scheduled, expected, rumor, summary, or model-generated
-statement may support a candidate but does not create a gold outcome. The provider
-post still remains a `raw_observation`; adjudication creates the separate
-`reset_outcome` record.
+reset/refill completed. A completed general Codex statement with no narrower plan,
+account, or region qualifier is treated as platform-wide by the versioned live
+scope policy. It is not a claim that every physical backend reset is covered.
+Banked vouchers, narrower segments, `started`, scheduled, expected, rumor, summary,
+or model-generated statements may support candidates but do not create gold
+outcomes. The provider post still remains a `raw_observation`; adjudication creates
+the separate `reset_outcome` record.
 
 `event_identity` is stable across repeated observations of the same platform event.
 It is derived from the canonical evidence root and asserted occurrence interval,

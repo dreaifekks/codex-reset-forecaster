@@ -5,9 +5,12 @@
 The outcome definition is versioned and included in the model contract hash.
 Under `config/tibo-authority-live.json`, the target is a qualifying primary
 statement from the configured Tibo identity that a platform-wide Codex quota
-reset/refill completed. This is a deliberately observable operational label; it
-does not represent every physical backend reset. A `started`, scheduled, expected,
-rumor, summary, or model-generated claim is not a positive outcome.
+reset/refill completed. The versioned live policy also treats a completed general
+Codex reset statement as platform-wide when it has no narrower plan, account, or
+region qualifier. This is a deliberately observable operational label; it does
+not represent every physical backend reset. Banked vouchers, narrower segments,
+`started`, scheduled, expected, rumor, summary, or model-generated claims are not
+positive outcomes.
 
 The internal resolution is one hour. A week therefore has 168 hourly anchor
 positions. At anchor `t`, the conditional hourly hazard is:

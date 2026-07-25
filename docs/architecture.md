@@ -155,14 +155,15 @@ The versioned adjudicator creates the separate canonical outcome only when the
 configured operational definition is satisfied, and it retains the observed time
 interval and label grade. Missing coverage yields censored windows.
 
-For `config/tibo-authority-live.json`, an exact primary statement from the
-configured Tibo identity must explicitly say that a platform-wide Codex
-reset/refill completed. That qualifying statement is the operational target; it
-does not imply that the system covers every physical backend reset. A `started`
-statement, schedule, expectation, hint, rumor, summary, or model judgment remains
-a candidate or signal and cannot create a positive outcome. Publication time,
-asserted event time, canonical occurrence interval, availability, and system
-knowledge time remain distinct.
+For `config/tibo-authority-live.json`, an exact primary completion statement from
+the configured Tibo identity qualifies when it explicitly covers the platform or
+describes a general Codex reset with no narrower plan, account, or region
+qualifier. That versioned statement policy is the operational target; it does not
+imply that the system covers every physical backend reset. Banked vouchers,
+narrower segments, `started` statements, schedules, expectations, hints, rumors,
+summaries, and model judgments remain candidates or signals and cannot create a
+positive outcome. Publication time, asserted event time, canonical occurrence
+interval, availability, and system knowledge time remain distinct.
 
 Each issued forecast's current four-hour window receives an append-only settlement.
 Before maturity it is pending; after maturity it is positive, negative, or censored

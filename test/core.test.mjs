@@ -458,6 +458,197 @@ test("hourly scheduler records success and does not overlap manual runs", async 
   assert.equal(state.last_timing.knowledge_cutoff, "2026-07-22T18:30:00.000Z");
 });
 
+test("hourly scheduler records coverage observation as waiting, not failure", async (t) => {
+  const store = await temporaryStore(t);
+  const coverageWaiting = {
+    schema_version: "coverage-waiting/1",
+    status: "waiting_for_coverage",
+    reason_code: "coverage_stability_observation_pending",
+    providers: ["authority_ledger"],
+    candidate_count: 12,
+    earliest_first_observed_at: "2026-07-22T12:00:00.000Z",
+    earliest_recheck_at: "2026-07-22T18:00:00.000Z",
+    recheck_due: true,
+    observed_at: "2026-07-22T18:30:00.000Z",
+  };
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-22T18:30:00Z"),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "waiting_for_coverage",
+      coverage_waiting: coverageWaiting,
+      training: {
+        succeeded: false,
+        skipped: true,
+        reason_code: coverageWaiting.reason_code,
+      },
+      forecast: null,
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-22T18:30:00.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "waiting_for_coverage");
+  assert.deepEqual(state.last_waiting, coverageWaiting);
+  assert.equal(state.last_error, null);
+  assert.equal(state.last_failure_at, undefined);
+  assert.equal(state.last_prediction_id, null);
+  assert.equal(state.last_success_at, "2026-07-22T18:30:00.000Z");
+});
+
+test("hourly scheduler records evaluation waiting and does not refit every hour", async (t) => {
+  const store = await temporaryStore(t);
+  const evaluationWaiting = {
+    schema_version: "evaluation-waiting/1",
+    status: "waiting_for_evaluation",
+    reason_code: "walk_forward_fold_pending",
+    evaluation_cutoff: "2026-07-25T20:00:00.000Z",
+    accepted_fold_count: 0,
+    rejected_fold_count: 0,
+    evaluated_windows: 0,
+    evaluated_events: 0,
+    minimum_evaluation_windows: 1008,
+    minimum_evaluation_events: 20,
+  };
+  const retrainValues = [];
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-25T20:30:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async (_store, _config, options) => {
+      retrainValues.push(options.retrain);
+      return {
+        status: "waiting_for_evaluation",
+        evaluation_waiting: evaluationWaiting,
+        training: {
+          succeeded: options.retrain,
+          skipped: !options.retrain,
+          evaluation: null,
+        },
+        forecast: null,
+        collection: {},
+        timing: { knowledge_cutoff: "2026-07-25T20:30:00.000Z" },
+      };
+    },
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  await scheduler.runNow();
+
+  assert.deepEqual(retrainValues, [true, false]);
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "waiting_for_evaluation");
+  assert.deepEqual(state.last_evaluation_waiting, evaluationWaiting);
+  assert.equal(state.last_training_at, "2026-07-25T20:30:00.000Z");
+  assert.equal(state.last_prediction_id, null);
+  assert.equal(state.last_error, null);
+  assert.equal(state.last_failure_at, undefined);
+});
+
+test("evaluation waiting can keep a compatible champion forecast in service", async (t) => {
+  const store = await temporaryStore(t);
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-25T20:30:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "waiting_for_evaluation",
+      evaluation_waiting: {
+        schema_version: "evaluation-waiting/1",
+        status: "waiting_for_evaluation",
+        reason_code: "evaluation_sample_threshold_not_met",
+        evaluation_cutoff: "2026-07-25T20:00:00.000Z",
+        accepted_fold_count: 1,
+        rejected_fold_count: 0,
+        evaluated_windows: 165,
+        evaluated_events: 2,
+        minimum_evaluation_windows: 1008,
+        minimum_evaluation_events: 20,
+      },
+      training: { succeeded: true },
+      forecast: { prediction: { record_id: "pred_champion" } },
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-25T20:30:00.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "waiting_for_evaluation");
+  assert.equal(state.last_prediction_id, "pred_champion");
+  assert.equal(state.last_error, null);
+});
+
+test("stable champion fallback keeps serving but exposes the training failure", async (t) => {
+  const store = await temporaryStore(t);
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-25T20:30:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "completed_with_training_error",
+      training: {
+        status: "failed",
+        succeeded: false,
+        error: "model artifact write failed",
+      },
+      forecast: { prediction: { record_id: "pred_stable_champion" } },
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-25T20:30:00.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "degraded");
+  assert.equal(state.last_prediction_id, "pred_stable_champion");
+  assert.equal(state.last_error, "model artifact write failed");
+  assert.equal(state.last_success_at, "2026-07-25T20:30:00.000Z");
+  assert.equal(state.last_failure_at, "2026-07-25T20:30:00.000Z");
+});
+
+test("hourly scheduler still records genuine pipeline exceptions as failures", async (t) => {
+  const store = await temporaryStore(t);
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-25T20:30:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async () => {
+      throw new Error("model artifact write failed");
+    },
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "error");
+  assert.equal(state.last_error, "model artifact write failed");
+  assert.equal(state.last_failure_at, "2026-07-25T20:30:00.000Z");
+  assert.equal(state.last_success_at, undefined);
+});
+
 test("as-of selection cannot leak a later correction into an old cutoff", () => {
   const records = [
     { record_id: "sig_1", revision: 1, created_at: "2026-01-01T01:00:00Z", data: { available_at: "2026-01-01T01:00:00Z" } },

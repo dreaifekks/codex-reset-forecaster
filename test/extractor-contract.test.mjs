@@ -12,8 +12,8 @@ test("configured extractor versions bind signals, configuration, and the model c
     overrides: {
       extractor: {
         model: "deterministic-rules",
-        model_version: "0.2.6",
-        prompt_version: "reset-extract/rules-0.2.6",
+        model_version: "0.2.7-test",
+        prompt_version: "reset-extract/rules-0.2.7-test",
       },
     },
   });
@@ -55,6 +55,35 @@ test("configured extractor versions bind signals, configuration, and the model c
   assert.throws(
     () => extractorContract({ extractor: { model: "deterministic-rules" } }),
     /prompt_version|model_version/,
+  );
+});
+
+test("authority generic-completion scope policy is part of the extractor contract", async () => {
+  const baseline = await loadConfig();
+  const authorityWithoutScopePolicy = await loadConfig({
+    overrides: {
+      outcome_definition: {
+        event_semantics: "qualifying_authority_completion_statement",
+        authority_identity_ids: ["person_tibo_sottiaux"],
+      },
+    },
+  });
+  const authoritySemantics = await loadConfig({
+    overrides: {
+      outcome_definition: {
+        event_semantics: "qualifying_authority_completion_statement",
+        authority_identity_ids: ["person_tibo_sottiaux"],
+        scope_policy: "explicit-platform-or-authority-general-codex/1",
+      },
+    },
+  });
+  assert.notEqual(
+    extractorContract(authoritySemantics).semantic_policy_hash,
+    extractorContract(baseline).semantic_policy_hash,
+  );
+  assert.notEqual(
+    extractorContract(authoritySemantics).semantic_policy_hash,
+    extractorContract(authorityWithoutScopePolicy).semantic_policy_hash,
   );
 });
 

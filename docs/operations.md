@@ -136,10 +136,11 @@ replay; live settlement continues to use `asserted_at`.
 
 `config/tibo-authority-live.json` is the checked-in deployment profile for the
 narrow operational target “a qualifying completion statement from the configured
-Tibo identity.” It does not claim to detect every physical backend reset. Only an
-exact primary statement that a platform-wide Codex reset/refill completed is a
-positive outcome. `started`, scheduled, expected, rumor, summary, and
-model-generated claims remain signals or candidates.
+Tibo identity.” It does not claim to detect every physical backend reset. An exact
+primary completion statement qualifies when it explicitly covers the platform or
+describes a general Codex reset without a narrower plan, account, or region
+qualifier. Banked vouchers, narrower segments, `started`, scheduled, expected,
+rumor, summary, and model-generated claims remain outside the positive label.
 
 The profile enables a versioned UTC daily authority ledger:
 
@@ -283,6 +284,25 @@ current probability. The sole exception is an explicitly labeled
 `synthetic_demo`; it remains available for local mechanics and carries its full
 publication blocker list beside the displayed percentage.
 
+When an outcome provider has complete-day candidates undergoing its required
+stability observation but no adequate interval yet, this is an expected wait
+rather than `pipeline_error`. Readiness and health expose
+`pipeline_status: "waiting_for_coverage"` plus `coverage_waiting` with the
+candidate count, earliest first observation, and earliest reliable recheck time.
+Publication remains blocked with `negative_label_coverage_pending`, and the
+forecast endpoint continues to return HTTP 503.
+
+Once coverage is adequate, fitting the challenger and proving it out of sample
+remain separate steps. If the challenger is saved but no causal walk-forward fold
+has matured yet, the run succeeds with
+`pipeline_status: "waiting_for_evaluation"`, `evaluation_waiting`, and
+`forecast: null` when no champion exists. Publication stays blocked with
+`model_evaluation_pending`; this expected state is not `pipeline_error`. The
+scheduler records the successful fit time and reuses the compatible challenger
+between daily retraining intervals. If a compatible champion already exists, it
+may continue issuing forecasts while the challenger waits, subject to the same
+publication gates.
+
 The canonical data directory is append-only under `data/records`. Immutable
 coverage assertions live under `data/audit`; `data/state/coverage.json` is only a
 rebuildable current view. Provider cursors, evaluations, runtime status, source
@@ -330,9 +350,13 @@ Disabled token mounts default to `/dev/null`, so a fresh deployment does not
 require placeholder secret files. When enabling either provider, set its
 `*_TOKEN_FILE_HOST` to the real mode-400/600 host file.
 
-An HTTP `503` with `status: not_ready` is expected before a model has enough covered
-confirmed outcomes to pass the promotion gate; the container health check accepts
-that application state but still fails on transport or unexpected server errors.
+An HTTP `503` with `status: waiting` is expected while coverage candidates are
+completing their stability observation and no saved prediction exists. If an old
+prediction exists, the top-level status can instead be `stale`; use
+`pipeline_status` and `coverage_waiting` for the current pipeline state.
+`status: not_ready` applies when no expected wait or saved prediction is known.
+The container health check accepts these application states but still fails on
+transport or unexpected server errors.
 Production deployment verification must additionally require:
 
 - `/api/readiness` reports `publication_ready: true` and `synthetic_only: false`.

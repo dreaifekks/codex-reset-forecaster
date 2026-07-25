@@ -681,7 +681,7 @@ test("later extractor and outcome-policy revisions cannot enter earlier archive 
       version: `${upgradedConfig.outcome_definition.version}-next`,
     },
   };
-  await adjudicateOutcomes(store, policyConfig, {
+  await processRecords(store, policyConfig, {
     now: new Date("2026-07-26T12:00:00.000Z"),
   });
 

@@ -24,27 +24,51 @@ import {
 } from "../src/pipeline/outcomes.mjs";
 
 const config = await loadConfig();
+const authorityConfig = await loadConfig({ overrides: {
+  outcome_definition: {
+    version: "authority-announced-platform-reset/2",
+    event_semantics: "qualifying_authority_completion_statement",
+    authority_identity_ids: ["person_tibo_sottiaux"],
+    scope_policy: "explicit-platform-or-authority-general-codex/1",
+    negative_label_policy: "authoritative_daily_ledger_absence",
+  },
+} });
 
-function signalFor(text, id) {
-  const observation = rawObservationFromItem({
+function observationForConfig(text, id, runConfig, {
+  identityId = "person_tibo_sottiaux",
+  handle = "thsottiaux",
+  nativeRelations = [],
+  mediaType = "text/plain",
+} = {}) {
+  return rawObservationFromItem({
     provider_item_id: id,
-    canonical_url: `https://x.com/thsottiaux/status/${id}`,
+    canonical_url: `https://x.com/${handle}/status/${id}`,
     published_at: "2026-07-18T03:28:00Z",
     author: {
-      provider_author_id: "tibo-x-id",
-      identity_id: "person_tibo_sottiaux",
-      display_handle: "@thsottiaux",
+      provider_author_id: `${handle}-x-id`,
+      identity_id: identityId,
+      display_handle: `@${handle}`,
     },
-    native_relations: [],
-    content: { media_type: "text/plain", text, language: "en" },
+    native_relations: nativeRelations,
+    content: { media_type: mediaType, text, language: "en" },
   }, {
     providerName: "x",
     providerVersion: "test",
-    config: config.providers.x,
+    config: runConfig.providers.x,
     firstSeenAt: "2026-07-18T03:29:00Z",
     fetchedAt: "2026-07-18T03:29:00Z",
   });
-  return extractSignal(observation, config);
+}
+
+function signalForConfig(text, id, runConfig, options = {}) {
+  return extractSignal(
+    observationForConfig(text, id, runConfig, options),
+    runConfig,
+  );
+}
+
+function signalFor(text, id) {
+  return signalForConfig(text, id, config);
 }
 
 test("realistic Tibo wording separates completed, scheduled, and denied resets", () => {
@@ -229,6 +253,166 @@ test("real archived rollout wording is recognized without promoting banked or fu
     "future",
   );
   assert.equal(future.data.claim.phase, "scheduled");
+});
+
+test("authority scope policy recognizes general completed Codex resets without widening narrow plans", () => {
+  const generalCompleted = [
+    [
+      "2004100061933064395",
+      "For Codex users, to thank you all for the fun we've had over the last months, our first gift is that we have reset rate limits and are lifting the usage limits to 2X the usual limits until the 1st of Jan.",
+    ],
+    [
+      "2002137269134819610",
+      "We rewrote the underlying system to track and bill usage in Codex and we have reset usage limits in the process. Backfilling is time consuming and it’s more fun to give free usage. Enjoy!",
+    ],
+    [
+      "2031605592352313567",
+      "OK, Codex is back and stable and we should be good for a while. Reset button pressed, should see it in a bit",
+    ],
+  ].map(([id, text]) => signalForConfig(text, id, authorityConfig));
+  for (const signal of generalCompleted) {
+    assert.equal(signal.data.claim.event_type, "quota_reset");
+    assert.equal(signal.data.claim.phase, "completed");
+    assert.equal(signal.data.claim.scope.population, "platform");
+  }
+
+  const immediateAndBanked = signalForConfig(
+    "Dearest gentle codexer. We did a sneaky double reset. Not only do you get a full reset on us. But you are also getting one into the reset bank to use at your own leisure. Enjoy",
+    "2067399435009622521",
+    authorityConfig,
+  );
+  assert.equal(immediateAndBanked.data.claim.event_type, "quota_reset");
+  assert.equal(immediateAndBanked.data.claim.phase, "completed");
+  assert.equal(immediateAndBanked.data.claim.scope.population, "platform");
+
+  const platformResetWithNarrowBankHistory = signalForConfig(
+    "As we are still investigating, I have reset everyone's Codex usage limits. This is a hard reset given some users had stacked up to three banked resets already that they can apply on their own schedule.",
+    "2071381664853319742",
+    authorityConfig,
+  );
+  assert.equal(
+    platformResetWithNarrowBankHistory.data.claim.phase,
+    "completed",
+  );
+  assert.equal(
+    platformResetWithNarrowBankHistory.data.claim.scope.population,
+    "platform",
+  );
+
+  const narrowPlans = signalForConfig(
+    "We don’t have evidence of a widespread issue with Codex usage being drained faster than it should but there are enough reports and we have reset rate limits for plus & pro subscriptions while we investigate.",
+    "2030474136024400173",
+    authorityConfig,
+  );
+  assert.equal(narrowPlans.data.claim.event_type, "quota_reset");
+  assert.equal(narrowPlans.data.claim.phase, "completed");
+  assert.equal(narrowPlans.data.claim.scope.population, "unknown");
+});
+
+test("a double reset with one banked voucher creates one immediate authority outcome", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-authority-double-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = await new JsonlStore(directory).init();
+  await store.append(observationForConfig(
+    "Dearest gentle codexer. We did a sneaky double reset. Not only do you get a full reset on us. But you are also getting one into the reset bank to use at your own leisure. Enjoy",
+    "2067399435009622521",
+    authorityConfig,
+  ));
+  const normalized = await normalizeNewObservations(store, authorityConfig, {
+    now: new Date("2026-07-18T03:30:00Z"),
+  });
+  assert.equal(normalized.records.length, 1);
+  await linkEventCandidates(store, authorityConfig, {
+    asOf: new Date("2026-07-18T03:31:00Z"),
+  });
+  await adjudicateOutcomes(store, authorityConfig, {
+    now: new Date("2026-07-18T03:32:00Z"),
+  });
+  const outcomes = await store.all("reset_outcome");
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].data.status, "confirmed");
+});
+
+test("authority inference requires the configured semantics, identity, and a primary statement", () => {
+  const text =
+    "We rewrote the underlying system to track and bill usage in Codex and we have reset usage limits in the process.";
+  const actualResetSemantics = signalForConfig(text, "authority-disabled", config);
+  assert.equal(actualResetSemantics.data.claim.scope.population, "unknown");
+
+  const unconfiguredIdentity = signalForConfig(
+    text,
+    "authority-unconfigured",
+    authorityConfig,
+    { identityId: "community_member", handle: "community" },
+  );
+  assert.equal(unconfiguredIdentity.data.claim.scope.population, "unknown");
+
+  const quoted = signalForConfig(
+    text,
+    "authority-quoted",
+    authorityConfig,
+    {
+      nativeRelations: [{
+        type: "quotes",
+        provider_item_id: "authority-original",
+        url: "https://x.com/someone/status/authority-original",
+      }],
+    },
+  );
+  assert.equal(quoted.data.provenance.derivation, "quotes");
+  assert.equal(quoted.data.claim.scope.population, "unknown");
+
+  const summary = signalForConfig(
+    text,
+    "authority-summary",
+    authorityConfig,
+    { mediaType: "application/vnd.x-search-summary+text" },
+  );
+  assert.equal(summary.data.provenance.source_role, "aggregator");
+  assert.equal(summary.data.claim.scope.population, "unknown");
+});
+
+test("global outage wording does not leak into reset scope", () => {
+  const text =
+    "Codex outage resolved. We suffered a minor outage for last 45 minutes which turned into a global outage for last 30 minutes, this is now resolved and we have reset the rate limits. Please let me know if you still see issues.";
+  const defaultSignal = signalForConfig(text, "1986166501435711936", config);
+  assert.equal(defaultSignal.data.claim.phase, "completed");
+  assert.equal(defaultSignal.data.claim.scope.population, "unknown");
+
+  const authoritySignal = signalForConfig(
+    text,
+    "1986166501435711936-authority",
+    authorityConfig,
+  );
+  assert.equal(authoritySignal.data.claim.scope.population, "platform");
+});
+
+test("banked-only and non-completed authority resets stay out of immediate outcomes", () => {
+  const bankedOnly = [
+    "We have added a banked Codex reset to everyone's account. You can apply the reset later on your own schedule.",
+    "Added a banked reset to 500k users of ChatGPT Work and Codex. They can redeem it whenever they choose.",
+  ].map((text, index) =>
+    signalForConfig(text, `banked-only-${index}`, authorityConfig)
+  );
+  for (const signal of bankedOnly) {
+    assert.notEqual(signal.data.claim.phase, "completed");
+    assert.equal(signal.data.claim.scope.population, "unknown");
+  }
+
+  const started = signalForConfig(
+    "We are once again resetting the usage limits for all Codex users.",
+    "authority-started",
+    authorityConfig,
+  );
+  assert.equal(started.data.claim.phase, "started");
+
+  const scheduled = signalForConfig(
+    "We will reset Codex usage limits later today.",
+    "authority-scheduled",
+    authorityConfig,
+  );
+  assert.equal(scheduled.data.claim.phase, "scheduled");
+  assert.equal(scheduled.data.claim.scope.population, "unknown");
 });
 
 test("relative reset intent keeps a conservative future range and incidents remain context", () => {
@@ -478,8 +662,8 @@ test("extractor upgrades replay every exact raw revision without backdating new 
     ...config,
     extractor: {
       ...config.extractor,
-      model_version: "0.2.6",
-      prompt_version: "reset-extract/rules-0.2.6",
+      model_version: "0.2.7-test",
+      prompt_version: "reset-extract/rules-0.2.7-test",
     },
   };
   const replayedAt = "2026-07-19T00:00:00.000Z";
@@ -494,8 +678,8 @@ test("extractor upgrades replay every exact raw revision without backdating new 
   for (const signal of replay.records) {
     assert.equal(signal.created_at, replayedAt);
     assert.equal(signal.data.available_at, replayedAt);
-    assert.equal(signal.data.extraction.model_version, "0.2.6");
-    assert.equal(signal.data.extraction.prompt_version, "reset-extract/rules-0.2.6");
+    assert.equal(signal.data.extraction.model_version, "0.2.7-test");
+    assert.equal(signal.data.extraction.prompt_version, "reset-extract/rules-0.2.7-test");
   }
 
   const allSignals = await store.all("normalized_signal", { latestOnly: false });
@@ -504,7 +688,7 @@ test("extractor upgrades replay every exact raw revision without backdating new 
       signal.data.observation_refs[0].revision === rawRevision
     );
     assert.equal(exactSignals.length, 2);
-    assert.equal(selectCurrentSignals(exactSignals)[0].data.extraction.model_version, "0.2.6");
+    assert.equal(selectCurrentSignals(exactSignals)[0].data.extraction.model_version, "0.2.7-test");
   }
   assert.equal(selectCurrentSignals(allSignals)[0].data.observation_refs[0].revision, 2);
   assert.equal(

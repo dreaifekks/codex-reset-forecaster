@@ -7,7 +7,7 @@
   "created_at": "2026-07-23T04:03:20Z",
   "producer": {
     "name": "rule-claim-extractor",
-    "version": "0.2.5",
+    "version": "0.2.6",
     "config_hash": "sha256:example"
   },
   "data": {
@@ -50,9 +50,9 @@
     },
     "extraction": {
       "model": "deterministic-rules",
-      "model_version": "0.2.5",
-      "prompt_version": "reset-extract/rules-0.2.5",
-      "semantic_policy_hash": "sha256:0c2b32ba0cbc4deda49d7ad5f0ce08ecbc8abd762f945e0b77d5a9e06ff90793",
+      "model_version": "0.2.6",
+      "prompt_version": "reset-extract/rules-0.2.6",
+      "semantic_policy_hash": "sha256:e3a3ff0dacdfc9da48d9494ab2b0bd0f7fca1a55f2dc51cf289347846ef19ccf",
       "confidence": 0.91
     }
   }

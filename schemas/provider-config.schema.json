@@ -59,6 +59,9 @@
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
         },
+        "scope_policy": {
+          "const": "explicit-platform-or-authority-general-codex/1"
+        },
         "negative_label_policy": { "type": "string", "minLength": 1 }
       }
     },

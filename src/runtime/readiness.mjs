@@ -16,6 +16,7 @@ import { assertModelCompatibility } from "../model/logistic-hazard.mjs";
 import { assessPredictionIntegrity } from "../model/prediction-integrity.mjs";
 import {
   assessEvaluationSampleGate,
+  normalizeEvaluationWaiting,
   verifyEvaluationArtifact,
 } from "../model/evaluation.mjs";
 import {
@@ -26,6 +27,11 @@ import {
   evaluationContractHash,
   modelContractHash,
 } from "../model/contract.mjs";
+import {
+  aggregateCoverageWaiting,
+  normalizeCoverageWaitingSummary,
+  normalizeProviderCoverageWaiting,
+} from "../core/coverage-waiting.mjs";
 
 const HOUR_MS = 3_600_000;
 const EXPECTED_FORECAST_HOURS = 168;
@@ -372,6 +378,9 @@ function providerFreshness(name, provider, state, now, outcomeProviders) {
     last_success_at: lastSuccess,
     last_failure_at: lastFailure,
     last_error: state.last_error ?? null,
+    coverage_waiting: enabled
+      ? normalizeProviderCoverageWaiting(state.coverage_waiting)
+      : null,
   };
   if (
     roles.includes("context") &&
@@ -826,6 +835,35 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       runtimeFailureMs >= runtimeSuccessMs
     ),
   );
+  const providerCoverageWaiting = aggregateCoverageWaiting(
+    Object.values(providerFreshnessSummary.providers)
+      .filter((provider) => provider.roles.includes("required_outcome"))
+      .map((provider) => provider.coverage_waiting),
+    { now },
+  );
+  const runtimeCoverageWaiting = normalizeCoverageWaitingSummary(
+    runtime.last_waiting,
+    { now },
+  );
+  const coverageWaiting = coverage.length === 0
+    ? providerCoverageWaiting ?? runtimeCoverageWaiting
+    : null;
+  const evaluationWaiting =
+    coverage.length > 0 &&
+    runtime.last_status === "waiting_for_evaluation"
+    ? normalizeEvaluationWaiting(runtime.last_evaluation_waiting)
+    : null;
+  const pipelineStatus = runtime.current_run_started_at
+    ? "running"
+    : runtimeFailureIsCurrent
+      ? "error"
+      : coverageWaiting
+        ? "waiting_for_coverage"
+        : evaluationWaiting
+          ? "waiting_for_evaluation"
+          : runtime.last_success_at
+            ? "completed"
+            : "idle";
   const publicationBlockers = [];
   if (championResult.error) publicationBlockers.push("champion_incompatible");
   else if (!champion) publicationBlockers.push("champion_missing");
@@ -879,7 +917,16 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   } else if (liveSampleThresholdReached && !(issued?.gate?.passed ?? false)) {
     publicationBlockers.push("live_evaluation_gate_failed");
   }
-  if (coverage.length === 0) publicationBlockers.push("negative_label_coverage_missing");
+  if (coverage.length === 0) {
+    publicationBlockers.push(
+      coverageWaiting
+        ? "negative_label_coverage_pending"
+        : "negative_label_coverage_missing",
+    );
+  }
+  if (evaluationWaiting && !champion) {
+    publicationBlockers.push("model_evaluation_pending");
+  }
   if (providerFreshnessSummary.groups.required_outcome.status !== "fresh") {
     publicationBlockers.push("required_outcome_source_not_fresh");
   }
@@ -903,6 +950,12 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       prediction_settlements: currentSettlements.length,
     },
     outcome_coverage: {
+      status: coverage.length > 0
+        ? "available"
+        : coverageWaiting
+          ? "waiting_for_stability"
+          : "missing",
+      waiting: coverageWaiting,
       providers: config.model.outcome_coverage_providers,
       negative_label_eligible: {
         purpose: "negative_labels_and_model_evaluation",
@@ -965,6 +1018,9 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     provider_freshness: providerFreshnessSummary,
     publication_ready: publicationBlockers.length === 0,
     publication_blockers: publicationBlockers,
+    pipeline_status: pipelineStatus,
+    coverage_waiting: coverageWaiting,
+    evaluation_waiting: evaluationWaiting,
     synthetic_only: syntheticOnly,
     last_pipeline_success_at: runtime.last_success_at ?? null,
     last_pipeline_failure_at: runtime.last_failure_at ?? null,

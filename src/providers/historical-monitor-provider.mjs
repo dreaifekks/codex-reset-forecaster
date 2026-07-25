@@ -10,6 +10,9 @@ import {
   HISTORICAL_DAILY_LEDGER_OBSERVATION_VERSION,
 } from "../core/coverage-contract.mjs";
 import {
+  coverageWaitingFromDailyCandidates,
+} from "../core/coverage-waiting.mjs";
+import {
   appendRawObservationRevision,
   rawObservationFromItem,
   xStatusIdentity,
@@ -137,6 +140,21 @@ export class HistoricalMonitorProvider {
     this.fetch = fetchFn;
     this.now = now;
     this.providerName = config.provider_name ?? "historical_monitor";
+  }
+
+  async coverageWaiting(store, attestation, observedAt) {
+    if (!attestation) return null;
+    const candidateState = await store.readState(
+      "historical-monitor-coverage-candidates",
+      { schema_version: "historical-coverage-candidates/1", days: {} },
+    );
+    return coverageWaitingFromDailyCandidates({
+      providerId: this.providerName,
+      days: candidateState.days,
+      dayCloseLagHours: attestation.day_close_lag_hours,
+      minimumStabilityHours: attestation.minimum_stability_hours,
+      observedAt: candidateState.updated_at ?? observedAt,
+    });
   }
 
   async authoritativeDailyCoverage(store, {
@@ -623,11 +641,25 @@ export class HistoricalMonitorProvider {
         assertedAt: startedAt,
       });
     const refreshMs = (this.config.refresh_interval_hours ?? 24) * 3_600_000;
+    const currentContractAlreadyObserved =
+      Object.hasOwn(previousState, "coverage_contract_hash") &&
+      previousState.coverage_contract_hash === coverageContractHash;
     if (!force && previousState.last_success_at &&
-        startedAt.getTime() - Date.parse(previousState.last_success_at) < refreshMs) {
+        startedAt.getTime() - Date.parse(previousState.last_success_at) < refreshMs &&
+        currentContractAlreadyObserved) {
+      const coverageWaiting = await this.coverageWaiting(
+        store,
+        completenessAttestation,
+        startedAt,
+      );
+      await store.writeState("historical-monitor-provider", {
+        ...previousState,
+        coverage_waiting: coverageWaiting,
+      });
       return {
         collected: 0,
         skipped: "refresh_interval",
+        coverage_waiting: coverageWaiting,
         invalidated_coverage_assertions: invalidatedCoverageAssertions,
         health: { ok: true, delay_seconds: 0 },
       };
@@ -806,6 +838,11 @@ export class HistoricalMonitorProvider {
       const coverageAssertion = runCoverageAssertions.at(-1) ?? null;
       const effectiveCoverageStart = runCoverageAssertions[0]?.start ?? null;
       const effectiveCoverageEnd = coverageAssertion?.end ?? null;
+      const coverageWaiting = await this.coverageWaiting(
+        store,
+        negativeLabelEligible ? completenessAttestation : null,
+        fetchedAt,
+      );
       const delaySeconds = Math.max(0, Math.round((fetchedAt - startedAt) / 1000));
       await store.append(this.healthObservation({ ok: true, at: fetchedAt, delaySeconds }));
       await store.writeState("historical-monitor-provider", {
@@ -826,6 +863,8 @@ export class HistoricalMonitorProvider {
         archive_snapshot_ref: archiveSnapshotRef,
         archive_html_sha256: htmlHash,
         archive_coverage_grid_sha256: coverageGridHash,
+        coverage_contract_hash: coverageContractHash,
+        coverage_waiting: coverageWaiting,
         last_success_at: fetchedAt.toISOString(),
         last_error: null,
       });
@@ -839,6 +878,7 @@ export class HistoricalMonitorProvider {
         coverage_assertion: coverageAssertion,
         coverage_assertions: runCoverageAssertions,
         coverage_pending: negativeLabelEligible && runCoverageAssertions.length === 0,
+        coverage_waiting: coverageWaiting,
         invalidated_coverage_assertions: invalidatedCoverageAssertions,
         archive_snapshot_ref: archiveSnapshotRef,
         health: { ok: true, delay_seconds: delaySeconds },

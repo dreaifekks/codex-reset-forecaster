@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/core/config.mjs";
-import { processRecords } from "../src/pipeline/run.mjs";
+import {
+  historicalDailyLedgerAttestationReasons,
+  historicalDailyLedgerContractHash,
+} from "../src/core/coverage-contract.mjs";
+import { processRecords, runPipeline } from "../src/pipeline/run.mjs";
 import {
   HistoricalMonitorProvider,
   parseHistoricalMonitorHtml,
@@ -61,9 +65,10 @@ function oembed(item) {
 }
 
 const AUTHORITY_OUTCOME_DEFINITION = {
-  version: "authority-announced-platform-reset/1",
+  version: "authority-announced-platform-reset/2",
   event_semantics: "qualifying_authority_completion_statement",
   authority_identity_ids: ["person_tibo_sottiaux"],
+  scope_policy: "explicit-platform-or-authority-general-codex/1",
   negative_label_policy: "authoritative_daily_ledger_absence",
 };
 
@@ -88,6 +93,21 @@ const AUTHORITY_ATTESTATION = {
   day_close_lag_hours: 36,
   minimum_stability_hours: 6,
 };
+
+test("authority ledger coverage requires the versioned scope policy", () => {
+  const reasons = historicalDailyLedgerAttestationReasons({
+    attestation: AUTHORITY_ATTESTATION,
+    outcomeDefinition: {
+      ...AUTHORITY_OUTCOME_DEFINITION,
+      scope_policy: "legacy-explicit-only/1",
+    },
+    providerName: "historical_monitor",
+    sourceUrl: "https://archive.example/",
+    target: AUTHORITY_TARGET,
+    confirmationIdentityIds: ["person_tibo_sottiaux"],
+  });
+  assert.ok(reasons.includes("outcome_definition_scope_policy_invalid"));
+});
 
 async function authoritativeHarness(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-historical-authority-"));
@@ -236,6 +256,20 @@ test("authoritative daily coverage requires two stable snapshots and uses the se
   const first = await provider.collect(store, { force: true });
   assert.equal(first.coverage_pending, true);
   assert.deepEqual(first.coverage_assertions, []);
+  assert.deepEqual(first.coverage_waiting, {
+    schema_version: "coverage-waiting/1",
+    status: "observing",
+    reason_code: "coverage_stability_observation_pending",
+    provider_id: "historical_monitor",
+    candidate_count: 1,
+    earliest_first_observed_at: "2026-07-11T06:00:00.000Z",
+    earliest_recheck_at: "2026-07-11T12:00:00.000Z",
+    observed_at: "2026-07-11T06:00:00.000Z",
+  });
+  assert.deepEqual(
+    (await store.readState("historical-monitor-provider")).coverage_waiting,
+    first.coverage_waiting,
+  );
   assert.deepEqual(
     await adequateCoverageIntervals(
       store,
@@ -271,6 +305,7 @@ test("authoritative daily coverage requires two stable snapshots and uses the se
   clock.now = new Date("2026-07-11T12:00:00.000Z");
   const second = await provider.collect(store, { force: true });
   assert.equal(second.coverage_pending, false);
+  assert.equal(second.coverage_waiting, null);
   assert.equal(second.coverage_assertions.length, 1);
   const [assertion] = second.coverage_assertions;
   assert.equal(assertion.start, "2026-07-09T00:00:00.000Z");
@@ -295,7 +330,44 @@ test("authoritative daily coverage requires two stable snapshots and uses the se
   }]);
 });
 
-test("a hot-switched authority contract invalidates coverage even when collection is refresh-skipped", async (t) => {
+test("pipeline waits without training or publishing while coverage stabilizes", async (t) => {
+  const { clock, config, provider, store } = await authoritativeHarness(t);
+  const result = await runPipeline(store, config, {
+    now: clock.now,
+    providerInstances: { historical_monitor: provider },
+  });
+
+  assert.equal(result.status, "waiting_for_coverage");
+  assert.equal(result.training.succeeded, false);
+  assert.equal(result.training.skipped, true);
+  assert.equal(
+    result.training.reason_code,
+    "coverage_stability_observation_pending",
+  );
+  assert.equal(result.forecast, null);
+  assert.deepEqual(result.coverage_waiting, {
+    schema_version: "coverage-waiting/1",
+    status: "waiting_for_coverage",
+    reason_code: "coverage_stability_observation_pending",
+    providers: ["historical_monitor"],
+    candidate_count: 1,
+    earliest_first_observed_at: "2026-07-11T06:00:00.000Z",
+    earliest_recheck_at: "2026-07-11T12:00:00.000Z",
+    recheck_due: false,
+    observed_at: "2026-07-11T06:00:00.000Z",
+  });
+  assert.deepEqual(
+    await adequateCoverageIntervals(
+      store,
+      ["historical_monitor"],
+      { config },
+    ),
+    [],
+  );
+  assert.deepEqual(await store.all("prediction"), []);
+});
+
+test("a hot-switched authority contract forces a fresh stability observation", async (t) => {
   const {
     clock,
     config,
@@ -375,14 +447,26 @@ test("a hot-switched authority contract invalidates coverage even when collectio
     config: switchedConfig.providers.historical_monitor,
     target: switchedConfig.target,
     outcomeDefinition: switchedConfig.outcome_definition,
-    fetchFn: async () => {
-      throw new Error("refresh-skipped collection must not fetch");
+    fetchFn: async (input) => {
+      assert.equal(new URL(input).origin, "https://archive.example");
+      return new Response(clock.html);
     },
     now: () => new Date(clock.now),
   });
-  const skipped = await switchedProvider.collect(store);
-  assert.equal(skipped.skipped, "refresh_interval");
-  assert.equal(skipped.invalidated_coverage_assertions, 1);
+  const refreshed = await switchedProvider.collect(store);
+  assert.equal(refreshed.skipped, undefined);
+  assert.equal(refreshed.invalidated_coverage_assertions, 1);
+  assert.equal(refreshed.coverage_pending, true);
+  assert.deepEqual(refreshed.coverage_waiting, {
+    schema_version: "coverage-waiting/1",
+    status: "observing",
+    reason_code: "coverage_stability_observation_pending",
+    provider_id: "historical_monitor",
+    candidate_count: 1,
+    earliest_first_observed_at: "2026-07-11T12:01:00.000Z",
+    earliest_recheck_at: "2026-07-11T19:01:00.000Z",
+    observed_at: "2026-07-11T12:01:00.000Z",
+  });
   const [invalidated] = await coverageAssertions(
     store,
     ["historical_monitor"],
@@ -390,6 +474,18 @@ test("a hot-switched authority contract invalidates coverage even when collectio
   assert.equal(invalidated.revision, 2);
   assert.equal(invalidated.adequacy, "outcome_only");
   assert.equal(invalidated.replay_available_at, null);
+  const state = await store.readState("historical-monitor-provider");
+  assert.equal(
+    state.coverage_contract_hash,
+    historicalDailyLedgerContractHash({
+      attestation: switchedAttestation,
+      outcomeDefinition: switchedOutcomeDefinition,
+      providerName: "historical_monitor",
+      sourceUrl: "https://archive.example/",
+      target: switchedTarget,
+      confirmationIdentityIds: [switchedIdentity],
+    }),
+  );
 });
 
 test("a changed authoritative day ledger revokes eligibility until the new ledger stabilizes", async (t) => {
