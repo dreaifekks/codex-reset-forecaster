@@ -6,16 +6,23 @@ import { selectCurrentSignals } from "./signal-selection.mjs";
 const EVENT_LINK_GAP_MS = 2 * 3_600_000;
 const MAX_EVENT_SPAN_MS = 6 * 3_600_000;
 
-function scopeKey(signal) {
-  const scope = signal.data.claim.scope;
+function eventScopeKey(scope, eventType) {
   return [
     scope.vendor,
     scope.product,
     scope.population,
     [...(scope.plans ?? [])].sort().join(","),
     scope.quota_bucket ?? "all",
-    eventTypeFamily(signal.data.claim.event_type),
+    eventTypeFamily(eventType),
   ].join(":");
+}
+
+function scopeKey(signal) {
+  return eventScopeKey(signal.data.claim.scope, signal.data.claim.event_type);
+}
+
+function candidateScopeKey(candidate) {
+  return eventScopeKey(candidate.data.scope, candidate.data.event_type);
 }
 
 function signalRange(signal) {
@@ -119,6 +126,7 @@ function clusterIdentity(
     .filter((candidate) => candidate.data.evidence.some((entry) =>
       independenceGroups.has(entry.independence_group_id)
     ) &&
+      candidateScopeKey(candidate) === cluster.baseKey &&
       !claimedExistingIds.has(candidate.data.event_cluster_id) &&
       (
         !reservedIdentityOwners.has(candidate.data.event_cluster_id) ||

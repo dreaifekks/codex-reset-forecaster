@@ -42,6 +42,42 @@ async function temporaryStore(t, prefix) {
   };
 }
 
+function candidateTestSignal({ id, product, population = "platform", at, group, root }) {
+  return {
+    record_id: `sig_${id}`,
+    revision: 1,
+    created_at: at,
+    data: {
+      available_at: at,
+      observation_refs: [{ record_id: `obs_${id}`, revision: 1 }],
+      claim: {
+        event_type: "quota_reset",
+        phase: "completed",
+        stance: "supports",
+        scope: {
+          vendor: "openai",
+          product,
+          population,
+          plans: population === "platform" ? ["paid"] : ["unknown"],
+          regions: ["global"],
+          quota_bucket: null,
+        },
+        asserted_time_range: null,
+      },
+      provenance: {
+        independence_group_id: group,
+        root_evidence_id: root,
+        derivation: "primary_statement",
+        feature_eligible: true,
+      },
+      extraction: {
+        model_version: "test",
+        prompt_version: "test",
+      },
+    },
+  };
+}
+
 test("coverage is outcome-only by default and negative labels require append-only completeness evidence", async (t) => {
   const { store } = await temporaryStore(t, "reset-coverage-integrity-");
   await addCoverageAssertion(store, {
@@ -515,47 +551,14 @@ test("a deduplication contract change starts a new candidate record without dupl
 
 test("split clusters cannot claim the same existing candidate revision", async () => {
   const deduplicationVersion = "reset-dedup/test";
-  const makeSignal = ({ id, product, at, group, root }) => ({
-    record_id: `sig_${id}`,
-    revision: 1,
-    created_at: at,
-    data: {
-      available_at: at,
-      observation_refs: [{ record_id: `obs_${id}`, revision: 1 }],
-      claim: {
-        event_type: "quota_reset",
-        phase: "completed",
-        stance: "supports",
-        scope: {
-          vendor: "openai",
-          product,
-          population: "platform",
-          plans: ["paid"],
-          regions: ["global"],
-          quota_bucket: null,
-        },
-        asserted_time_range: null,
-      },
-      provenance: {
-        independence_group_id: group,
-        root_evidence_id: root,
-        derivation: "primary_statement",
-        feature_eligible: true,
-      },
-      extraction: {
-        model_version: "test",
-        prompt_version: "test",
-      },
-    },
-  });
-  const first = makeSignal({
+  const first = candidateTestSignal({
     id: "new-scope",
     product: "multi_product",
     at: "2026-07-20T09:00:00.000Z",
     group: "ind_shared_new",
     root: "root_new",
   });
-  const originalAnchor = makeSignal({
+  const originalAnchor = candidateTestSignal({
     id: "original-anchor",
     product: "codex",
     at: "2026-07-20T10:00:00.000Z",
@@ -576,6 +579,8 @@ test("split clusters cannot claim the same existing candidate revision", async (
     created_at: "2026-07-20T08:00:00.000Z",
     data: {
       event_cluster_id: originalIdentity,
+      event_type: "quota_reset",
+      scope: originalAnchor.data.claim.scope,
       evidence: [
         { independence_group_id: first.data.provenance.independence_group_id },
         { independence_group_id: originalAnchor.data.provenance.independence_group_id },
@@ -613,6 +618,65 @@ test("split clusters cannot claim the same existing candidate revision", async (
     record_id: existing.record_id,
     revision: 3,
   });
+});
+
+test("candidate continuity cannot cross event scope boundaries", async () => {
+  const deduplicationVersion = "reset-dedup/test";
+  const unknownScope = candidateTestSignal({
+    id: "unknown-scope",
+    product: "unknown",
+    population: "unknown",
+    at: "2026-07-20T09:00:00.000Z",
+    group: "ind_shared_unknown",
+    root: "root_unknown",
+  });
+  const codexScope = candidateTestSignal({
+    id: "codex-scope",
+    product: "codex",
+    at: "2026-07-20T10:00:00.000Z",
+    group: "ind_shared_codex",
+    root: "root_codex",
+  });
+  const existingIdentity = `event_${"a".repeat(24)}`;
+  const existing = {
+    record_id: makeRecordId(
+      "evt",
+      `${deduplicationVersion}:${existingIdentity}`,
+    ),
+    revision: 3,
+    created_at: "2026-07-20T08:00:00.000Z",
+    data: {
+      event_cluster_id: existingIdentity,
+      event_type: "quota_reset",
+      scope: codexScope.data.claim.scope,
+      evidence: [
+        { independence_group_id: unknownScope.data.provenance.independence_group_id },
+        { independence_group_id: codexScope.data.provenance.independence_group_id },
+      ],
+      hypothesized_time_range: null,
+      state: "closed",
+    },
+  };
+  let planned = [];
+  const store = {
+    async all(type) {
+      if (type === "normalized_signal") return [unknownScope, codexScope];
+      if (type === "event_candidate") return [existing];
+      throw new Error(`Unexpected record type ${type}`);
+    },
+    async appendMany(records) {
+      planned = records;
+      return records.map((record) => ({ inserted: true, record }));
+    },
+  };
+
+  await linkEventCandidates(store, { deduplication_version: deduplicationVersion }, {
+    asOf: new Date("2026-07-20T11:00:00.000Z"),
+  });
+  const revision = planned.find((candidate) => candidate.record_id === existing.record_id);
+  assert.ok(revision);
+  assert.equal(revision.data.scope.product, "codex");
+  assert.equal(revision.data.scope.population, "platform");
 });
 
 test("outcome revisions preserve a legacy record ID after a natural-key migration", async (t) => {
