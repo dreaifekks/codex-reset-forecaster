@@ -71,6 +71,21 @@ const publicationBlockerLabels = {
   pipeline_error: "数据更新失败",
 };
 
+const publicationBlockerPriority = [
+  "negative_label_coverage_missing",
+  "required_outcome_source_not_fresh",
+  "exact_source_not_fresh",
+  "pipeline_error",
+  "champion_missing",
+  "champion_incompatible",
+];
+
+function primaryPublicationBlocker(blockers = []) {
+  return publicationBlockerPriority.find((blocker) => blockers.includes(blocker)) ??
+    blockers[0] ??
+    null;
+}
+
 const providerStatusLabels = {
   fresh: "新鲜",
   degraded: "异常",
@@ -342,6 +357,12 @@ async function fetchJson(url) {
 }
 
 function forecastErrorText(result) {
+  const blocker = primaryPublicationBlocker(
+    result.data?.serving?.publication_blockers,
+  );
+  if (blocker && publicationBlockerLabels[blocker]) {
+    return `${publicationBlockerLabels[blocker]}。`;
+  }
   const labels = {
     forecast_incompatible: "模型版本需要更新。",
     forecast_not_publishable: "当前数据还不支持发布预测。",
@@ -447,14 +468,13 @@ function renderPublicationWarning(forecastResult, readinessResult) {
     target.textContent = "";
     return;
   }
-  const labels = [...new Set(blockers.map((blocker) =>
-    publicationBlockerLabels[blocker] ?? "发布条件尚未满足"
-  ))];
+  const primaryBlocker = primaryPublicationBlocker(blockers);
+  const label = publicationBlockerLabels[primaryBlocker] ?? "数据仍在准备中";
   target.hidden = false;
   target.classList.toggle("synthetic", syntheticDemo);
   target.textContent = syntheticDemo
     ? "合成数据演示，仅用于查看页面和模型流程。"
-    : `预测尚未达到发布条件：${labels[0] ?? "数据仍在准备中"}。`;
+    : `预测尚未达到发布条件：${label}。`;
 }
 
 function renderHealth(forecastResult, healthResult, readinessResult) {
