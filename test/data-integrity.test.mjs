@@ -693,6 +693,57 @@ test("outcome revisions preserve a legacy record ID after a natural-key migratio
   assert.equal((await store.all("reset_outcome", { latestOnly: false })).length, 2);
 });
 
+test("duplicate candidate aliases do not churn a settled outcome", async (t) => {
+  const { directory, store } = await temporaryStore(t, "reset-outcome-alias-");
+  const config = await loadConfig({ overrides: { runtime: { data_dir: directory } } });
+  const at = "2026-07-20T10:00:00Z";
+  await store.append(rawObservationFromItem({
+    provider_item_id: "outcome-alias",
+    canonical_url: "https://x.com/thsottiaux/status/outcome-alias",
+    published_at: at,
+    author: {
+      provider_author_id: "thsottiaux",
+      identity_id: "person_tibo_sottiaux",
+      display_handle: "@thsottiaux",
+    },
+    native_relations: [],
+    content: {
+      media_type: "text/plain",
+      text: "We have reset Codex usage limits across all paid plans.",
+      language: "en",
+    },
+  }, {
+    providerName: "x",
+    providerVersion: "test",
+    config: {},
+    firstSeenAt: at,
+    fetchedAt: at,
+  }));
+  await processRecords(store, config, { now: new Date("2026-07-20T10:05:00Z") });
+  const [candidate] = await store.all("event_candidate");
+  const [outcome] = await store.all("reset_outcome");
+  await store.append(createRecord({
+    recordType: "event_candidate",
+    naturalKey: "duplicate-candidate-alias",
+    createdAt: "2026-07-20T10:10:00Z",
+    producer: candidate.producer,
+    data: {
+      ...candidate.data,
+      as_of: "2026-07-20T10:10:00.000Z",
+      event_cluster_id: `event_${"f".repeat(24)}`,
+    },
+  }));
+
+  const repeated = await adjudicateOutcomes(store, config, {
+    now: new Date("2026-07-20T10:15:00Z"),
+  });
+  assert.equal(repeated.adjudicated, 0);
+  const outcomes = await store.all("reset_outcome", { latestOnly: false });
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].record_id, outcome.record_id);
+  assert.equal(outcomes[0].revision, 1);
+});
+
 test("reset and refill wording in one event family produces one confirmed outcome", async (t) => {
   const { directory, store } = await temporaryStore(t, "reset-refill-family-");
   const config = await loadConfig({ overrides: { runtime: { data_dir: directory } } });

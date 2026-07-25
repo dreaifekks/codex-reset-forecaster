@@ -142,9 +142,28 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
     )[0]
   );
   const existing = await store.all("reset_outcome");
+  const referencedCandidateIds = new Set(existing.flatMap((outcome) =>
+    outcome.data.candidate_refs?.map((reference) => reference.record_id) ?? []
+  ));
+  const referencedCandidateVersions = new Set(existing.flatMap((outcome) =>
+    outcome.data.candidate_refs?.map((reference) => exactRefKey(reference)) ?? []
+  ));
+  const existingEventIdentities = new Set(
+    existing.map((outcome) => outcome.data.event_identity).filter(Boolean),
+  );
+  const continuityRank = (candidate) =>
+    (referencedCandidateVersions.has(exactRefKey(candidate)) ? 4 : 0) +
+    (referencedCandidateIds.has(candidate.record_id) ? 2 : 0) +
+    (existingEventIdentities.has(candidate.data.event_cluster_id) ? 1 : 0);
+  candidates.sort((left, right) =>
+    continuityRank(right) - continuityRank(left) ||
+    left.data.event_cluster_id.localeCompare(right.data.event_cluster_id) ||
+    left.record_id.localeCompare(right.record_id)
+  );
   const confirmationIds = confirmationIdentityIds(config);
   const records = [];
   const confirmedEventIdentities = new Set();
+  const claimedOutcomeKeys = new Set();
 
   const signalsById = new Map(signals.map((signal) => [signal.record_id, signal]));
   for (const candidate of candidates) {
@@ -217,6 +236,9 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
       )
     ) ?? null;
     const eventIdentity = prior?.data.event_identity ?? candidate.data.event_cluster_id;
+    const outcomeKey = prior?.record_id ?? `new:${eventIdentity}`;
+    if (claimedOutcomeKeys.has(outcomeKey)) continue;
+    claimedOutcomeKeys.add(outcomeKey);
     confirmedEventIdentities.add(eventIdentity);
     const verification = verificationEntries.map(({ signal, observation }) => ({
       kind: "official_confirmation",
