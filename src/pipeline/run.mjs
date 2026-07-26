@@ -106,9 +106,13 @@ export async function trainEvaluatePromote(store, config, {
   now = new Date(),
   train = true,
 } = {}) {
-  const cutoff = floorHour(now);
+  const trainingCutoff = new Date(now);
+  if (Number.isNaN(trainingCutoff.getTime())) {
+    throw new TypeError("Invalid training cutoff");
+  }
+  const evaluationCutoff = floorHour(trainingCutoff);
   const training = train
-    ? await trainChallenger(store, config, { trainingCutoff: cutoff })
+    ? await trainChallenger(store, config, { trainingCutoff })
     : null;
   if (!training) {
     const challenger = await store.readModel("challenger", {
@@ -122,7 +126,7 @@ export async function trainEvaluatePromote(store, config, {
   let evaluation;
   try {
     evaluation = await evaluateWalkForward(store, config, {
-      evaluationCutoff: cutoff,
+      evaluationCutoff,
     });
   } catch (error) {
     const evaluationWaiting = evaluationWaitingFromError(error);
@@ -300,7 +304,7 @@ export async function runPipeline(store, config, {
     let attempt;
     try {
       attempt = await trainEvaluatePromote(store, config, {
-        now: currentTime(),
+        now: knowledgeCutoff,
         train,
       });
     } catch (error) {

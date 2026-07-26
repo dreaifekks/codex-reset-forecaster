@@ -32,14 +32,21 @@
         </div>
       </section>
 
-      <section class="summary-grid metrics" aria-label="评估指标">
+      <section class="panel" id="evaluation-waiting-panel" hidden>
+        <div class="empty-state">
+          <strong>模型已训练，评估进行中</strong>
+          <p>积累足够样本后显示精度结果。</p>
+        </div>
+      </section>
+
+      <section class="summary-grid metrics evaluation-results" aria-label="评估指标">
         <article class="summary-card emphasis"><p>历史事件召回率</p><strong id="event-recall">—</strong><small>目标 ≥ 80%</small></article>
-        <article class="summary-card"><p>概率误差（Brier）</p><strong id="brier-score">—</strong><small>越低越好</small></article>
-        <article class="summary-card"><p>优于基线程度</p><strong id="brier-skill">—</strong><small>Brier 技能分</small></article>
+        <article class="summary-card"><p>概率误差</p><strong id="brier-score">—</strong><small>越低越好</small></article>
+        <article class="summary-card"><p>相对基线</p><strong id="brier-skill">—</strong><small>越高越好</small></article>
         <article class="summary-card"><p>提前量中位数</p><strong id="lead-time">—</strong><small>相对已确认结果</small></article>
       </section>
 
-      <section class="lower-grid accuracy-grid">
+      <section class="lower-grid accuracy-grid evaluation-results">
         <article class="panel">
           <div class="panel-heading compact"><div><p class="eyebrow">可靠性</p><h2>校准曲线</h2></div></div>
           <div class="chart-wrap"><svg id="calibration-chart" viewBox="0 0 360 360" role="img" aria-labelledby="calibration-title calibration-description"><title id="calibration-title">预测概率校准曲线</title><desc id="calibration-description">横轴是平均预测概率，纵轴是实际发生频率；圆点大小表示样本数。</desc></svg></div>
@@ -56,7 +63,7 @@
         </article>
       </section>
 
-      <section class="panel table-panel">
+      <section class="panel table-panel evaluation-results">
         <div class="panel-heading compact"><div><p class="eyebrow">已确认历史</p><h2>事件结果</h2><p class="section-description" id="ranking-policy">正在加载统一的窗口预算定义…</p></div></div>
         <div class="table-scroll">
           <table>
@@ -66,7 +73,7 @@
           </table>
         </div>
       </section>
-      <p class="disclaimer" id="accuracy-disclaimer">发布门槛：历史事件召回率至少 80%，且概率表现优于历史基线。</p>
+      <p class="disclaimer evaluation-results" id="accuracy-disclaimer">发布门槛：历史事件召回率至少 80%，且概率表现优于历史基线。</p>
     </main>
   </body>
 </html>

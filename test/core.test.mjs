@@ -542,6 +542,62 @@ test("coverage stability recheck wakes at its deadline before the next hour", as
   assert.equal(scheduler.nextRunAt, "2026-07-26T03:07:16.000Z");
 });
 
+test("evaluation waiting still wakes a new coverage candidate at its exact deadline", async (t) => {
+  const store = await temporaryStore(t);
+  const current = new Date("2026-07-26T12:00:05.000Z");
+  const evaluationWaiting = {
+    schema_version: "evaluation-waiting/1",
+    status: "waiting_for_evaluation",
+    reason_code: "walk_forward_fold_pending",
+    evaluation_cutoff: "2026-07-26T12:00:00.000Z",
+    accepted_fold_count: 0,
+    rejected_fold_count: 0,
+    evaluated_windows: 0,
+    evaluated_events: 0,
+    minimum_evaluation_windows: 1008,
+    minimum_evaluation_events: 20,
+  };
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: {
+        run_on_start: false,
+        retrain_interval_hours: 24,
+        scheduler_delay_seconds: 5,
+      },
+    },
+    now: () => new Date(current),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "waiting_for_evaluation",
+      evaluation_waiting: evaluationWaiting,
+      training: { succeeded: false, skipped: true, evaluation: null },
+      forecast: null,
+      collection: {
+        historical_monitor: {
+          ok: true,
+          required: true,
+          coverage_waiting: {
+            schema_version: "coverage-waiting/1",
+            status: "observing",
+            reason_code: "coverage_stability_observation_pending",
+            provider_id: "historical_monitor",
+            candidate_count: 1,
+            earliest_first_observed_at: "2026-07-26T06:00:08.014Z",
+            earliest_recheck_at: "2026-07-26T12:00:08.014Z",
+            observed_at: "2026-07-26T12:00:05.000Z",
+          },
+        },
+      },
+      timing: { knowledge_cutoff: "2026-07-26T12:00:05.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  assert.equal(scheduler.nextRunAt, "2026-07-26T12:00:13.014Z");
+});
+
 test("hourly scheduler records evaluation waiting and does not refit every hour", async (t) => {
   const store = await temporaryStore(t);
   const evaluationWaiting = {

@@ -113,3 +113,35 @@ test("an exact-text SocialData gateway result may confirm Tibo but still cannot 
   assert.equal(outcome.data.label_grade, "gold");
   assert.deepEqual(await store.readState("coverage", { providers: {} }), { providers: {} });
 });
+
+test("gateway failure diagnostics never become reset signals", async (t) => {
+  const { config, store } = await setup(t, "hermes");
+  const now = new Date("2026-07-26T08:07:30.000Z");
+  const provider = new XSearchGatewayProvider({
+    config: config.providers.x_search_gateway,
+    token: "test-gateway-token",
+    fetchFn: async () => new Response(JSON.stringify({
+      ok: false,
+      error: "usage limit reset search is temporarily unavailable",
+    }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    }),
+    now: () => now,
+  });
+
+  await assert.rejects(
+    provider.collect(store),
+    /All X Search Gateway queries failed/,
+  );
+  const observations = await store.all("raw_observation");
+  assert.equal(observations.length, 1);
+  assert.equal(
+    observations[0].data.content.media_type,
+    "application/vnd.reset-provider-health+json",
+  );
+  const processing = await processRecords(store, config, { now });
+  assert.equal(processing.normalized.normalized, 0);
+  assert.deepEqual(await store.all("normalized_signal"), []);
+  assert.deepEqual(await store.all("reset_outcome"), []);
+});

@@ -19,10 +19,23 @@ function compareSignalRank(left, right) {
   return String(left.record_id).localeCompare(String(right.record_id));
 }
 
+function isProviderDiagnostic(signal) {
+  const provenance = signal.data.provenance ?? {};
+  return provenance.source_identity_id == null &&
+    provenance.source_published_at == null &&
+    provenance.canonical_source_url == null &&
+    String(provenance.root_evidence_id ?? "").includes(":health-");
+}
+
 export function selectCurrentSignals(signals) {
   const selected = new Map();
   for (const signal of signals) {
-    if (signal.data.provenance?.feature_eligible === false) continue;
+    if (
+      signal.data.provenance?.feature_eligible === false ||
+      isProviderDiagnostic(signal)
+    ) {
+      continue;
+    }
     const observationId = signal.data.observation_refs[0]?.record_id;
     if (!observationId) continue;
     const previous = selected.get(observationId);

@@ -1232,7 +1232,7 @@ test("training negatives use the latest coverage revision available at the train
     end: "2026-07-25T13:00:00.000Z",
     adequacy: "negative_label_eligible",
     revoked: false,
-    asserted_at: "2026-07-25T13:00:00.000Z",
+    asserted_at: "2026-07-25T13:07:18.000Z",
     evidence_refs: testCompletenessEvidence(
       "2026-07-25T13:00:00.000Z",
     ),
@@ -1256,9 +1256,10 @@ test("training negatives use the latest coverage revision available at the train
     },
   };
   const dataset = await buildTrainingExamples(store, modelConfig(), {
-    trainingCutoff: "2026-07-25T13:00:00.000Z",
+    trainingCutoff: "2026-07-25T13:07:30.000Z",
   });
   assert.equal(dataset.negativeCount, 4);
+  assert.equal(dataset.trainingCutoff, "2026-07-25T13:07:30.000Z");
   assert.deepEqual(
     dataset.coverageAssertionSnapshot.map((assertion) => assertion.revision),
     [1],
@@ -1274,7 +1275,7 @@ test("training negatives use the latest coverage revision available at the train
         }];
       },
     }, modelConfig(), {
-      trainingCutoff: "2026-07-25T13:00:00.000Z",
+      trainingCutoff: "2026-07-25T13:07:30.000Z",
     }),
     /No adequate outcome coverage/,
   );

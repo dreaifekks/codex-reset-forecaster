@@ -671,7 +671,22 @@ export async function evaluateWalkForward(store, config, {
     coverageAsOfMode,
   );
   const coverage = normalizeCoverageIntervals(evaluationCoverageAssertions);
-  if (coverage.length === 0) throw new Error("No adequate coverage exists for walk-forward evaluation");
+  if (coverage.length === 0) {
+    throw new EvaluationPendingError(
+      "walk_forward_coverage_cutoff_pending",
+      {
+        evaluation_cutoff: toUtcIso(cutoff),
+        accepted_fold_count: 0,
+        rejected_fold_count: 0,
+        evaluated_windows: 0,
+        evaluated_events: 0,
+        minimum_evaluation_windows:
+          config.model.minimum_live_evaluation_windows,
+        minimum_evaluation_events:
+          config.model.minimum_live_evaluation_events,
+      },
+    );
+  }
   if (!challenger) throw new Error("No challenger model exists for walk-forward evaluation");
   assertModelCompatibility(challenger, {
     featureNames: FEATURE_NAMES,

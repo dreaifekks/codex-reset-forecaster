@@ -259,6 +259,11 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.equal(twoWindowEvaluation.metrics.evaluated_events, 1);
   const readiness = await getReadiness(store, config);
   assert.equal(readiness.synthetic_only, true);
+  assert.equal(readiness.model.challenger.available, true);
+  assert.equal(readiness.model.challenger.ready, true);
+  assert.equal(readiness.model.challenger.converged, true);
+  assert.ok(readiness.model.challenger.example_count > 0);
+  assert.ok(readiness.model.challenger.event_count > 0);
   assert.equal(readiness.model.real_walk_forward_acceptance_proven, false);
 
   await store.writeState("x-search-gateway-provider", {
@@ -318,8 +323,15 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(page, /每小时重置概率/);
   assert.match(page, /未来 7 天重置概率/);
   assert.match(page, /未来 168 小时内发生重置的可能性/);
-  assert.doesNotMatch(page, /未来 168 小时内的重置概率|未重置概率|与 OpenAI 无关联/);
-  assert.doesNotMatch(appScript, /未重置概率|与 OpenAI 无关联/);
+  assert.doesNotMatch(
+    page,
+    /未来 168 小时内的重置概率|未重置概率|与 OpenAI 无关联|时间与模型|指标含义/,
+  );
+  assert.doesNotMatch(
+    appScript,
+    /未重置概率|与 OpenAI 无关联|原始陈述/,
+  );
+  assert.match(appScript, /模型已训练 · 评估中/);
   assert.match(pageResponse.headers.get("content-security-policy"), /default-src 'self'/);
 });
 
@@ -340,7 +352,7 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
     },
   } });
   const store = await new JsonlStore(directory).init();
-  const now = new Date("2026-07-25T20:00:00.000Z");
+  const now = new Date("2026-07-25T20:07:30.000Z");
   const fixture = generateDemoHistory({ now, days: 42 });
   await new FixtureProvider({
     items: fixture,
@@ -359,13 +371,21 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   assert.equal(result.training.status, "waiting_for_evaluation");
   assert.equal(
     result.evaluation_waiting.reason_code,
-    "walk_forward_fold_pending",
+    "walk_forward_coverage_cutoff_pending",
+  );
+  assert.equal(
+    result.evaluation_waiting.evaluation_cutoff,
+    "2026-07-25T20:00:00.000Z",
   );
   assert.equal(result.evaluation_waiting.evaluated_windows, 0);
   assert.equal(result.evaluation_waiting.minimum_evaluation_windows, 1008);
   assert.equal(result.evaluation_waiting.minimum_evaluation_events, 20);
   assert.equal(result.forecast, null);
   assert.ok(await store.readModel("challenger"));
+  assert.equal(
+    (await store.readModel("challenger")).training_cutoff,
+    result.timing.knowledge_cutoff,
+  );
   assert.equal(
     await store.readModel("champion", { invalidAsNull: true }),
     null,
@@ -383,6 +403,14 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   assert.equal(repeated.training.succeeded, false);
   assert.equal(repeated.training.skipped, true);
   assert.equal(repeated.training.reused_challenger, true);
+  assert.equal(
+    repeated.evaluation_waiting.reason_code,
+    "walk_forward_fold_pending",
+  );
+  assert.equal(
+    repeated.evaluation_waiting.evaluation_cutoff,
+    "2026-07-25T21:00:00.000Z",
+  );
   assert.equal(reusedChallenger.artifact_hash, firstChallenger.artifact_hash);
   assert.equal(reusedChallenger.trained_at, firstChallenger.trained_at);
 });

@@ -41,15 +41,6 @@ const sourceRoleLabels = {
   unknown: "角色未知",
 };
 
-const derivationLabels = {
-  primary_statement: "原始陈述",
-  independent_observation: "独立观察",
-  quotes: "引用",
-  repost: "转发",
-  summarizes: "摘要",
-  unknown: "来源关系未知",
-};
-
 const publicationBlockerLabels = {
   champion_missing: "模型尚未就绪",
   champion_incompatible: "模型版本需要更新",
@@ -65,7 +56,7 @@ const publicationBlockerLabels = {
   real_walk_forward_not_proven: "真实数据评估不足",
   live_evaluation_incompatible: "发布评估需要更新",
   live_evaluation_gate_failed: "发布评估未通过",
-  model_evaluation_pending: "模型评估数据积累中",
+  model_evaluation_pending: "正在积累真实评估数据",
   negative_label_coverage_pending: "历史覆盖正在复验",
   negative_label_coverage_missing: "历史覆盖数据不足",
   required_outcome_source_not_fresh: "核心来源更新不及时",
@@ -89,15 +80,6 @@ function primaryPublicationBlocker(blockers = []) {
     blockers[0] ??
     null;
 }
-
-const providerStatusLabels = {
-  fresh: "新鲜",
-  degraded: "异常",
-  stale: "过期",
-  disabled: "未启用",
-  unavailable: "不可用",
-  unknown: "未知",
-};
 
 function formatTime(value) {
   const date = value instanceof Date ? value : new Date(value);
@@ -148,8 +130,8 @@ function cumulativeInterval(forecast, key) {
 
 function intervalText(interval) {
   return interval
-    ? `80% 不确定区间：${percent(interval[0], 1)}–${percent(interval[1], 1)}`
-    : "80% 不确定区间：暂无";
+    ? `大致范围（80%）：${percent(interval[0], 1)}–${percent(interval[1], 1)}`
+    : "大致范围（80%）：暂无";
 }
 
 function coverageFreshnessTier(value) {
@@ -300,7 +282,7 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     setListMessage(targetSelector, emptyText);
     return;
   }
-  for (const item of items.slice(0, 6)) {
+  for (const item of items.slice(0, 4)) {
     const row = document.createElement("li");
     row.dataset.signalTier = tier;
     row.dataset.sourceRole = item.source_role ?? "unknown";
@@ -313,12 +295,11 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     const eventType = eventTypeLabels[item.event_type] ?? "其他信号";
     const phase = phaseLabels[item.phase] ?? "状态未知";
     const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? "角色未知";
-    const derivation = derivationLabels[item.derivation] ?? item.derivation ?? "来源关系未知";
     const signalTime = source?.published_at ?? item.available_at;
     const pending = item.pending_next_forecast
       ? "<span class=\"signal-badge pending\">待下一轮纳入</span>"
       : "";
-    row.innerHTML = `<div><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span><span class="signal-badge secondary">${escapeHtml(derivation)}</span>${pending}</span><time title="系统可用于模型的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></div><p>${escapeHtml(source?.text ?? "暂无原始文本")}</p><small>${link} · ${escapeHtml(phase)}</small>`;
+    row.innerHTML = `<div><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${pending}</span><time title="系统可用于模型的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></div><p>${escapeHtml(source?.text ?? "暂无原始文本")}</p><small>${link} · ${escapeHtml(phase)}</small>`;
     target.append(row);
   }
 }
@@ -360,7 +341,14 @@ async function fetchJson(url) {
   }
 }
 
-function forecastErrorText(result) {
+function challengerReady(readiness) {
+  return readiness?.model?.challenger?.ready === true;
+}
+
+function forecastErrorText(result, readiness = {}) {
+  if (challengerReady(readiness) && readiness.evaluation_waiting) {
+    return "模型已训练，评估完成后显示 7 天概率。";
+  }
   const blocker = primaryPublicationBlocker(
     result.data?.serving?.publication_blockers,
   );
@@ -401,6 +389,7 @@ function renderForecast(forecast) {
     : percent(probability4h, 2);
   document.querySelector("#probability-24h").textContent = percent(probability24h, 1);
   document.querySelector("#probability-7d").textContent = percent(probability168h, 1);
+  document.querySelector("#data-quality-label").textContent = "数据状态";
   document.querySelector("#interval-4h").textContent = probability4h === null
     ? "滚动 4 小时窗口超出预测范围"
     : intervalText(cumulativeInterval(forecast, "four_hours"));
@@ -419,36 +408,50 @@ function renderForecast(forecast) {
     ` · 样本充分度：${percent(sampleSufficiency, 0)}`;
   document.querySelector("#forecast-window").textContent =
     `${formatTime(slots[0].start)} → ${formatTime(slots.at(-1).end)}`;
-  document.querySelector("#forecast-issued-at").textContent = formatTime(forecast.data.issued_at);
-  document.querySelector("#knowledge-cutoff").textContent = formatTime(forecast.data.knowledge_cutoff);
-  document.querySelector("#model-version").textContent = forecast.data.model?.version ?? "—";
-  document.querySelector("#training-cutoff").textContent =
-    formatTime(forecast.data.model?.training_cutoff);
+  document.querySelector("#heatmap-legend").hidden = false;
+  document.querySelector("#heat-detail").hidden = false;
   renderHeatmap(slots);
 }
 
-function renderForecastError(message) {
+function renderForecastError(message, readiness = {}) {
+  const trained = challengerReady(readiness) && readiness.evaluation_waiting;
   for (const selector of [
     "#probability-4h",
     "#probability-24h",
     "#probability-7d",
-    "#data-quality",
   ]) {
-    document.querySelector(selector).textContent = "—";
+    document.querySelector(selector).textContent = trained ? "评估中" : "—";
   }
-  document.querySelector("#interval-4h").textContent = "当前预测不可用";
-  document.querySelector("#interval-24h").textContent = "当前预测不可用";
-  document.querySelector("#interval-7d").textContent = "当前预测不可用";
-  document.querySelector("#coverage").textContent = "数据覆盖暂不可用";
-  document.querySelector("#forecast-window").textContent = "当前预测区间不可用";
-  document.querySelector("#forecast-issued-at").textContent = "—";
-  document.querySelector("#knowledge-cutoff").textContent = "—";
-  document.querySelector("#model-version").textContent = "—";
-  document.querySelector("#training-cutoff").textContent = "—";
+  document.querySelector("#interval-4h").textContent =
+    trained ? "评估完成后显示" : "当前预测不可用";
+  document.querySelector("#interval-24h").textContent =
+    trained ? "评估完成后显示" : "当前预测不可用";
+  document.querySelector("#interval-7d").textContent =
+    trained ? "评估完成后显示" : "当前预测不可用";
+  document.querySelector("#data-quality-label").textContent =
+    trained ? "模型状态" : "数据状态";
+  document.querySelector("#data-quality").textContent =
+    trained ? "已训练" : "—";
+  const coverageDays = Number.isFinite(readiness.outcome_coverage?.hours)
+    ? Math.round(readiness.outcome_coverage.hours / 24)
+    : null;
+  const confirmedOutcomes = readiness.canonical_records?.confirmed_outcomes;
+  document.querySelector("#coverage").textContent = trained
+    ? [
+        Number.isInteger(coverageDays) ? `${coverageDays} 天历史覆盖` : null,
+        Number.isInteger(confirmedOutcomes) ? `${confirmedOutcomes} 次确认重置` : null,
+      ].filter(Boolean).join(" · ") || "正在积累真实评估数据"
+    : "数据覆盖暂不可用";
+  document.querySelector("#forecast-window").textContent =
+    trained ? "评估完成后生成" : "当前预测区间不可用";
+  document.querySelector("#heatmap-legend").hidden = true;
+  document.querySelector("#heat-detail").hidden = true;
   document.querySelector("#heatmap").innerHTML =
-    `<div class="empty-state error-state"><strong>预测尚未就绪</strong><p>${escapeHtml(message)}</p></div>`;
+    `<div class="empty-state${trained ? "" : " error-state"}"><strong>${trained ? "评估完成后显示每小时概率" : "预测尚未就绪"}</strong>${trained ? "" : `<p>${escapeHtml(message)}</p>`}</div>`;
   document.querySelector("#heat-detail").innerHTML =
-    "<strong>—</strong><div><span>当前预测不可用</span><time>等待新预测</time></div>";
+    trained
+      ? "<strong>—</strong><div><span>评估完成后显示每小时概率</span><time>评估中</time></div>"
+      : "<strong>—</strong><div><span>当前预测不可用</span><time>等待新预测</time></div>";
 }
 
 function renderPublicationWarning(forecastResult, readinessResult) {
@@ -457,7 +460,10 @@ function renderPublicationWarning(forecastResult, readinessResult) {
   const serving = forecastResult.data?.serving ?? {};
   const blockers = serving.publication_blockers ?? readiness.publication_blockers ?? [];
   const syntheticDemo = serving.synthetic_demo === true || readiness.synthetic_only === true;
-  if (readiness.publication_ready === true && !syntheticDemo) {
+  if (
+    (readiness.publication_ready === true && !syntheticDemo) ||
+    (challengerReady(readiness) && readiness.evaluation_waiting)
+  ) {
     target.hidden = true;
     target.textContent = "";
     return;
@@ -487,7 +493,9 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
       "warning",
       coverageWaiting
         ? `历史覆盖复验中 · 最早 ${formatCompactTime(coverageWaiting.earliest_recheck_at)}`
-        : "模型评估数据积累中",
+        : challengerReady(readiness)
+          ? "模型已训练 · 评估中"
+          : "模型评估中",
     );
   } else if (!forecast?.data) {
     setStatus("error", "预测暂不可用");
@@ -515,10 +523,6 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
         : `预测生成于 ${formatCompactTime(forecast.data.issued_at)}`,
     );
   }
-  const exactText = exact
-    ? `核心来源：${providerStatusLabels[exact.status] ?? exact.status}${exactLastSuccess ? `，更新于 ${formatCompactTime(exactLastSuccess)}` : ""}`
-    : "核心来源：不可用";
-  document.querySelector("#quality-explanation").textContent = `${exactText}。`;
 }
 
 function renderEvidenceResponse(result) {
@@ -574,14 +578,17 @@ async function load() {
     ) {
       renderForecast(forecastResult.data);
     } else {
-      renderForecastError(forecastErrorText(forecastResult));
+      renderForecastError(
+        forecastErrorText(forecastResult, readinessResult.data),
+        readinessResult.data,
+      );
     }
     renderPublicationWarning(forecastResult, readinessResult);
     renderEvidenceResponse(evidenceResult);
     renderHealth(forecastResult, healthResult, readinessResult);
   } catch (error) {
     console.error(error);
-    renderForecastError(error.message);
+    renderForecastError(error.message, readinessResult.data);
     setStatus("error", "预测渲染失败");
   } finally {
     lastLoadedAt = Date.now();

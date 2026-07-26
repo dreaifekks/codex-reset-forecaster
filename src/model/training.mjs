@@ -70,7 +70,10 @@ export async function buildTrainingExamples(store, config, {
   asOfMode = null,
   coverageAsOfMode = null,
 } = {}) {
-  const cutoff = floorHour(trainingCutoff);
+  const cutoff = new Date(trainingCutoff);
+  if (Number.isNaN(cutoff.getTime())) {
+    throw new TypeError("Invalid training cutoff");
+  }
   const [signals, outcomes, observations] = await Promise.all([
     store.all("normalized_signal", { latestOnly: false }),
     store.all("reset_outcome", { latestOnly: false }),

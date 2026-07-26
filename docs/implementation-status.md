@@ -64,17 +64,18 @@ checks rather than silently reused.
 
 ## Remaining live acceptance
 
-The Tibo-authority definition and delayed daily-ledger contract are implemented,
-but the current honest state is still not publication-ready. A first run creates
-pending daily candidates; it does not immediately create eligible historical
-negatives. There is not yet a compatible real-data evaluation or champion that
-satisfies the publication gate.
+The Tibo-authority definition and delayed daily-ledger contract are implemented.
+The live service now has eligible historical coverage and a compatible,
+converged challenger trained from it. The current honest state is still not
+publication-ready because no causal out-of-sample fold has matured under the new
+availability clock, and there is no compatible champion that satisfies the
+publication gate.
 
 Public live accuracy requires all of the following:
 
-1. run the service with `config/tibo-authority-live.json` and keep observing the
-   same closed UTC ledgers through the 36-hour/two-fetch/six-hour stability gate;
-2. keep collecting immutable hourly predictions and adequate
+1. keep the service running with `config/tibo-authority-live.json` so each new
+   closed UTC ledger completes the 36-hour/two-fetch/six-hour stability gate;
+2. keep collecting adequate
    `negative_label_eligible` coverage;
 3. evaluate at least 1,008 hourly windows and 20 eligible events;
 4. report live settlements under `as_issued` without substituting archive replay;

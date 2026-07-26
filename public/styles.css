@@ -40,6 +40,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.legend[hidden],
+.heat-detail[hidden],
+.evaluation-results[hidden] {
+  display: none;
+}
+
 button,
 a {
   -webkit-tap-highlight-color: transparent;

@@ -32,7 +32,7 @@
         <div>
           <p class="eyebrow">CODEX · 付费计划全平台重置</p>
           <h1>未来 7 天重置预测</h1>
-          <p class="lede">预测未来 168 小时内发生全平台重置的可能性。</p>
+          <p class="lede">未来 168 小时内发生重置的可能性。</p>
         </div>
         <div class="heading-meta">
           <div class="timezone-display" id="timezone-display">时区 · —</div>
@@ -48,7 +48,7 @@
             <strong id="probability-7d">—</strong>
             <span>未来 168 小时内发生重置的可能性</span>
           </div>
-          <small class="interval-note" id="interval-7d">80% 不确定区间：等待数据</small>
+          <small class="interval-note" id="interval-7d">大致范围（80%）：等待数据</small>
           <div class="publication-warning" id="publication-warning" role="alert" hidden></div>
         </div>
         <div class="watch-aside">
@@ -62,37 +62,18 @@
         <article class="summary-card">
           <p>未来 4 小时</p>
           <strong id="probability-4h">—</strong>
-          <small id="interval-4h">80% 不确定区间：等待数据</small>
+          <small id="interval-4h">大致范围（80%）：等待数据</small>
         </article>
         <article class="summary-card">
           <p>未来 24 小时</p>
           <strong id="probability-24h">—</strong>
-          <small id="interval-24h">80% 不确定区间：等待数据</small>
+          <small id="interval-24h">大致范围（80%）：等待数据</small>
         </article>
         <article class="summary-card">
-          <p>数据状态</p>
+          <p id="data-quality-label">数据状态</p>
           <strong id="data-quality">—</strong>
           <small id="coverage">数据覆盖暂不可用</small>
         </article>
-      </section>
-
-      <section class="panel forecast-audit" aria-labelledby="forecast-audit-title">
-        <div>
-          <p class="eyebrow">预测信息</p>
-          <h2 id="forecast-audit-title">时间与模型</h2>
-        </div>
-        <dl class="forecast-metadata">
-          <div><dt>预测发布</dt><dd id="forecast-issued-at">—</dd></div>
-          <div><dt>信息截止</dt><dd id="knowledge-cutoff">—</dd></div>
-          <div><dt>模型版本</dt><dd id="model-version">—</dd></div>
-          <div><dt>训练截止</dt><dd id="training-cutoff">—</dd></div>
-        </dl>
-      </section>
-
-      <section class="trust-grid" aria-label="指标含义">
-        <article><h2>概率</h2><p>指定时间内发生重置的估计概率。</p></article>
-        <article><h2>不确定区间</h2><p id="uncertainty-explanation">表示模型对概率的不确定范围。</p></article>
-        <article><h2>数据质量</h2><p id="quality-explanation">综合历史覆盖、事件样本和来源新鲜度。</p></article>
       </section>
 
       <section class="panel forecast-panel" aria-labelledby="timeline-title">
@@ -103,7 +84,7 @@
             <p class="section-description">每格代表一个小时，颜色越亮概率越高。</p>
           </div>
         </div>
-        <div class="legend" aria-label="概率颜色图例">
+        <div class="legend" id="heatmap-legend" aria-label="概率颜色图例">
           <span>较低</span>
           <span class="legend-cells" aria-hidden="true">
             <i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i>
@@ -118,7 +99,6 @@
           <strong>—</strong>
           <div><span>该小时首次重置概率</span><time>请选择一个小时</time></div>
         </div>
-        <p class="hint">每格是该小时首次重置概率；7 天是未来 168 小时累计概率。</p>
       </section>
 
       <section class="lower-grid signal-grid" aria-label="近期预测信号">
@@ -127,7 +107,7 @@
             <div>
               <p class="eyebrow">核心来源</p>
               <h2>Tibo 与官方动态</h2>
-              <p class="section-description">重置、产品发布和服务状态相关动态。</p>
+              <p class="section-description">Tibo 的重置动态和相关官方消息。</p>
             </div>
           </div>
           <p class="cutoff-note" id="evidence-cutoff">仅显示预测信息截止时间前已知的信号。</p>
@@ -138,7 +118,7 @@
             <div>
               <p class="eyebrow">社区参考</p>
               <h2>社区内容</h2>
-              <p class="section-description">社区讨论、竞品动态与使用反馈，仅供参考。</p>
+              <p class="section-description">社区讨论、竞品动态与使用反馈。</p>
             </div>
           </div>
           <ol class="evidence-list" id="community-signal-list" aria-live="polite"><li>正在加载社区参考…</li></ol>
@@ -150,7 +130,7 @@
           <div>
             <p class="eyebrow">新信号</p>
             <h2 id="pending-title">下一轮纳入</h2>
-            <p class="section-description">晚于当前信息截止时间，将用于下一次预测。</p>
+            <p class="section-description">新收到的信号会用于下一次预测。</p>
           </div>
         </div>
         <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>正在检查截止时间后的信号…</li></ol>

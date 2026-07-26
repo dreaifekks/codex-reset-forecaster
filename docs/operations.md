@@ -308,6 +308,16 @@ between daily retraining intervals. If a compatible champion already exists, it
 may continue issuing forecasts while the challenger waits, subject to the same
 publication gates.
 
+Training freezes the exact post-processing knowledge cutoff, so coverage that
+becomes verifiably available a few minutes after an hour boundary can be used in
+that run without backdating it. Walk-forward scoring remains aligned to the
+completed UTC hour. When the exact training cutoff has coverage but the hourly
+evaluation cutoff does not yet have it, the run reports
+`walk_forward_coverage_cutoff_pending` instead of a pipeline failure.
+New daily coverage candidates keep their exact recheck wake-up even while the
+top-level pipeline is waiting for evaluation, so a deadline just after an hour
+boundary is not deferred to the following hour.
+
 The canonical data directory is append-only under `data/records`. Immutable
 coverage assertions live under `data/audit`; `data/state/coverage.json` is only a
 rebuildable current view. Provider cursors, evaluations, runtime status, source

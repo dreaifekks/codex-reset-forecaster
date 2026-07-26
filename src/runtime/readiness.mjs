@@ -603,6 +603,9 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   const championRead = store.readModel("champion")
     .then((model) => ({ model, error: null }))
     .catch((error) => ({ model: null, error }));
+  const challengerRead = store.readModel("challenger")
+    .then((model) => ({ model, error: null }))
+    .catch((error) => ({ model: null, error }));
   const [
     observationRevisions,
     signals,
@@ -612,6 +615,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     settlements,
     coverage,
     championResult,
+    challengerResult,
     latestWalkForward,
     championEvaluation,
     issued,
@@ -632,6 +636,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       { config },
     ),
     championRead,
+    challengerRead,
     store.readState("walk-forward-summary", null),
     store.readState("champion-evaluation", null),
     store.readState("issued-evaluation-summary", null),
@@ -645,6 +650,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     ),
   ]);
   const champion = championResult.model;
+  const challenger = challengerResult.model;
   const currentOutcomes = latestRevisions(outcomes);
   const currentPredictions = latestRevisions(predictions);
   const currentSettlements = latestRevisions(settlements);
@@ -686,6 +692,29 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       championCompatibility = { compatible: true, reason: null };
     } catch (error) {
       championCompatibility = { compatible: false, reason: error.message };
+    }
+  }
+  let challengerCompatibility = challengerResult.error
+    ? {
+        compatible: false,
+        reason:
+          `challenger_artifact_invalid: ${challengerResult.error.message}`,
+      }
+    : { compatible: false, reason: "challenger_missing" };
+  if (challenger) {
+    try {
+      assertModelCompatibility(challenger, {
+        featureNames: FEATURE_NAMES,
+        featureSchemaVersion: config.feature_schema_version,
+        modelContractHash: modelContractHash(config),
+        requireConverged: true,
+      });
+      challengerCompatibility = { compatible: true, reason: null };
+    } catch (error) {
+      challengerCompatibility = {
+        compatible: false,
+        reason: error.message,
+      };
     }
   }
   let championArtifact = null;
@@ -983,6 +1012,21 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       champion_available: Boolean(champion),
       version: champion?.model_version ?? null,
       compatibility: championCompatibility,
+      challenger: {
+        available: Boolean(challenger),
+        ready: Boolean(challenger && challengerCompatibility.compatible),
+        version: challenger?.model_version ?? null,
+        trained_at: challenger?.trained_at ?? null,
+        training_cutoff: challenger?.training_cutoff ?? null,
+        converged: challenger?.converged === true,
+        example_count: Number.isInteger(challenger?.example_count)
+          ? challenger.example_count
+          : null,
+        event_count: Number.isInteger(challenger?.event_count)
+          ? challenger.event_count
+          : null,
+        compatibility: challengerCompatibility,
+      },
       walk_forward_gate_passed: walkForward?.gate?.passed ?? false,
       walk_forward_event_recall: walkForward?.metrics?.event_window_recall ?? null,
       walk_forward_evidence_mode: walkForward?.evidence_mode ?? null,

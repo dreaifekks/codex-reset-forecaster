@@ -598,6 +598,27 @@ test("a newer extractor result replaces the same observation without double coun
     selectCurrentSignals([current, old, laterConfiguredExtractor]),
     [laterConfiguredExtractor],
   );
+
+  const legacyHealthSignal = {
+    ...current,
+    record_id: "sig_legacy_provider_health",
+    data: {
+      ...current.data,
+      observation_refs: [{ record_id: "obs_provider_health", revision: 1 }],
+      provenance: {
+        ...current.data.provenance,
+        source_identity_id: null,
+        source_published_at: null,
+        canonical_source_url: null,
+        root_evidence_id:
+          "x_search_gateway_hermes:health-2026-07-26T08:00:00.000Z-error",
+      },
+    },
+  };
+  assert.deepEqual(
+    selectCurrentSignals([current, legacyHealthSignal]),
+    [current],
+  );
 });
 
 test("extractor upgrades replay every exact raw revision without backdating new signals", async (t) => {

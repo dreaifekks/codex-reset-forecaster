@@ -1,5 +1,8 @@
 import { runPipeline } from "../pipeline/run.mjs";
-import { normalizeCoverageWaitingSummary } from "../core/coverage-waiting.mjs";
+import {
+  aggregateCoverageWaiting,
+  normalizeCoverageWaitingSummary,
+} from "../core/coverage-waiting.mjs";
 import { normalizeEvaluationWaiting } from "../model/evaluation.mjs";
 
 const HOUR_MS = 3_600_000;
@@ -73,6 +76,12 @@ export function startScheduler({
           now: finishedAt,
         })
         : null;
+      const pendingCoverageRecheck = aggregateCoverageWaiting(
+        Object.values(result.collection ?? {})
+          .filter((entry) => entry?.required === true)
+          .map((entry) => entry.coverage_waiting),
+        { now: finishedAt },
+      );
       const evaluationWaiting = result.status === "waiting_for_evaluation"
         ? normalizeEvaluationWaiting(result.evaluation_waiting)
         : null;
@@ -84,8 +93,9 @@ export function startScheduler({
       const trainingError = result.status === "completed_with_training_error"
         ? String(result.training?.error ?? "").trim() || null
         : null;
-      if (coverageWaiting && !coverageWaiting.recheck_due) {
-        preferredNextRunAt = coverageWaiting.earliest_recheck_at;
+      const nextCoverageRecheck = coverageWaiting ?? pendingCoverageRecheck;
+      if (nextCoverageRecheck && !nextCoverageRecheck.recheck_due) {
+        preferredNextRunAt = nextCoverageRecheck.earliest_recheck_at;
       }
       if (
         ["waiting_for_coverage", "waiting_for_evaluation"].includes(result.status) &&

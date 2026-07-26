@@ -67,7 +67,7 @@ async function fetchJson(url) {
   }
 }
 
-function drawCalibration(buckets = []) {
+function drawCalibration(buckets = [], emptyText = "暂无成熟样本") {
   const svg = document.querySelector("#calibration-chart");
   const namespace = "http://www.w3.org/2000/svg";
   const margin = 52;
@@ -89,7 +89,7 @@ function drawCalibration(buckets = []) {
   if (valid.length === 0) {
     svg.insertAdjacentHTML(
       "beforeend",
-      `<text x="${margin + size / 2}" y="${margin + size / 2}" class="chart-empty">暂无成熟样本</text>`,
+      `<text x="${margin + size / 2}" y="${margin + size / 2}" class="chart-empty">${escapeHtml(emptyText)}</text>`,
     );
     return;
   }
@@ -163,6 +163,12 @@ function setGate(kind, text) {
   gate.innerHTML = `<span aria-hidden="true"></span>${escapeHtml(text)}`;
 }
 
+function showEvaluationWaiting(waiting) {
+  document.querySelector("#evaluation-waiting-panel").hidden = !waiting;
+  document.querySelectorAll(".evaluation-results")
+    .forEach((node) => { node.hidden = waiting; });
+}
+
 function renderRankingPolicy(evaluation) {
   const policy = evaluation.ranking_policy;
   const budget = policy?.top_window_hours_per_week ??
@@ -173,6 +179,7 @@ function renderRankingPolicy(evaluation) {
 }
 
 function renderSummary(evaluation, readiness = {}) {
+  showEvaluationWaiting(false);
   const synthetic = Boolean(
     evaluation.evidence_mode === "synthetic_replay" || readiness.synthetic_only,
   );
@@ -255,6 +262,27 @@ async function load() {
   ]);
   try {
     if (!summaryResult.ok || !summaryResult.data) {
+      const readiness = readinessResult.data ?? {};
+      const evaluationPending = Boolean(
+        readiness.evaluation_waiting &&
+        readiness.model?.challenger?.ready,
+      );
+      if (evaluationPending) {
+        showEvaluationWaiting(true);
+        setGate("warning", "模型已训练 · 评估中");
+        document.querySelector("#evaluation-mode").textContent = "评估进行中";
+        document.querySelector("#evaluation-description").textContent =
+          "积累足够样本后显示精度结果。";
+        document.querySelectorAll("#evaluation-metadata dd")
+          .forEach((node) => { node.textContent = "评估中"; });
+        document.querySelector("#event-table").innerHTML =
+          "<tr><td colspan=\"8\">评估完成后显示事件结果。</td></tr>";
+        document.querySelector("#ranking-policy").textContent =
+          "评估完成后显示窗口结果。";
+        drawCalibration([], "正在积累样本");
+        return;
+      }
+      showEvaluationWaiting(false);
       const invalidated = summaryResult.data?.error === "evaluation_invalidated";
       setGate(
         "error",

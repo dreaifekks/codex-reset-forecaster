@@ -36,6 +36,10 @@ const RELEASE_TERMS = /\b(launch(?:ed|ing)?|release(?:d|s|ing)?|new model|announ
 const INCIDENT_TERMS = /\b(incident|outage|degrad(?:ed|ation)|capacity|unavailable|recovered|restore(?:d|ing)?|partial(?:ly)? down|system errors?|hanging|war\s*room|investigat(?:e|es|ed|ing|ion)|mitigat(?:e|es|ed|ing|ion)|usage (?:drain(?:s|ed|ing)?|consumption)|fleet (?:is )?melting)\b/i;
 const CODEX_TERMS = /\bcodex(?:er|ers)?\b/i;
 const CHATGPT_WORK_TERMS = /\bchatgpt\s+work\b/i;
+const SIGNAL_MEDIA_TYPES = new Set([
+  "text/plain",
+  "application/vnd.x-search-summary+text",
+]);
 
 function resetScopeSegments(text) {
   return text
@@ -298,6 +302,9 @@ export function extractSignal(observation, config, {
   createdAt = observation.data.fetched_at,
   evidenceRootOverride = null,
 } = {}) {
+  if (!SIGNAL_MEDIA_TYPES.has(observation.data.content.media_type)) {
+    return null;
+  }
   const extractor = extractorContract(config);
   const text = observation.data.content.text.replace(/[*_`]/g, "");
   const eventType = classifyEvent(text);
