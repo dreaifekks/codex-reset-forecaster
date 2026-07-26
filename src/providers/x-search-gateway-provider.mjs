@@ -6,6 +6,13 @@ import {
   rawObservationFromItem,
   xStatusIdentity,
 } from "./raw.mjs";
+import {
+  DEFAULT_X_SEARCH_GATEWAY_UPSTREAM,
+  isSummaryXSearchGatewayUpstream,
+  normalizeXSearchGatewayUpstream,
+} from "./x-search-gateway-semantics.mjs";
+
+const PROVIDER_VERSION = "0.3.0";
 
 function validTimestamp(value) {
   if (!value || Number.isNaN(Date.parse(value))) return null;
@@ -37,7 +44,9 @@ export class XSearchGatewayProvider {
     this.readFile = readFileFn;
     this.now = now;
     this.baseUrl = config.base_url.replace(/\/$/, "");
-    this.upstreamProvider = config.upstream_provider ?? "hermes";
+    this.upstreamProvider = normalizeXSearchGatewayUpstream(
+      config.upstream_provider ?? DEFAULT_X_SEARCH_GATEWAY_UPSTREAM,
+    );
     this.providerName = `x_search_gateway_${this.upstreamProvider}`;
   }
 
@@ -81,6 +90,14 @@ export class XSearchGatewayProvider {
         `X Search Gateway ${response.status}: ${String(payload.error ?? payload.message ?? "search failed").slice(0, 300)}`,
       );
     }
+    if (
+      normalizeXSearchGatewayUpstream(payload.provider) !==
+      this.upstreamProvider
+    ) {
+      throw new Error(
+        `X Search Gateway provider mismatch: requested ${this.upstreamProvider}`,
+      );
+    }
     return payload;
   }
 
@@ -105,7 +122,8 @@ export class XSearchGatewayProvider {
       canonicalXStatusUrl(event.url, handle || "i") ??
       canonicalXStatusUrl(event.event_id, handle || "i") ??
       canonicalXStatusUrl(event.id, handle || "i");
-    const isSummary = this.upstreamProvider === "hermes";
+    const isSummary =
+      isSummaryXSearchGatewayUpstream(this.upstreamProvider);
     const sourcePublishedAt = validTimestamp(event.created_at);
     return {
       provider_item_id: providerItemId(event),
@@ -153,7 +171,7 @@ export class XSearchGatewayProvider {
       },
     }, {
       providerName: this.providerName,
-      providerVersion: "0.1.0",
+      providerVersion: PROVIDER_VERSION,
       config: this.config,
       firstSeenAt: at,
       fetchedAt: at,
@@ -190,7 +208,7 @@ export class XSearchGatewayProvider {
       for (const item of items) {
         const result = await appendRawObservationRevision(store, item, {
           providerName: this.providerName,
-          providerVersion: "0.2.0",
+          providerVersion: PROVIDER_VERSION,
           config: this.config,
           firstSeenAt: fetchedAt,
           fetchedAt,

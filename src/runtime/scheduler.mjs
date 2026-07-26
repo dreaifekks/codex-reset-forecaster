@@ -61,14 +61,20 @@ export function startScheduler({
     let preferredNextRunAt = null;
     try {
       const state = await store.readState("runtime", {});
+      const lastRetrainRequest = Date.parse(
+        state.last_retrain_requested_at ?? state.last_training_at ?? "",
+      );
+      const retrain = !Number.isFinite(lastRetrainRequest) ||
+        startedAt.getTime() - lastRetrainRequest >=
+          config.runtime.retrain_interval_hours * HOUR_MS;
       await store.writeState("runtime", {
         ...state,
         current_run_started_at: startedAt.toISOString(),
         last_run_started_at: startedAt.toISOString(),
+        last_retrain_requested_at: retrain
+          ? startedAt.toISOString()
+          : state.last_retrain_requested_at ?? state.last_training_at ?? null,
       });
-      const lastTraining = state.last_training_at ? Date.parse(state.last_training_at) : 0;
-      const retrain = !lastTraining ||
-        startedAt.getTime() - lastTraining >= config.runtime.retrain_interval_hours * HOUR_MS;
       const result = await run(store, config, { clock: now, collect: true, retrain });
       const finishedAt = now();
       const coverageWaiting = result.status === "waiting_for_coverage"
@@ -126,6 +132,9 @@ export function startScheduler({
         last_training_at: result.training?.succeeded
           ? finishedAt.toISOString()
           : state.last_training_at ?? null,
+        last_retrain_requested_at: retrain
+          ? startedAt.toISOString()
+          : state.last_retrain_requested_at ?? state.last_training_at ?? null,
         last_evaluation_at: result.training?.evaluation
           ? finishedAt.toISOString()
           : state.last_evaluation_at ?? null,

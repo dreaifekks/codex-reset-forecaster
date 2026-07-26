@@ -1,5 +1,5 @@
 {
-  "config_version": "provider-config/0.2.8",
+  "config_version": "provider-config/0.2.9",
   "taxonomy_version": "reset-taxonomy/0.2.2",
   "feature_schema_version": "reset-features/0.2.7",
   "deduplication_version": "reset-dedup/0.2.2",
@@ -59,9 +59,9 @@
       "enabled": false,
       "freshness_max_age_hours": 2.5,
       "base_url": "http://127.0.0.1:8788",
-      "upstream_provider": "hermes",
+      "upstream_provider": "grokbuild",
       "token_file": null,
-      "request_timeout_ms": 190000,
+      "request_timeout_ms": 260000,
       "limit": 20,
       "state_prefix": "codex-reset-forecaster",
       "confirmation_identities": [

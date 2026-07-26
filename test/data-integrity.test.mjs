@@ -323,14 +323,14 @@ test("providers append a raw revision only when stable item content changes", as
   );
 });
 
-test("Hermes summaries share the canonical X root without inheriting source recency or authority", async (t) => {
+test("Grokbuild summaries share the canonical X root without inheriting source recency or authority", async (t) => {
   const { directory, store } = await temporaryStore(t, "reset-gateway-root-");
   const config = await loadConfig({ overrides: {
     runtime: { data_dir: directory },
     providers: {
       x_search_gateway: {
         enabled: true,
-        upstream_provider: "hermes",
+        upstream_provider: "grokbuild",
         queries: [{ name: "reset", query: "from:thsottiaux reset" }],
       },
     },
@@ -373,7 +373,7 @@ test("Hermes summaries share the canonical X root without inheriting source rece
     now: () => collectedAt,
     fetchFn: async () => new Response(JSON.stringify({
       ok: true,
-      provider: "hermes",
+      provider: "grokbuild",
       all_events: [{
         event_id: `https://twitter.com/thsottiaux/status/${statusId}`,
         handle: "thsottiaux",

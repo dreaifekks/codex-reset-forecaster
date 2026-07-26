@@ -250,18 +250,21 @@ The provider-neutral runtime can also read the local/LAN X Search Gateway:
 ```bash
 export X_SEARCH_GATEWAY_ENABLED=true
 export X_SEARCH_GATEWAY_URL='http://gateway-host:8787'
-export X_SEARCH_GATEWAY_PROVIDER=hermes
+export X_SEARCH_GATEWAY_PROVIDER=grokbuild
 export X_SEARCH_GATEWAY_TOKEN_FILE='/path/to/gateway-token'
 node src/cli.mjs ingest-gateway --query tibo-reset-signals
 node src/cli.mjs process
 ```
 
-Keep the bearer value out of commands, logs, and committed configuration. Hermes
-may return faithful summaries rather than exact source text, so the adapter marks
+Keep the bearer value out of commands, logs, and committed configuration.
+`grokbuild` is the current gateway default and runs the local Grok CLI search path.
+Its output is search-derived rather than attested source text, so the adapter marks
 those records as aggregator-only context and outcome adjudication rejects them.
-The SocialData upstream can return exact text but may bill a full upstream page
-even for a small requested limit; enable it only deliberately. Neither gateway
-mode asserts exhaustive timeline coverage, so it cannot create negative labels.
+If the Grokbuild path is unavailable, set `X_SEARCH_GATEWAY_PROVIDER=hermes` as a
+rollback; Hermes receives the same summary/context-only treatment. The SocialData
+upstream can return exact text but may bill a full upstream page even for a small
+requested limit; enable it only deliberately. No gateway mode asserts exhaustive
+timeline coverage, so gateway results cannot create negative labels.
 
 ## Scheduled website service
 
@@ -270,8 +273,9 @@ By default, `npm start` only serves saved data. Set
 and, unless disabled, once at startup. A run collects and processes first, freezes
 an actual post-collection knowledge cutoff, and starts its 168-hour target at the
 next complete hour. `issued_at` is recorded when publication is complete rather
-than copied from the run's start. The scheduler prevents overlapping runs and
-retries on the following hour after an error.
+than copied from the run's start. The scheduler prevents overlapping runs. The
+provider/forecast pipeline retries on the following hour after an error, while
+parameter-refit requests remain limited by the configured batch interval.
 
 New provider signals are normalized into the next hourly feature snapshot and may
 change that forecast immediately without changing model parameters. Parameter
@@ -280,9 +284,13 @@ Each batch uses only labels mature and available at its frozen training cutoff a
 performs the walk-forward evaluation attempt in the same run; there is no separate
 weekly evaluator. Data that arrives while training is running is left for the next
 batch and does not restart the current fit. Failed or non-converged challengers do
-not replace the stable model. A stored challenger can be re-evaluated between batch
-fits as a causal fold becomes scorable; this does not retrain it or alter its
-parameters.
+not replace the stable model. A failed retrain request is also rate-limited by the
+same interval instead of launching the optimizer again every hour. A stored
+challenger can be re-evaluated between batch fits as a causal fold becomes
+scorable; this does not retrain it or alter its parameters. If a mature evaluation
+sample fails the quality gate, a validated champion remains active. With no
+validated champion, new forecasts fail closed until a later batch using newly
+mature data passes or the operator explicitly changes the training contract.
 
 ```bash
 RESET_SCHEDULER_ENABLED=true npm start

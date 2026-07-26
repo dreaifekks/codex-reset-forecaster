@@ -44,6 +44,9 @@ been validated.
 - New provider intelligence is incorporated into as-of features and a fresh
   forecast on the hourly pipeline cadence; it does not wait for parameter
   retraining.
+- The optional X Search Gateway currently defaults to `grokbuild`. Both Grokbuild
+  and the `hermes` rollback path are summary/context-only inputs: they may adjust
+  features but cannot confirm an outcome or establish negative-label coverage.
 - Model parameters are batch-refit at most once every 24 hours and only from
   labels that are mature and available at the frozen training cutoff. Records that
   arrive while a fit is running enter the next batch instead of restarting the

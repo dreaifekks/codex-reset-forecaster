@@ -168,6 +168,14 @@ walk-forward plus immutable as-issued evidence in the background. Re-evaluating 
 stored pending challenger as new fold coverage matures is not a parameter update
 and does not refit the model.
 
+If a sufficiently large evaluation sample fails the recall, Brier-skill, or
+calibration gate, the challenger is not promoted and the optimizer is not rerun
+repeatedly on the same frozen sample. A compatible validated champion keeps
+serving. Without one, the failed challenger does not continue issuing new
+forecasts merely because it was previously provisional. The scheduler waits for
+the next configured batch interval and newly mature data, unless an operator
+explicitly changes the feature/training contract and requests a fit.
+
 `provisional` and `validated` are performance-evidence states:
 
 - A provisional bootstrap may be used and displayed while background validation

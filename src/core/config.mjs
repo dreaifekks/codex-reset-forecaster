@@ -79,6 +79,20 @@ function validateProvisionalBootstrap(config) {
   }
 }
 
+function validateOutcomeCoverageProviders(config) {
+  const providers = config.model?.outcome_coverage_providers;
+  if (
+    !Array.isArray(providers) ||
+    providers.some((provider) =>
+      String(provider).startsWith("x_search_gateway_")
+    )
+  ) {
+    throw new TypeError(
+      "model.outcome_coverage_providers cannot use X Search Gateway providers because search results are not exhaustive coverage",
+    );
+  }
+}
+
 function semanticConfigHash(config) {
   const {
     runtime: _runtime,
@@ -129,6 +143,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateHistoricalMonitorCoverage(config);
   validateModelCalibrator(config);
   validateProvisionalBootstrap(config);
+  validateOutcomeCoverageProviders(config);
   config.config_hash = semanticConfigHash(config);
   return config;
 }

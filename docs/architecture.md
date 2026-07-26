@@ -44,8 +44,10 @@ the primary confirmation source and a separate set of community and ecosystem
 sources as context. This source choice does not change the provider-neutral record
 or adapter contracts.
 
-An optional X Search Gateway adapter can supply additional current context. Hermes
-gateway results use a summary media type and are always treated as aggregator
+An optional X Search Gateway adapter can supply additional current context. The
+current default upstream is `grokbuild`, backed by the gateway's local Grok CLI.
+Grokbuild and the `hermes` rollback upstream both return search-derived summaries,
+so their results use a summary media type and are always treated as aggregator
 signals: they cannot confirm an outcome, receive original-Tibo feature authority,
 or assert observation coverage. An exact text provider such as SocialData may
 preserve a qualifying Tibo statement, but

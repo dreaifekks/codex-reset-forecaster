@@ -32,6 +32,9 @@ import {
   normalizeCoverageWaitingSummary,
   normalizeProviderCoverageWaiting,
 } from "../core/coverage-waiting.mjs";
+import {
+  isExactXSearchGatewayUpstream,
+} from "../providers/x-search-gateway-semantics.mjs";
 
 const HOUR_MS = 3_600_000;
 const EXPECTED_FORECAST_HOURS = 168;
@@ -318,13 +321,15 @@ function providerRoles(name, provider, state, outcomeProviders) {
   const roles = new Set();
   const upstream = state.upstream_provider ?? provider.upstream_provider ?? null;
   const providerId = canonicalProviderId(name, provider, state);
-  const isSummaryGateway = name === "x_search_gateway" && upstream === "hermes";
+  const isExactGateway =
+    name === "x_search_gateway" &&
+    isExactXSearchGatewayUpstream(upstream);
   if (outcomeProviders.has(providerId)) roles.add("required_outcome");
   if (
-    outcomeProviders.has(providerId) ||
+    (outcomeProviders.has(providerId) && name !== "x_search_gateway") ||
     name === "x" ||
     name.includes("historical") ||
-    (name === "x_search_gateway" && upstream && !isSummaryGateway)
+    isExactGateway
   ) roles.add("exact");
   if (
     name === "x_search_gateway" ||

@@ -646,6 +646,10 @@ test("hourly scheduler records evaluation waiting and does not refit every hour"
   assert.equal(state.last_status, "waiting_for_evaluation");
   assert.deepEqual(state.last_evaluation_waiting, evaluationWaiting);
   assert.equal(state.last_training_at, "2026-07-25T20:30:00.000Z");
+  assert.equal(
+    state.last_retrain_requested_at,
+    "2026-07-25T20:30:00.000Z",
+  );
   assert.equal(state.last_prediction_id, null);
   assert.equal(state.last_error, null);
   assert.equal(state.last_failure_at, undefined);
@@ -691,6 +695,7 @@ test("evaluation waiting can keep a compatible champion forecast in service", as
 
 test("stable champion fallback keeps serving but exposes the training failure", async (t) => {
   const store = await temporaryStore(t);
+  const retrainValues = [];
   const scheduler = startScheduler({
     store,
     config: {
@@ -698,27 +703,37 @@ test("stable champion fallback keeps serving but exposes the training failure", 
     },
     now: () => new Date("2026-07-25T20:30:00.000Z"),
     logger: { info() {}, error() {} },
-    run: async () => ({
-      status: "completed_with_training_error",
-      training: {
-        status: "failed",
-        succeeded: false,
-        error: "model artifact write failed",
-      },
-      forecast: { prediction: { record_id: "pred_stable_champion" } },
-      collection: {},
-      timing: { knowledge_cutoff: "2026-07-25T20:30:00.000Z" },
-    }),
+    run: async (_store, _config, options) => {
+      retrainValues.push(options.retrain);
+      return {
+        status: "completed_with_training_error",
+        training: {
+          status: "failed",
+          succeeded: false,
+          error: "model artifact write failed",
+        },
+        forecast: { prediction: { record_id: "pred_stable_champion" } },
+        collection: {},
+        timing: { knowledge_cutoff: "2026-07-25T20:30:00.000Z" },
+      };
+    },
   });
   t.after(() => scheduler.stop());
 
   await scheduler.runNow();
+  await scheduler.runNow();
+  assert.deepEqual(retrainValues, [true, false]);
   const state = await store.readState("runtime");
   assert.equal(state.last_status, "degraded");
   assert.equal(state.last_prediction_id, "pred_stable_champion");
   assert.equal(state.last_error, "model artifact write failed");
   assert.equal(state.last_success_at, "2026-07-25T20:30:00.000Z");
   assert.equal(state.last_failure_at, "2026-07-25T20:30:00.000Z");
+  assert.equal(state.last_training_at, null);
+  assert.equal(
+    state.last_retrain_requested_at,
+    "2026-07-25T20:30:00.000Z",
+  );
 });
 
 test("hourly scheduler still records genuine pipeline exceptions as failures", async (t) => {
@@ -793,7 +808,7 @@ test("outcome-only archive coverage never proves real negative-label readiness",
   assert.ok(readiness.publication_blockers.includes("negative_label_coverage_missing"));
 });
 
-test("freshness matches required providers by canonical adapter ID, not config key", async (t) => {
+test("freshness exposes an exact gateway by canonical adapter ID without granting coverage", async (t) => {
   const store = await temporaryStore(t);
   const now = new Date("2026-07-25T10:00:00Z");
   const config = await loadConfig({ overrides: {
@@ -801,7 +816,6 @@ test("freshness matches required providers by canonical adapter ID, not config k
       x: { enabled: false },
       x_search_gateway: { enabled: true, upstream_provider: "socialdata" },
     },
-    model: { outcome_coverage_providers: ["x_search_gateway_socialdata"] },
   } });
   await store.writeState("x-search-gateway-provider", {
     upstream_provider: "socialdata",
@@ -813,6 +827,60 @@ test("freshness matches required providers by canonical adapter ID, not config k
     freshness.providers.x_search_gateway.provider_id,
     "x_search_gateway_socialdata",
   );
-  assert.equal(freshness.groups.required_outcome.status, "fresh");
-  assert.deepEqual(freshness.groups.required_outcome.providers, ["x_search_gateway"]);
+  assert.deepEqual(
+    freshness.providers.x_search_gateway.roles,
+    ["exact", "context"],
+  );
+  assert.ok(
+    !freshness.groups.required_outcome.providers.includes("x_search_gateway"),
+  );
+});
+
+test("X Search Gateway cannot be configured as exhaustive outcome coverage", async () => {
+  await assert.rejects(
+    loadConfig({ overrides: {
+      providers: {
+        x_search_gateway: {
+          enabled: true,
+          upstream_provider: "socialdata",
+        },
+      },
+      model: {
+        outcome_coverage_providers: ["x_search_gateway_socialdata"],
+      },
+    } }),
+    /cannot use X Search Gateway providers/,
+  );
+});
+
+test("Grokbuild gateway readiness is context-only rather than an exact source", async (t) => {
+  const store = await temporaryStore(t);
+  const now = new Date("2026-07-26T10:00:00Z");
+  const config = await loadConfig({ overrides: {
+    providers: {
+      x: { enabled: false },
+      x_search_gateway: { enabled: true, upstream_provider: "grokbuild" },
+    },
+  } });
+  await store.writeState("x-search-gateway-provider", {
+    upstream_provider: "grokbuild",
+    last_success_at: now.toISOString(),
+    last_error: null,
+  });
+
+  const freshness = await getProviderFreshness(store, config, now);
+  assert.equal(
+    freshness.providers.x_search_gateway.provider_id,
+    "x_search_gateway_grokbuild",
+  );
+  assert.deepEqual(
+    freshness.providers.x_search_gateway.roles,
+    ["context"],
+  );
+  assert.ok(
+    !freshness.groups.exact.providers.includes("x_search_gateway"),
+  );
+  assert.ok(
+    freshness.groups.context.providers.includes("x_search_gateway"),
+  );
 });
