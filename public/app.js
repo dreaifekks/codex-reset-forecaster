@@ -431,6 +431,22 @@ function renderForecast(forecast) {
     ` · 样本充分度：${percent(sampleSufficiency, 0)}`;
   document.querySelector("#forecast-window").textContent =
     `${formatTime(slots[0].start)} → ${formatTime(slots.at(-1).end)}`;
+  const conditioning = forecast.data.authority_conditioning;
+  document.querySelector("#authority-window").textContent =
+    conditioning?.applied
+      ? [
+          `权威时间条件：${phaseLabels[conditioning.phase] ?? conditioning.phase}`,
+          `${percent(conditioning.prior_reliability, 0)} 版本化先验`,
+          conditioning.asserted_time_range
+            ? `${formatCompactTime(conditioning.asserted_time_range.start)} → ${formatCompactTime(conditioning.asserted_time_range.end)}`
+            : null,
+        ].filter(Boolean).join(" · ")
+      : "权威时间条件：当前未触发";
+  const recurrenceAnchor = forecast.data.recurrence_anchor;
+  document.querySelector("#recurrence-anchor").textContent =
+    recurrenceAnchor?.occurred_time_range
+      ? `重置周期锚点：${formatCompactTime(recurrenceAnchor.occurred_time_range.start)} 已确认重置`
+      : "重置周期锚点：暂无已确认事件";
   document.querySelector("#heatmap-legend").hidden = false;
   document.querySelector("#heat-detail").hidden = false;
   renderHeatmap(slots);
@@ -472,6 +488,10 @@ function renderForecastError(message, readiness = {}) {
   document.querySelector("#forecast-window").textContent = preparing
     ? "正在生成试用预测"
     : "当前预测区间不可用";
+  document.querySelector("#authority-window").textContent =
+    "权威时间条件：等待预测";
+  document.querySelector("#recurrence-anchor").textContent =
+    "重置周期锚点：等待预测";
   document.querySelector("#heatmap-legend").hidden = true;
   document.querySelector("#heat-detail").hidden = true;
   document.querySelector("#heatmap").innerHTML =

@@ -1,13 +1,13 @@
 {
-  "config_version": "provider-config/0.2.10",
+  "config_version": "provider-config/0.2.11",
   "taxonomy_version": "reset-taxonomy/0.2.2",
   "feature_schema_version": "reset-features/0.2.8",
   "deduplication_version": "reset-dedup/0.2.2",
   "timezone_database_version": "system",
   "extractor": {
     "model": "deterministic-rules",
-    "model_version": "0.2.6",
-    "prompt_version": "reset-extract/rules-0.2.6"
+    "model_version": "0.2.7",
+    "prompt_version": "reset-extract/rules-0.2.7"
   },
   "outcome_definition": {
     "version": "actual-platform-reset/1",
@@ -128,6 +128,22 @@
       "asserted_time_overlap": 0.5,
       "official_reset_intent_decay": 0.2,
       "official_incident_decay": 0.2
+    },
+    "authority_timing": {
+      "version": "authority-timing-first-event-mixture/1",
+      "enabled": true,
+      "reliability_basis": "versioned_prior_non_exhaustive_statement_history",
+      "phase_reliability": {
+        "scheduled": 0.8,
+        "expected": 0.55,
+        "started": 0.9
+      },
+      "eligible_source_roles": [
+        "official",
+        "product_lead",
+        "product_team_member"
+      ],
+      "maximum_asserted_duration_hours": 48
     },
     "minimum_outcomes": 3,
     "minimum_live_evaluation_windows": 1008,

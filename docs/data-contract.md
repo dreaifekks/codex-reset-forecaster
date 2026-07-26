@@ -97,7 +97,13 @@ schema version, provider coverage, and exact source record references.
 
 A seven-day list of hourly hazard and derived probabilities, plus the no-reset
 probability, uncertainty, data quality, model version, training cutoff, calibrator,
-and feature snapshot references.
+and feature snapshot references. New predictions also record
+`authority_conditioning`: the versioned policy, exact signal revision and asserted
+range when applied, its explicitly prior-only reliability basis, and baseline
+versus conditioned horizon probability. `recurrence_anchor` points to the exact
+latest confirmed outcome revision used to start the current next-reset cycle.
+These fields provide lineage; neither turns an announcement into a confirmed
+outcome.
 
 ### `prediction_settlement`
 

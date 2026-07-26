@@ -8,6 +8,7 @@ import { FixtureProvider } from "./providers/fixture-provider.mjs";
 import { XProvider } from "./providers/x-provider.mjs";
 import { XSearchGatewayProvider } from "./providers/x-search-gateway-provider.mjs";
 import { HistoricalMonitorProvider } from "./providers/historical-monitor-provider.mjs";
+import { TimelineJsonlProvider } from "./providers/timeline-jsonl-provider.mjs";
 import { DEMO_CONFIG_OVERRIDES } from "./demo/config.mjs";
 import { generateDemoHistory } from "./demo/history.mjs";
 import { processRecords, runPipeline, trainEvaluatePromote } from "./pipeline/run.mjs";
@@ -83,6 +84,13 @@ try {
       target: config.target,
       outcomeDefinition: config.outcome_definition,
     }).collect(store, { force: true }));
+  } else if (command === "ingest-timeline") {
+    const filePath = argument("--file");
+    if (!filePath) throw new TypeError("ingest-timeline requires --file PATH");
+    output(await new TimelineJsonlProvider({
+      filePath,
+      config,
+    }).collect(store));
   } else if (command === "process") {
     output(await processRecords(store, config, { now }));
   } else if (command === "train") {
@@ -109,7 +117,7 @@ try {
   } else if (command === "status") {
     output(await getReadiness(store, config));
   } else {
-    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-archive\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
+    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-archive\n  ingest-timeline --file PATH\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
   }
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

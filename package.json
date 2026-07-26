@@ -1,6 +1,6 @@
 {
   "name": "codex-reset-forecaster",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Provider-neutral hourly Codex platform reset forecaster",

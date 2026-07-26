@@ -11,6 +11,10 @@ import {
   assertModelCompatibility,
   predictHazard,
 } from "./logistic-hazard.mjs";
+import {
+  conditionAuthorityTimingHazards,
+  latestRecurrenceAnchorAsOf,
+} from "./authority-timing.mjs";
 
 function exactRefKey(record) {
   return `${record.record_id}@${record.revision}`;
@@ -41,6 +45,9 @@ export function assessPredictionIntegrity({
   model: suppliedModel = null,
   champion = null,
   config,
+  signals = [],
+  observations = [],
+  outcomes = [],
   tolerance = 1e-10,
 }) {
   const reasons = [];
@@ -186,7 +193,7 @@ export function assessPredictionIntegrity({
   }
   let recomputed;
   try {
-    recomputed = deriveProbabilitySlots(exactSnapshots.map((snapshot) => {
+    const baseHazards = exactSnapshots.map((snapshot) => {
       const predictionResult = predictHazard(
         modelArtifact,
         featuresToArray(snapshot.data.features),
@@ -197,7 +204,40 @@ export function assessPredictionIntegrity({
         hazard: predictionResult.probability,
         interval80: predictionResult.interval80,
       };
-    }));
+    });
+    let recomputedHazards = baseHazards;
+    if (prediction.data.authority_conditioning !== undefined) {
+      const conditioned = conditionAuthorityTimingHazards({
+        hazardEntries: baseHazards,
+        signals,
+        observations,
+        outcomes,
+        config,
+        knowledgeCutoff: prediction.data.knowledge_cutoff,
+      });
+      recomputedHazards = conditioned.hazardEntries;
+      if (
+        hashLabel(conditioned.metadata) !==
+          hashLabel(prediction.data.authority_conditioning)
+      ) {
+        reasons.push("prediction_authority_conditioning_mismatch");
+      }
+    }
+    const expectedAnchor = latestRecurrenceAnchorAsOf({
+      signals,
+      observations,
+      outcomes,
+      config,
+      knowledgeCutoff: prediction.data.knowledge_cutoff,
+    });
+    if (
+      prediction.data.recurrence_anchor !== undefined &&
+      hashLabel(expectedAnchor) !==
+        hashLabel(prediction.data.recurrence_anchor)
+    ) {
+      reasons.push("prediction_recurrence_anchor_mismatch");
+    }
+    recomputed = deriveProbabilitySlots(recomputedHazards);
   } catch {
     return {
       valid: false,

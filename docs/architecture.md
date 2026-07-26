@@ -153,6 +153,15 @@ probability. Probability, epistemic uncertainty, source/data quality, and
 extraction confidence remain separate. A separately versioned calibrator is fitted
 only to saved out-of-sample predictions.
 
+After the baseline hazards, a versioned exact-authority timing conditioner may
+mix first-event mass into one active asserted interval, then invert that mass back
+to hourly hazards. It uses only as-of-visible primary evidence, never a summary or
+extraction confidence, and the walk-forward evaluator runs the same path. Until
+timed-statement collection has an exhaustive denominator, its phase reliability
+is exposed as a semantic prior rather than described as learned accuracy. A newly
+confirmed reset consumes the old assertion and re-anchors the next first-reset
+forecast in the same pipeline run without waiting for retraining.
+
 Bootstrap fitting and performance validation are separate lifecycle concerns. When
 eligible historical labels already exist, the service may batch-fit a provisional
 model immediately at a frozen cutoff; training does not need to wait for new

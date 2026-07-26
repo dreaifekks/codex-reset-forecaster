@@ -71,6 +71,18 @@
       }
     ],
     "no_reset_probability": 0.6561,
+    "authority_conditioning": {
+      "policy_version": "authority-timing-first-event-mixture/1",
+      "applied": false,
+      "reliability_basis": "versioned_prior_non_exhaustive_statement_history",
+      "phase": null,
+      "prior_reliability": null,
+      "signal_ref": null,
+      "asserted_time_range": null,
+      "base_horizon_probability": 0.3439,
+      "conditioned_horizon_probability": 0.3439
+    },
+    "recurrence_anchor": null,
     "data_quality": {
       "score": 0.84,
       "provider_coverage": 0.91,

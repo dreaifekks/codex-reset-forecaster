@@ -412,7 +412,7 @@ test("banked-only and non-completed authority resets stay out of immediate outco
     authorityConfig,
   );
   assert.equal(scheduled.data.claim.phase, "scheduled");
-  assert.equal(scheduled.data.claim.scope.population, "unknown");
+  assert.equal(scheduled.data.claim.scope.population, "platform");
 });
 
 test("relative reset intent keeps a conservative future range and incidents remain context", () => {
@@ -438,6 +438,100 @@ test("relative reset intent keeps a conservative future range and incidents rema
   );
   assert.equal(incident.data.claim.event_type, "incident");
   assert.equal(incident.data.claim.phase, "completed");
+});
+
+test("numeric reset intent durations become bounded publication-to-deadline ranges", () => {
+  const numericRanges = [
+    ["within the next 1-2 hours", "numeric-hours-ascii"],
+    ["over the next 1–2 hours", "numeric-hours-unicode"],
+    ["in the next 1 to 2 hours", "numeric-hours-to"],
+  ].map(([duration, id]) =>
+    signalFor(
+      `We will reset Codex usage limits for all paid users ${duration}.`,
+      id,
+    )
+  );
+  for (const signal of numericRanges) {
+    assert.equal(signal.data.claim.phase, "scheduled");
+    assert.equal(signal.data.claim.asserted_time_range.start, "2026-07-18T03:28:00.000Z");
+    assert.equal(signal.data.claim.asserted_time_range.end, "2026-07-18T05:28:00.000Z");
+    assert.equal(signal.data.claim.asserted_time_range.precision, "hour");
+  }
+
+  const singleDeadline = signalFor(
+    "We will reset Codex usage limits for all paid users in 2 hours.",
+    "numeric-hours-single",
+  );
+  assert.equal(singleDeadline.data.claim.asserted_time_range.start, "2026-07-18T03:28:00.000Z");
+  assert.equal(singleDeadline.data.claim.asserted_time_range.end, "2026-07-18T05:28:00.000Z");
+
+  const nextHour = signalFor(
+    "Codex usage limits for all paid users will reset in the next hour.",
+    "preserve-next-hour",
+  );
+  assert.equal(nextHour.data.claim.asserted_time_range.end, "2026-07-18T04:28:00.000Z");
+
+  const nextFewHours = signalFor(
+    "Codex usage limits for all paid users will reset over the next few hours.",
+    "preserve-next-few-hours",
+  );
+  assert.equal(nextFewHours.data.claim.asserted_time_range.end, "2026-07-18T06:28:00.000Z");
+
+  const nextThirtyMinutes = signalFor(
+    "A Codex usage limit reset for all paid users should land over the next 30 minutes.",
+    "preserve-next-thirty-minutes",
+  );
+  assert.equal(nextThirtyMinutes.data.claim.asserted_time_range.start, "2026-07-18T03:28:00.000Z");
+  assert.equal(nextThirtyMinutes.data.claim.asserted_time_range.end, "2026-07-18T03:58:00.000Z");
+  assert.equal(nextThirtyMinutes.data.claim.asserted_time_range.precision, "minute");
+
+  const unrelatedDuration = signalFor(
+    "We will reset Codex usage limits for all paid users during a 2 hour window.",
+    "unrelated-duration-window",
+  );
+  assert.equal(unrelatedDuration.data.claim.phase, "scheduled");
+  assert.equal(unrelatedDuration.data.claim.asserted_time_range, null);
+});
+
+test("timeline wording keeps denials and reset timing attached to the reset claim", () => {
+  const denial = signalForConfig(
+    "Here you are! Thinking I am about to announce a reset. But no. I’m just scrolling twitter and looking for feedback on ChatGPT Work.",
+    "2077212009071075330",
+    authorityConfig,
+  );
+  assert.equal(denial.data.claim.phase, "denied");
+  assert.equal(denial.data.claim.stance, "contradicts");
+
+  const fewMinutes = signalForConfig(
+    "Another reset for our Codex and ChatGPT Work users. Should have that sweet 100% weekly usage limit back in a few minutes.",
+    "2077607697487188198",
+    authorityConfig,
+  );
+  assert.equal(fewMinutes.data.claim.phase, "started");
+  assert.equal(
+    fewMinutes.data.claim.asserted_time_range.end,
+    "2026-07-18T03:58:00.000Z",
+  );
+  assert.equal(fewMinutes.data.claim.asserted_time_range.precision, "minute");
+
+  const unrelatedTomorrow = signalForConfig(
+    "We are once again resetting the usage limits for all Codex users. See you tomorrow for more product updates!",
+    "2077114635308986427",
+    authorityConfig,
+  );
+  assert.equal(unrelatedTomorrow.data.claim.phase, "started");
+  assert.equal(unrelatedTomorrow.data.claim.asserted_time_range, null);
+
+  const deadline = signalForConfig(
+    "This was fixed. You know what's coming. Give us 24 hours to reset the Codex rate limits across all plans.",
+    "2066956441173323943",
+    authorityConfig,
+  );
+  assert.equal(deadline.data.claim.phase, "scheduled");
+  assert.equal(
+    deadline.data.claim.asserted_time_range.end,
+    "2026-07-19T03:28:00.000Z",
+  );
 });
 
 test("core source roles and confirmation identities are not tied to the X adapter", async () => {

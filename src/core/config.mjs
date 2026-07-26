@@ -3,6 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hashLabel } from "./hash.mjs";
 import { assertHistoricalDailyLedgerAttestation } from "./coverage-contract.mjs";
+import {
+  AUTHORITY_TIMING_POLICY_VERSION,
+  AUTHORITY_TIMING_RELIABILITY_BASIS,
+} from "../model/authority-timing.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -93,6 +97,33 @@ function validateOutcomeCoverageProviders(config) {
   }
 }
 
+function validateAuthorityTiming(config) {
+  const policy = config.model?.authority_timing;
+  const reliabilities = policy?.phase_reliability;
+  if (
+    policy?.version !== AUTHORITY_TIMING_POLICY_VERSION ||
+    typeof policy.enabled !== "boolean" ||
+    policy.reliability_basis !== AUTHORITY_TIMING_RELIABILITY_BASIS ||
+    !reliabilities ||
+    !["scheduled", "expected", "started"].every((phase) =>
+      Number.isFinite(reliabilities[phase]) &&
+      reliabilities[phase] >= 0 &&
+      reliabilities[phase] <= 1
+    ) ||
+    !Array.isArray(policy.eligible_source_roles) ||
+    policy.eligible_source_roles.length === 0 ||
+    policy.eligible_source_roles.some((role) =>
+      !["official", "product_lead", "product_team_member"].includes(role)
+    ) ||
+    !Number.isFinite(policy.maximum_asserted_duration_hours) ||
+    policy.maximum_asserted_duration_hours <= 0
+  ) {
+    throw new TypeError(
+      "model.authority_timing must use the supported first-event mixture policy",
+    );
+  }
+}
+
 function semanticConfigHash(config) {
   const {
     runtime: _runtime,
@@ -144,6 +175,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateModelCalibrator(config);
   validateProvisionalBootstrap(config);
   validateOutcomeCoverageProviders(config);
+  validateAuthorityTiming(config);
   config.config_hash = semanticConfigHash(config);
   return config;
 }

@@ -3,6 +3,10 @@ import { ceilHour, clamp, halfOpenRange } from "../core/time.mjs";
 import { FEATURE_NAMES, buildForecastFeatureSnapshots, dataQualityScore, featuresToArray } from "./features.mjs";
 import { assertModelCompatibility, predictHazard } from "./logistic-hazard.mjs";
 import { modelContractHash } from "./contract.mjs";
+import {
+  conditionAuthorityTimingHazards,
+  latestRecurrenceAnchorAsOf,
+} from "./authority-timing.mjs";
 
 const MODEL_VALIDATION_STATUSES = new Set(["provisional", "validated"]);
 
@@ -114,14 +118,34 @@ export async function issueForecast(store, config, {
       interval80: prediction.interval80,
     };
   });
-  const probabilities = deriveProbabilitySlots(hazardEntries);
+  const [signals, observations, outcomes] = await Promise.all([
+    store.all("normalized_signal", { latestOnly: false }),
+    store.all("raw_observation", { latestOnly: false }),
+    store.all("reset_outcome", { latestOnly: false }),
+  ]);
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries,
+    signals,
+    observations,
+    outcomes,
+    config,
+    knowledgeCutoff: cutoff,
+  });
+  const probabilities = deriveProbabilitySlots(conditioned.hazardEntries);
+  const recurrenceAnchor = latestRecurrenceAnchorAsOf({
+    signals,
+    observations,
+    outcomes,
+    config,
+    knowledgeCutoff: cutoff,
+  });
   const publishedSnapshots = snapshots;
   const qualityScore = publishedSnapshots.reduce(
     (sum, snapshot) => sum + dataQualityScore(snapshot),
     0,
   ) / publishedSnapshots.length;
   const signalsById = new Map(
-    (await store.all("normalized_signal")).map((signal) => [signal.record_id, signal]),
+    signals.map((signal) => [signal.record_id, signal]),
   );
   const sourceGroups = new Set();
   for (const ref of snapshots.flatMap((snapshot) => snapshot.data.source_record_refs)) {
@@ -150,6 +174,8 @@ export async function issueForecast(store, config, {
       display_horizon: "PT4H",
       slots: probabilities.slots,
       no_reset_probability: probabilities.noResetProbability,
+      authority_conditioning: conditioned.metadata,
+      recurrence_anchor: recurrenceAnchor,
       data_quality: {
         score: clamp(qualityScore, 0, 1),
         provider_coverage: publishedSnapshots[0].data.data_quality.provider_coverage,

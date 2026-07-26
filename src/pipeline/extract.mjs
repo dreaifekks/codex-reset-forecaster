@@ -70,7 +70,7 @@ function isBankedResetOnly(text) {
   return BANKED_RESET_TERMS.test(text) && !IMMEDIATE_RESET_COMPLETION_TERMS.test(text);
 }
 
-function policyAllowsAuthorityGenericCompletedScope({
+function policyAllowsAuthorityGenericScope({
   observation,
   config,
   eventType,
@@ -85,8 +85,15 @@ function policyAllowsAuthorityGenericCompletedScope({
   if (
     outcomeDefinition?.event_semantics !== "qualifying_authority_completion_statement" ||
     outcomeDefinition?.scope_policy !== AUTHORITY_SCOPE_POLICY ||
-    eventType !== "quota_reset" ||
-    phase !== "completed" ||
+    !["quota_reset", "quota_refill"].includes(eventType) ||
+    ![
+      "completed",
+      "scheduled",
+      "expected",
+      "started",
+      "denied",
+      "cancelled",
+    ].includes(phase) ||
     root.derivation !== "primary_statement" ||
     observation.data.content.media_type !== "text/plain" ||
     role === "aggregator" ||
@@ -161,6 +168,7 @@ function classifyProductScope(text, config) {
 
 function classifyPhase(text, eventType) {
   if (/\b(denied|not happening|won't reset|will not reset|no (?:codex )?reset)\b/i.test(text) ||
+      /\bbut\s+no\b/i.test(text) ||
       /\b(?:is|was|should|would)?\s*not\b(?!\s+only\b)[^.!?\n]{0,64}\b(?:a\s+)?(?:new\s+)?(?:global\s+|codex\s+)?reset\b/i.test(text)) return "denied";
   if (/\b(cancelled|canceled|called off)\b/i.test(text)) return "cancelled";
   if (isBankedResetOnly(text)) {
@@ -183,7 +191,8 @@ function classifyPhase(text, eventType) {
   if (/\bwe(?:\s+are|'re)\s+(?:now\s+)?(?:giving|applying)\b[^.!?\n]{0,64}\b(?:usage\s+)?reset\b/i.test(text)) return "started";
   if (RESET_TERMS.test(text) && /\b(?:propagating|lands?|should\s+land|should\s+be\s+showing|should\s+have\b[^.!?\n]{0,48}\bback)\b/i.test(text)) return "started";
   if (/\benjoy\b[\s\S]{0,40}\breset(?:ted)?\b/i.test(text)) return "completed";
-  if (/\b(lands?|coming|incoming|arriv(?:e|es|ing)|will|going to|later|tomorrow|this evening|next hour|tonight|soon|in a bit)\b/i.test(text)) {
+  if (/\b(lands?|coming|incoming|arriv(?:e|es|ing)|will|going to|later|tomorrow|this evening|next hour|tonight|soon|in a bit)\b/i.test(text) ||
+      /\bgive\s+us\s+\d{1,3}\s+hours?\b/i.test(text)) {
     return "scheduled";
   }
   if (/\b(expect|likely|probably|should|might|may)\b/i.test(text)) return "expected";
@@ -193,11 +202,30 @@ function classifyPhase(text, eventType) {
   return "rumor";
 }
 
+function resetTimingText(text) {
+  const timingTerms =
+    /\b(?:next|within|over|in|later|tomorrow|tonight|evening|morning|minutes?|hours?|soon|incoming|in a bit)\b/i;
+  const timingActions =
+    /\b(?:lands?|arriv(?:e|es|ing)|coming|showing|back|return(?:s|ed|ing)?|give us)\b/i;
+  const segments = text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .filter(Boolean);
+  const relevant = segments.filter((segment) =>
+    RESET_TERMS.test(segment) ||
+    (
+      timingTerms.test(segment) &&
+      (QUOTA_TERMS.test(segment) || timingActions.test(segment))
+    )
+  );
+  return relevant.length > 0 ? relevant.join("\n") : text;
+}
+
 function assertedRange(text, publishedAt, phase) {
   if (!publishedAt) return null;
   const published = new Date(publishedAt);
+  const timingText = resetTimingText(text);
   if (["scheduled", "expected", "started"].includes(phase)) {
-    const minutes = text.match(/\b(?:in|over|within)?\s*(?:the\s+)?next\s+(\d{1,3})\s+minutes?\b/i);
+    const minutes = timingText.match(/\b(?:in|over|within)?\s*(?:the\s+)?next\s+(\d{1,3})\s+minutes?\b/i);
     if (minutes) {
       return halfOpenRange(
         published,
@@ -206,23 +234,60 @@ function assertedRange(text, publishedAt, phase) {
         minutes[0],
       );
     }
-    if (/\b(?:in|over|within)?\s*(?:the\s+)?next\s+hour\b/i.test(text)) {
+    const fewMinutes = timingText.match(
+      /\b(?:back\s+in|within|in|over)\s+(?:the\s+next\s+)?(?:a\s+)?few\s+minutes?\b/i,
+    );
+    if (fewMinutes) {
+      return halfOpenRange(
+        published,
+        new Date(published.getTime() + 30 * 60_000),
+        "minute",
+        fewMinutes[0],
+      );
+    }
+    const hourRange = timingText.match(
+      /\b(?:(?:in|over|within)\s+(?:the\s+)?next|next)\s+(\d{1,3})\s*(?:[-\u2010-\u2015\u2212]|\bto\b)\s*(\d{1,3})\s+hours?\b/i,
+    );
+    if (hourRange) {
+      const minimumHours = Number(hourRange[1]);
+      const maximumHours = Number(hourRange[2]);
+      if (minimumHours > 0 && maximumHours >= minimumHours) {
+        return halfOpenRange(
+          published,
+          addHours(published, maximumHours),
+          "hour",
+          hourRange[0],
+        );
+      }
+    }
+    const numericHours = timingText.match(
+      /\b(?:(?:(?:in|over|within)\s+(?:the\s+)?next|next)\s+|(?:in|within)\s+|give\s+us\s+)(\d{1,3})\s+hours?\b/i,
+    );
+    if (numericHours && Number(numericHours[1]) > 0) {
+      return halfOpenRange(
+        published,
+        addHours(published, Number(numericHours[1])),
+        "hour",
+        numericHours[0],
+      );
+    }
+    if (/\b(?:in|over|within)?\s*(?:the\s+)?next\s+hour\b/i.test(timingText)) {
       return halfOpenRange(published, addHours(published, 1), "hour", "next hour");
     }
-    if (/\b(?:in|over|within)?\s*(?:the\s+)?next\s+(?:few|couple of)\s+hours?\b/i.test(text) ||
-        /\bback\s+in\s+a\s+few\b/i.test(text)) {
+    if (/\b(?:in|over|within)?\s*(?:the\s+)?next\s+(?:few|couple of)\s+hours?\b/i.test(timingText) ||
+        /\bback\s+in\s+a\s+few\s+hours?\b/i.test(timingText)) {
       return halfOpenRange(published, addHours(published, 3), "hour", "next few hours");
     }
-    if (/\btomorrow morning\b/i.test(text)) {
+    if (/\btomorrow morning\b/i.test(timingText)) {
       return halfOpenRange(addHours(published, 4), addHours(published, 24), "part_of_day", "tomorrow morning");
     }
-    if (/\btomorrow\b/i.test(text)) {
+    if (/\btomorrow\b/i.test(timingText)) {
       return halfOpenRange(addHours(published, 1), addHours(published, 30), "day", "tomorrow");
     }
-    if (/\b(?:this evening|tonight)\b/i.test(text)) {
+    if (/\b(?:this evening|tonight)\b/i.test(timingText)) {
       return halfOpenRange(published, addHours(published, 24), "part_of_day", "this evening");
     }
-    if (/\blater (?:in the day|today)\b/i.test(text)) {
+    if (/\blater (?:in the day|today)\b/i.test(timingText)) {
       const end = new Date(Date.UTC(
         published.getUTCFullYear(),
         published.getUTCMonth(),
@@ -230,12 +295,12 @@ function assertedRange(text, publishedAt, phase) {
       ));
       return halfOpenRange(published, end, "part_of_day", "later today");
     }
-    if (/\b(?:reset incoming|in a bit)\b/i.test(text)) {
+    if (/\b(?:reset incoming|in a bit)\b/i.test(timingText)) {
       return halfOpenRange(published, addHours(published, 6), "hour", "near-term intent");
     }
   }
   if (["started", "completed"].includes(phase) &&
-      /\b(now|currently|have been reset|has been reset|have reset|has reset)\b/i.test(text)) {
+      /\b(now|currently|have been reset|has been reset|have reset|has reset)\b/i.test(timingText)) {
     const start = floorHour(published);
     return halfOpenRange(start, addHours(start, 1), "hour", "notification-hour inference");
   }
@@ -317,7 +382,7 @@ export function extractSignal(observation, config, {
   const bankedResetOnly = isBankedResetOnly(text);
   const platform = !bankedResetOnly && !narrowScope && (
     hasExplicitPlatformScope(text) ||
-    policyAllowsAuthorityGenericCompletedScope({
+    policyAllowsAuthorityGenericScope({
       observation,
       config,
       eventType,

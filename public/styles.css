@@ -332,6 +332,10 @@ h2 {
   line-height: 1.45;
 }
 
+.watch-aside small + small {
+  margin-top: 6px;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

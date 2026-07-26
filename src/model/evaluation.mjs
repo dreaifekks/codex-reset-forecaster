@@ -45,6 +45,7 @@ import {
   adequateCoverageAssertionsAsOf,
   coverageAssertionRevisions,
 } from "./coverage-as-of.mjs";
+import { conditionAuthorityTimingHazards } from "./authority-timing.mjs";
 
 export const EVALUATION_WAITING_SCHEMA_VERSION = "evaluation-waiting/1";
 
@@ -156,9 +157,43 @@ function calibration(rows) {
   }));
 }
 
-function rollingProbability(model, featureRows) {
-  const hazards = featureRows.map((row) => predictHazard(model, row).probability);
-  return 1 - hazards.reduce((survival, hazard) => survival * (1 - hazard), 1);
+function rollingPrediction(model, featureRows, {
+  anchor,
+  signals,
+  observations,
+  outcomes,
+  config,
+  asOfMode,
+  excludedSourceRecordIds,
+  excludedIndependenceGroupIds,
+}) {
+  const hazardEntries = featureRows.map((row, offset) => {
+    const start = addHours(anchor, offset);
+    return {
+      start: toUtcIso(start),
+      end: toUtcIso(addHours(start, 1)),
+      hazard: predictHazard(model, row).probability,
+      interval80: null,
+    };
+  });
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries,
+    signals,
+    observations,
+    outcomes,
+    config,
+    knowledgeCutoff: anchor,
+    asOfMode,
+    excludedSourceRecordIds,
+    excludedIndependenceGroupIds,
+  });
+  return {
+    probability: 1 - conditioned.hazardEntries.reduce(
+      (survival, entry) => survival * (1 - entry.hazard),
+      1,
+    ),
+    conditioning: conditioned.metadata,
+  };
 }
 
 function sortByProbability(rows) {
@@ -979,16 +1014,50 @@ export async function evaluateWalkForward(store, config, {
           coverageAsOfMode,
         }).features);
       });
+      const challengerPrediction = rollingPrediction(model, featureRows, {
+        anchor,
+        signals,
+        observations,
+        outcomes,
+        config,
+        asOfMode,
+        excludedSourceRecordIds: exclusions.recordIds,
+        excludedIndependenceGroupIds: exclusions.independenceGroupIds,
+      });
+      const championPrediction = pairedChampionModel
+        ? rollingPrediction(pairedChampionModel, featureRows, {
+            anchor,
+            signals,
+            observations,
+            outcomes,
+            config,
+            asOfMode,
+            excludedSourceRecordIds: exclusions.recordIds,
+            excludedIndependenceGroupIds:
+              exclusions.independenceGroupIds,
+          })
+        : null;
       foldRows.push({
         fold_origin: toUtcIso(origin),
         anchor: toUtcIso(anchor),
         window_end: toUtcIso(windowEnd),
-        probability: rollingProbability(model, featureRows),
-        champion_probability: pairedChampionModel
-          ? rollingProbability(pairedChampionModel, featureRows)
-          : null,
+        probability: challengerPrediction.probability,
+        champion_probability: championPrediction?.probability ?? null,
         baseline_probability: baseline4h,
-        features_hash: hashLabel(featureRows),
+        features_hash: hashLabel({
+          feature_rows: featureRows,
+          authority_conditioning: {
+            policy_version:
+              challengerPrediction.conditioning.policy_version,
+            applied: challengerPrediction.conditioning.applied,
+            phase: challengerPrediction.conditioning.phase,
+            prior_reliability:
+              challengerPrediction.conditioning.prior_reliability,
+            signal_ref: challengerPrediction.conditioning.signal_ref,
+            asserted_time_range:
+              challengerPrediction.conditioning.asserted_time_range,
+          },
+        }),
         label,
       });
     }

@@ -939,6 +939,9 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     featureSnapshots,
     model: activeModel,
     config,
+    signals,
+    observations: observationRevisions,
+    outcomes,
   });
   const outcomeOnlyCoverage = normalizeCoverageIntervals(
     assertions

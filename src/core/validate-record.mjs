@@ -116,6 +116,83 @@ function validatePrediction(record) {
   }
   probability(data.no_reset_probability, "prediction no-reset probability");
   invariant(Math.abs(data.no_reset_probability - survival) <= 1e-8, "prediction no-reset identity mismatch");
+  if (data.authority_conditioning !== undefined) {
+    const conditioning = data.authority_conditioning;
+    invariant(
+      conditioning?.policy_version ===
+        "authority-timing-first-event-mixture/1",
+      "prediction authority timing policy mismatch",
+    );
+    invariant(
+      conditioning.reliability_basis ===
+        "versioned_prior_non_exhaustive_statement_history",
+      "prediction authority timing reliability basis mismatch",
+    );
+    invariant(
+      typeof conditioning.applied === "boolean",
+      "prediction authority timing applied flag missing",
+    );
+    probability(
+      conditioning.base_horizon_probability,
+      "prediction base horizon probability",
+    );
+    probability(
+      conditioning.conditioned_horizon_probability,
+      "prediction conditioned horizon probability",
+    );
+    invariant(
+      Math.abs(
+        conditioning.conditioned_horizon_probability -
+        (1 - data.no_reset_probability)
+      ) <= 1e-8,
+      "prediction conditioned horizon probability mismatch",
+    );
+    if (conditioning.applied) {
+      invariant(
+        ["scheduled", "expected", "started"].includes(
+          conditioning.phase,
+        ),
+        "prediction authority timing phase invalid",
+      );
+      probability(
+        conditioning.prior_reliability,
+        "prediction authority timing prior reliability",
+      );
+      recordReference(
+        conditioning.signal_ref,
+        "prediction authority timing signal ref",
+      );
+      range(
+        conditioning.asserted_time_range,
+        "prediction authority timing range",
+      );
+    } else {
+      invariant(
+        conditioning.phase === null &&
+        conditioning.prior_reliability === null &&
+        conditioning.signal_ref === null &&
+        conditioning.asserted_time_range === null,
+        "inactive prediction authority timing metadata must be null",
+      );
+      invariant(
+        Math.abs(
+          conditioning.base_horizon_probability -
+          conditioning.conditioned_horizon_probability
+        ) <= 1e-8,
+        "inactive prediction authority timing changed probability",
+      );
+    }
+  }
+  if (data.recurrence_anchor !== undefined && data.recurrence_anchor !== null) {
+    recordReference(
+      data.recurrence_anchor.outcome_ref,
+      "prediction recurrence anchor outcome ref",
+    );
+    range(
+      data.recurrence_anchor.occurred_time_range,
+      "prediction recurrence anchor range",
+    );
+  }
   probability(data.data_quality?.score, "prediction data quality");
   probability(data.data_quality?.provider_coverage, "prediction provider coverage");
   invariant(

@@ -18,8 +18,8 @@
     "deduplication_version": "reset-dedup/0.2.2",
     "timezone_database_version": "tzdata-example",
     "extractor_model": "deterministic-rules",
-    "extractor_model_version": "0.2.6",
-    "extractor_prompt_version": "reset-extract/rules-0.2.6",
+    "extractor_model_version": "0.2.7",
+    "extractor_prompt_version": "reset-extract/rules-0.2.7",
     "extractor_semantic_policy_hash": "sha256:e3a3ff0dacdfc9da48d9494ab2b0bd0f7fca1a55f2dc51cf289347846ef19ccf",
     "target": {
       "start": "2026-07-23T07:00:00Z",

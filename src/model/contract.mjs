@@ -46,6 +46,7 @@ export function modelContractHash(config) {
     },
     signal_recency_basis: "source-published-or-asserted-time/1",
     family: config.model.family,
+    authority_timing: config.model.authority_timing,
     lambda: config.model.lambda,
     coefficient_priors: config.model.coefficient_priors,
     maximum_training_days: config.model.maximum_training_days,

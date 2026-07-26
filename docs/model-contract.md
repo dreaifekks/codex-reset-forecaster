@@ -97,6 +97,42 @@ Other extracted evidence remains in canonical records and may be evaluated by a
 challenger, but it is not automatically added to the champion. This prevents a
 small event history from fitting dozens of weak context fields.
 
+### Exact authority timing condition
+
+An exact primary statement from a configured confirmation identity may carry
+stronger timing semantics than an ordinary learned feature. Version
+`authority-timing-first-event-mixture/1` first computes the model's baseline
+first-event masses `b_t` and no-reset mass `b_inf`. For the one latest active,
+independent authority statement, it distributes an authority mass `q_t` over the
+remaining portion of the asserted half-open interval. The published distribution
+is:
+
+```text
+m_t   = (1 - r) * b_t   + r * q_t
+m_inf = (1 - r) * b_inf + r * q_inf
+```
+
+It then converts `m_t` back to conditional hourly hazards before deriving the
+rolling four-hour values. This moves first-reset probability into the asserted
+window and reduces first-reset mass outside it while preserving a distribution
+that sums to one. A confirmed reset consumes the old statement and becomes the
+explicit recurrence anchor of the next first-reset forecast; model parameters do
+not need to be retrained for that re-anchoring.
+
+Only exact plain-text primary statements can activate this path. Aggregator/Grok
+summaries, quotes, reposts, outcome-conditioned discoveries, rumours, completed
+claims, and non-target scopes cannot. A later exact denial cancels an earlier
+active window. The default phase priors are `0.80` for scheduled, `0.55` for
+expected, and `0.90` for started.
+
+These values are deliberately recorded as
+`versioned_prior_non_exhaustive_statement_history`, not learned reliability.
+Recent-author exports and the completed-outcome ledger do not prove that every
+timed statement was collected, so unmatched statements cannot yet provide an
+unbiased failure denominator. Walk-forward evaluation applies the same
+conditioner; a future learned reliability artifact must first bind exhaustive
+statement coverage, exact evidence revisions, and out-of-sample evaluation.
+
 For the X-first MVP, the configured inputs are limited to Tibo posts available
 before the cutoff and a curated community/ecosystem source set. A Tibo post used to
 confirm an outcome cannot be exposed as a feature to an earlier historical
@@ -252,6 +288,11 @@ A served weekly prediction, whether provisional or validated, contains:
 - hourly hazard, first-reset mass, cumulative probability, and rolling four-hour
   probability per slot;
 - no-reset probability for a first-event forecast;
+- the exact authority-timing policy, whether it was applied, its evidence
+  reference/range, prior basis, and baseline versus conditioned horizon
+  probability;
+- the exact latest confirmed-outcome revision used as the recurrence anchor, when
+  one exists;
 - uncertainty and data quality separate from probability;
 - model, validation status, training cutoff, calibrator, and feature schema
   versions.

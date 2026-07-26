@@ -177,7 +177,7 @@ and restart commands.
 
 ## Status
 
-Version `0.2.0` with canonical contract `reset-intel/0.2` implements the website
+Version `0.1.0` with canonical contract `reset-intel/0.2` implements the website
 prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,

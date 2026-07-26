@@ -651,6 +651,71 @@
             { "type": "null" }
           ]
         },
+        "authority_conditioning": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policy_version",
+            "applied",
+            "reliability_basis",
+            "phase",
+            "prior_reliability",
+            "signal_ref",
+            "asserted_time_range",
+            "base_horizon_probability",
+            "conditioned_horizon_probability"
+          ],
+          "properties": {
+            "policy_version": {
+              "const": "authority-timing-first-event-mixture/1"
+            },
+            "applied": { "type": "boolean" },
+            "reliability_basis": {
+              "const": "versioned_prior_non_exhaustive_statement_history"
+            },
+            "phase": {
+              "enum": ["scheduled", "expected", "started", null]
+            },
+            "prior_reliability": {
+              "oneOf": [
+                { "$ref": "#/$defs/probability" },
+                { "type": "null" }
+              ]
+            },
+            "signal_ref": {
+              "oneOf": [
+                { "$ref": "#/$defs/recordRef" },
+                { "type": "null" }
+              ]
+            },
+            "asserted_time_range": {
+              "oneOf": [
+                { "$ref": "#/$defs/timeRange" },
+                { "type": "null" }
+              ]
+            },
+            "base_horizon_probability": {
+              "$ref": "#/$defs/probability"
+            },
+            "conditioned_horizon_probability": {
+              "$ref": "#/$defs/probability"
+            }
+          }
+        },
+        "recurrence_anchor": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["outcome_ref", "occurred_time_range"],
+              "properties": {
+                "outcome_ref": { "$ref": "#/$defs/recordRef" },
+                "occurred_time_range": { "$ref": "#/$defs/timeRange" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
         "data_quality": {
           "type": "object",
           "additionalProperties": false,

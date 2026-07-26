@@ -92,6 +92,37 @@ Missing, unreadable, hash-mismatched, wrong-scope, incomplete, or expired
 attestations fail closed to `outcome_only`; the default configuration is `null`.
 An empty X timeline is therefore never a training negative on its own.
 
+### Manual author timeline JSONL import
+
+Use the provider-neutral manual importer for an exported X/Twitter author
+timeline whose JSONL rows contain `id`, `platform`, `author`, `createdAt`, `text`,
+and optionally `url`:
+
+```bash
+node src/cli.mjs ingest-timeline --file /absolute/path/to/timeline.jsonl
+node src/cli.mjs process
+```
+
+The importer accepts only `x` or `twitter` rows with valid status IDs, timestamps,
+and matching author/status URLs. It validates the complete file before appending
+records, rejects duplicate IDs inside one export, and is idempotent when the same
+unchanged export is imported again. Configured usernames are mapped to their
+canonical identity IDs, so an exported `thsottiaux` row becomes
+`person_tibo_sottiaux` and later normalization obtains its `source_role` from the
+existing identity policy.
+
+This is a recent timeline export, not a historical availability attestation.
+`published_at` comes from `createdAt`, while `first_seen_at` and `fetched_at` are
+the actual import time. The importer sets `outcome_conditioned=false` and
+`selection_method=recent_author_timeline_export`, but creates no coverage
+assertion. Missing posts therefore never become negative labels, and imported
+posts cannot leak into forecasts whose knowledge cutoff predates the import.
+Rows using the conventional `RT @handle:` form remain stored for audit but are
+marked feature-ineligible because the export lacks the original post ID needed to
+prove an independent evidence root.
+Run `train` or `pipeline --retrain --no-collect` separately when those newly
+processed records should be considered by a new challenger.
+
 ### Historical outcome discovery
 
 `config/archive-evaluation.example.json` enables the disabled-by-default
