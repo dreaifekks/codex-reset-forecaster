@@ -148,6 +148,14 @@ probability. Probability, epistemic uncertainty, source/data quality, and
 extraction confidence remain separate. A separately versioned calibrator is fitted
 only to saved out-of-sample predictions.
 
+Bootstrap fitting and performance validation are separate lifecycle concerns. When
+eligible historical labels already exist, the service may batch-fit a provisional
+model immediately at a frozen cutoff; training does not need to wait for new
+wall-clock observations merely to begin. That artifact is useful for provisional
+forecasts, but its existence is not evidence that the 80% event-window-recall gate
+has passed. Causal walk-forward folds and immutable as-issued settlements continue
+to accumulate independently until the validated gate is satisfied.
+
 ### 7. Outcome adjudication and settlement
 
 A source post remains evidence rather than being stored directly as an outcome.
@@ -195,12 +203,29 @@ a different top-N prefix for each known event. A reconstruction is never relabel
 as `as_issued`, and an old evaluation whose configuration, data, feature, model, or
 fold signature no longer matches is not served.
 
+A provisional forecast is likewise labeled as provisional on every surface. It may
+be used while strict validation accumulates, but it cannot be described as having
+validated 80% recall, validated accuracy, or production-calibrated probabilities.
+The eventual validated state uses the original real-data sample, calibration, and
+compatibility gates; provisional use does not weaken those gates.
+
 ## Runtime cadence
 
+- Bootstrap: when no compatible usable model exists, batch-fit immediately from
+  historical labels that are mature and available at the frozen training cutoff.
+  Do not wait for future wall-clock data solely to start the fit.
 - Hourly: collect, normalize, extract, link, freeze features, and issue a new
-  seven-day forecast.
+  seven-day forecast. New provider signals can therefore change features and
+  probabilities without a parameter refit.
 - After a forecast slot matures: settle it as positive, negative, pending, or
   censored using outcome coverage.
-- Daily: update a challenger with newly settled information.
-- Weekly: run full walk-forward evaluation and consider challenger promotion.
+- At most every 24 hours: batch-fit a challenger from labels mature by that run's
+  cutoff, run the compatible walk-forward evaluation attempt, and consider
+  promotion. This is one daily batch train/evaluate attempt, not a separate weekly
+  evaluator. A pending stored challenger may be re-evaluated between fits as causal
+  fold coverage matures; that does not change its parameters or retrain it.
+- During a fit: keep its cutoff and inputs frozen. Data arriving after the cutoff is
+  queued naturally for the next batch and does not restart the running fit.
+- In the background: accumulate causal walk-forward and immutable as-issued
+  evidence until the original validated gate is met.
 - Continuously: retain the last stable champion as the rollback target.

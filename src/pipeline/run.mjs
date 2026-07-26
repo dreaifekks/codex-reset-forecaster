@@ -84,6 +84,17 @@ async function compatibleStoredModel(store, name, config) {
   }
 }
 
+function eligibleProvisionalBootstrapModel(model, config) {
+  const policy = config.runtime?.provisional_bootstrap;
+  return Boolean(
+    policy?.enabled === true &&
+    Number.isInteger(policy.minimum_outcomes) &&
+    policy.minimum_outcomes > 0 &&
+    Number.isInteger(model?.event_count) &&
+    model.event_count >= policy.minimum_outcomes,
+  );
+}
+
 function sampleEvaluationWaiting(evaluation, promotion) {
   if (promotion?.reason !== "evaluation_sample_threshold_not_met") return null;
   return {
@@ -299,6 +310,7 @@ export async function runPipeline(store, config, {
   }
   let champion = await compatibleStoredModel(store, "champion", config);
   const challenger = await compatibleStoredModel(store, "challenger", config);
+  let provisionalModel = null;
   if (retrain || !champion) {
     const train = retrain || !challenger;
     let attempt;
@@ -330,16 +342,27 @@ export async function runPipeline(store, config, {
     if (attempt?.status === "waiting_for_evaluation") {
       result.status = "waiting_for_evaluation";
       if (!champion) {
-        result.timing.completed_at = currentTime().toISOString();
-        return result;
+        const latestChallenger = await compatibleStoredModel(
+          store,
+          "challenger",
+          config,
+        );
+        if (eligibleProvisionalBootstrapModel(latestChallenger, config)) {
+          provisionalModel = latestChallenger;
+        } else {
+          result.timing.completed_at = currentTime().toISOString();
+          return result;
+        }
       }
     }
   }
-  if (!champion) {
+  const forecastModel = champion ?? provisionalModel;
+  if (!forecastModel) {
     throw new Error("No model passed the promotion gate; forecast was not published");
   }
   result.forecast = await issueForecast(store, config, {
-    model: champion,
+    model: forecastModel,
+    validationStatus: provisionalModel ? "provisional" : "validated",
     knowledgeCutoff,
     horizonStart,
     clock: currentTime,

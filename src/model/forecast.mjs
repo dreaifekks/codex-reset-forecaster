@@ -4,6 +4,8 @@ import { FEATURE_NAMES, buildForecastFeatureSnapshots, dataQualityScore, feature
 import { assertModelCompatibility, predictHazard } from "./logistic-hazard.mjs";
 import { modelContractHash } from "./contract.mjs";
 
+const MODEL_VALIDATION_STATUSES = new Set(["provisional", "validated"]);
+
 export function deriveProbabilitySlots(hazardEntries, {
   publishedSlotCount = hazardEntries.length,
   rollingHours = 4,
@@ -45,10 +47,14 @@ export function deriveProbabilitySlots(hazardEntries, {
 
 export async function issueForecast(store, config, {
   model = null,
+  validationStatus = "validated",
   knowledgeCutoff = new Date(),
   horizonStart = null,
   clock = () => new Date(),
 } = {}) {
+  if (!MODEL_VALIDATION_STATUSES.has(validationStatus)) {
+    throw new TypeError("Forecast model validation status must be provisional or validated");
+  }
   const champion = model ?? await store.readModel("champion");
   if (!champion) throw new Error("No champion model is available; train and promote a model first");
   assertModelCompatibility(champion, {
@@ -77,6 +83,7 @@ export async function issueForecast(store, config, {
     prediction.data.knowledge_cutoff === cutoff.toISOString() &&
     prediction.data.model.version === champion.model_version &&
     prediction.data.model.artifact_hash === champion.artifact_hash &&
+    prediction.data.model.validation_status === validationStatus &&
     prediction.data.horizon.start === firstTarget.toISOString(),
     );
     if (existing) return { prediction: existing, inserted: false };
@@ -123,7 +130,7 @@ export async function issueForecast(store, config, {
   }
   const record = createRecord({
     recordType: "prediction",
-    naturalKey: `${champion.model_version}:${champion.artifact_hash}:${cutoff.toISOString()}:${firstTarget.toISOString()}`,
+    naturalKey: `${champion.model_version}:${champion.artifact_hash}:${validationStatus}:${cutoff.toISOString()}:${firstTarget.toISOString()}`,
     createdAt: issued,
     producer: producer("reset-forecaster", "0.3.0", {
       model_version: champion.model_version,
@@ -158,6 +165,7 @@ export async function issueForecast(store, config, {
         version: champion.model_version,
         artifact_hash: champion.artifact_hash,
         model_contract_hash: champion.model_contract_hash,
+        validation_status: validationStatus,
         training_cutoff: champion.training_cutoff,
         calibrator_version: champion.calibrator_version ?? null,
         training_data_hash: `sha256:${champion.training_data_hash}`,

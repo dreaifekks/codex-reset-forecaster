@@ -160,6 +160,7 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   });
   assert.equal(forecast.prediction.data.slots.length, 168);
   assert.equal(forecast.prediction.data.data_quality.provider_coverage, 1);
+  assert.equal(forecast.prediction.data.model.validation_status, "validated");
   assert.equal((await issueForecast(store, config, {
     knowledgeCutoff: floorHour(now),
     clock: () => now,
@@ -342,7 +343,13 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   ));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const config = await loadConfig({ overrides: {
-    runtime: { data_dir: directory },
+    runtime: {
+      data_dir: directory,
+      provisional_bootstrap: {
+        enabled: false,
+        minimum_outcomes: 3,
+      },
+    },
     model: {
       max_iterations: 450,
       minimum_outcomes: 3,
@@ -393,6 +400,8 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   assert.deepEqual(await store.all("prediction"), []);
 
   const firstChallenger = await store.readModel("challenger");
+  assert.ok(firstChallenger.event_count >= 3);
+  config.runtime.provisional_bootstrap.enabled = true;
   const repeated = await runPipeline(store, config, {
     now: addHours(now, 1),
     collect: false,
@@ -413,4 +422,18 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   );
   assert.equal(reusedChallenger.artifact_hash, firstChallenger.artifact_hash);
   assert.equal(reusedChallenger.trained_at, firstChallenger.trained_at);
+  assert.ok(repeated.forecast?.prediction);
+  assert.equal(
+    repeated.forecast.prediction.data.model.validation_status,
+    "provisional",
+  );
+  assert.equal(
+    repeated.forecast.prediction.data.model.artifact_hash,
+    firstChallenger.artifact_hash,
+  );
+  assert.equal(
+    await store.readModel("champion", { invalidAsNull: true }),
+    null,
+  );
+  assert.equal((await store.all("prediction")).length, 1);
 });

@@ -38,7 +38,8 @@ function intervalEqual(left, right, tolerance) {
 export function assessPredictionIntegrity({
   prediction,
   featureSnapshots,
-  champion,
+  model: suppliedModel = null,
+  champion = null,
   config,
   tolerance = 1e-10,
 }) {
@@ -46,38 +47,39 @@ export function assessPredictionIntegrity({
   if (!prediction?.data) {
     return { valid: false, reasons: ["prediction_missing"] };
   }
-  if (!champion) {
-    return { valid: false, reasons: ["prediction_champion_missing"] };
+  const modelArtifact = suppliedModel ?? champion;
+  if (!modelArtifact) {
+    return { valid: false, reasons: ["prediction_model_missing"] };
   }
   try {
-    assertModelCompatibility(champion, {
+    assertModelCompatibility(modelArtifact, {
       featureNames: FEATURE_NAMES,
       featureSchemaVersion: config.feature_schema_version,
       modelContractHash: modelContractHash(config),
       requireConverged: true,
     });
   } catch {
-    reasons.push("prediction_champion_incompatible");
+    reasons.push("prediction_model_incompatible");
   }
-  const model = prediction.data.model ?? {};
+  const predictionModel = prediction.data.model ?? {};
   if (
     prediction.data.event_process !== "first_reset" ||
     prediction.data.base_slot !== "PT1H" ||
     prediction.data.display_horizon !== "PT4H" ||
-    hashLabel(prediction.data.scope) !== hashLabel(config.target)
+    hashLabel(prediction.data.scope ?? null) !== hashLabel(config.target ?? null)
   ) {
     reasons.push("prediction_contract_mismatch");
   }
-  if (model.version !== champion.model_version) {
+  if (predictionModel.version !== modelArtifact.model_version) {
     reasons.push("prediction_model_version_mismatch");
   }
-  if (model.artifact_hash !== champion.artifact_hash) {
+  if (predictionModel.artifact_hash !== modelArtifact.artifact_hash) {
     reasons.push("prediction_model_artifact_mismatch");
   }
-  if (model.model_contract_hash !== champion.model_contract_hash) {
+  if (predictionModel.model_contract_hash !== modelArtifact.model_contract_hash) {
     reasons.push("prediction_model_contract_mismatch");
   }
-  if (model.training_cutoff !== champion.training_cutoff) {
+  if (predictionModel.training_cutoff !== modelArtifact.training_cutoff) {
     reasons.push("prediction_training_cutoff_mismatch");
   }
   const refs = prediction.data.feature_snapshot_refs;
@@ -186,7 +188,7 @@ export function assessPredictionIntegrity({
   try {
     recomputed = deriveProbabilitySlots(exactSnapshots.map((snapshot) => {
       const predictionResult = predictHazard(
-        champion,
+        modelArtifact,
         featuresToArray(snapshot.data.features),
       );
       return {
@@ -247,5 +249,7 @@ export function assessPredictionIntegrity({
     valid: reasons.length === 0,
     reasons: [...new Set(reasons)],
     checked_feature_snapshot_count: exactSnapshots.length,
+    checked_model_version: modelArtifact.model_version ?? null,
+    checked_model_artifact_hash: modelArtifact.artifact_hash ?? null,
   };
 }

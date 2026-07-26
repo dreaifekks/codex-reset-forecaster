@@ -679,6 +679,7 @@
             "version": { "type": "string" },
             "artifact_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
             "model_contract_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "validation_status": { "enum": ["provisional", "validated"] },
             "training_cutoff": { "$ref": "#/$defs/utcTimestamp" },
             "calibrator_version": { "type": ["string", "null"] },
             "training_data_hash": { "type": "string" }

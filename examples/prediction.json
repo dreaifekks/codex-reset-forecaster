@@ -89,6 +89,7 @@
       "version": "reset-model/0.1.0",
       "artifact_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "model_contract_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "validation_status": "validated",
       "training_cutoff": "2026-07-20T00:00:00Z",
       "calibrator_version": null,
       "training_data_hash": "sha256:example-training-data"

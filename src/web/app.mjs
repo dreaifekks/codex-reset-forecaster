@@ -249,12 +249,18 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           "waiting_for_coverage",
           "waiting_for_evaluation",
         ].includes(readiness.pipeline_status);
+        const syntheticDemo = Boolean(
+          readiness.synthetic_only &&
+          readiness.forecast_available,
+        );
         const status = waitingForPipeline && !prediction
           ? "waiting"
           : !prediction
             ? "not_ready"
           : ["stale", "invalid"].includes(forecastStatus)
             ? "stale"
+            : !readiness.serving_ready && !syntheticDemo
+              ? "not_ready"
             : readiness.publication_ready && !optionalContextDegraded
               ? "ok"
               : "degraded";
@@ -277,6 +283,10 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           evaluation_waiting: readiness.evaluation_waiting,
           evaluation_gate_passed: evaluationResult.evaluation?.gate?.passed ?? false,
           evaluation_invalidated: evaluationResult.invalidated,
+          serving_ready: readiness.serving_ready,
+          serving_stage: readiness.serving_stage,
+          serving_blockers: readiness.serving_blockers,
+          provisional_model: readiness.provisional_model,
           publication_ready: readiness.publication_ready,
           publication_blockers: readiness.publication_blockers,
         });
@@ -304,14 +314,13 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           return;
         }
         const freshness = assessPredictionFreshness(prediction, config, requestNow);
-        const incompatible = readiness.publication_blockers.some((blocker) =>
+        const incompatible = readiness.serving_blockers.some((blocker) =>
           [
-            "champion_missing",
-            "champion_incompatible",
-            "forecast_model_mismatch",
-            "forecast_model_artifact_mismatch",
-            "forecast_model_contract_mismatch",
-            "champion_artifact_missing",
+            "active_model_unavailable",
+            "forecast_integrity_failed",
+            "forecast_validation_status_invalid",
+            "forecast_validation_status_missing",
+            "provisional_model_ineligible",
           ].includes(blocker)
         );
         const stale = ["stale", "invalid"].includes(freshness.status);
@@ -321,18 +330,42 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           !stale &&
           !incompatible
         );
-        const notPublishable = !readiness.publication_ready && !syntheticDemo;
-        const unavailable = stale || incompatible || notPublishable;
+        const provisional = Boolean(
+          readiness.serving_ready &&
+          readiness.serving_stage === "provisional"
+        );
+        const unavailable =
+          stale ||
+          incompatible ||
+          (!readiness.serving_ready && !syntheticDemo);
+        const notServing = unavailable && !stale && !incompatible;
         const serving = {
           ...freshness,
-          status: syntheticDemo
-            ? "synthetic_demo"
-            : notPublishable && !stale && !incompatible
+          status: provisional
+            ? "provisional"
+            : syntheticDemo
+              ? "synthetic_demo"
+              : notServing
               ? "not_publishable"
               : freshness.status,
+          ready: readiness.serving_ready || syntheticDemo,
+          serving_ready: readiness.serving_ready || syntheticDemo,
+          stage: provisional
+            ? "provisional"
+            : syntheticDemo
+              ? "validated"
+              : readiness.serving_stage,
+          serving_stage: provisional
+            ? "provisional"
+            : syntheticDemo
+              ? "validated"
+              : readiness.serving_stage,
+          blockers: readiness.serving_blockers,
+          serving_blockers: readiness.serving_blockers,
           publication_ready: readiness.publication_ready,
           publication_blockers: readiness.publication_blockers,
           synthetic_demo: syntheticDemo,
+          provisional_model: readiness.provisional_model,
         };
         if (unavailable) {
           sendJson(response, 503, {
@@ -345,7 +378,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
               ? "The latest saved forecast was produced by an incompatible model contract."
               : stale
                 ? "The latest saved forecast is no longer a current rolling 168-hour forecast."
-                : `Forecast publication is blocked: ${readiness.publication_blockers.join(", ")}.`,
+                : `Forecast serving is blocked: ${readiness.serving_blockers.join(", ")}.`,
             saved_prediction_ref: {
               record_id: prediction.record_id,
               revision: prediction.revision,

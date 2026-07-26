@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { hashLabel } from "../src/core/hash.mjs";
+import { extractorContract } from "../src/core/extractor-contract.mjs";
+import { hashLabel, sha256, stableStringify } from "../src/core/hash.mjs";
 import {
   assessEvaluationCompatibility,
   getReadiness,
@@ -13,6 +14,9 @@ import {
   modelContractHash,
 } from "../src/model/contract.mjs";
 import { recomputeFrozenEvaluationArtifact } from "../src/model/evaluation.mjs";
+import { FEATURE_NAMES } from "../src/model/features.mjs";
+import { deriveProbabilitySlots } from "../src/model/forecast.mjs";
+import { predictHazard } from "../src/model/logistic-hazard.mjs";
 
 const HOUR_MS = 3_600_000;
 
@@ -127,6 +131,117 @@ function prediction({
       },
     },
   };
+}
+
+function provisionalForecastFixture(appConfig, {
+  validationStatus = "provisional",
+  issuedAt = "2026-07-25T10:05:00.000Z",
+  cutoff = "2026-07-25T10:00:00.000Z",
+  eventCount = 3,
+} = {}) {
+  const dimension = FEATURE_NAMES.length + 1;
+  const model = {
+    family: "ridge_logistic_discrete_time_hazard",
+    model_version: "model/provisional-test",
+    training_cutoff: "2026-07-20T00:00:00.000Z",
+    feature_schema_version: appConfig.feature_schema_version,
+    model_contract_hash: modelContractHash(appConfig),
+    feature_names: FEATURE_NAMES,
+    means: FEATURE_NAMES.map(() => 0),
+    scales: FEATURE_NAMES.map(() => 1),
+    weights: [-4, ...FEATURE_NAMES.map(() => 0)],
+    covariance: null,
+    uncertainty: {
+      status: "unavailable",
+      reason: "test_fixture",
+    },
+    event_count: eventCount,
+    converged: true,
+    stop_reason: "gradient_tolerance",
+  };
+  model.artifact_hash = sha256(stableStringify(model));
+  const extractor = extractorContract(appConfig);
+  const features = Object.fromEntries(FEATURE_NAMES.map((name) => [name, 0]));
+  const start = Date.parse(cutoff);
+  const featureSnapshots = Array.from({ length: 168 }, (_, index) => {
+    const slotStart = new Date(start + index * HOUR_MS).toISOString();
+    const slotEnd = new Date(start + (index + 1) * HOUR_MS).toISOString();
+    return {
+      record_id: `feature_provisional_${String(index).padStart(3, "0")}`,
+      revision: 1,
+      record_type: "feature_snapshot",
+      data: {
+        knowledge_cutoff: cutoff,
+        config_hash: appConfig.config_hash,
+        feature_schema_version: appConfig.feature_schema_version,
+        taxonomy_version: appConfig.taxonomy_version,
+        deduplication_version: appConfig.deduplication_version,
+        timezone_database_version: appConfig.timezone_database_version,
+        extractor_model: extractor.model,
+        extractor_model_version: extractor.model_version,
+        extractor_prompt_version: extractor.prompt_version,
+        extractor_semantic_policy_hash: extractor.semantic_policy_hash,
+        target: {
+          start: slotStart,
+          end: slotEnd,
+          base_slot: "PT1H",
+          display_horizon: "PT4H",
+        },
+        features,
+        data_quality: {
+          provider_coverage: 1,
+          outcome_sample_count: 3,
+          sample_sufficiency: 1,
+        },
+      },
+    };
+  });
+  const probabilities = deriveProbabilitySlots(featureSnapshots.map((snapshot) => {
+    const result = predictHazard(model, FEATURE_NAMES.map(() => 0));
+    return {
+      start: snapshot.data.target.start,
+      end: snapshot.data.target.end,
+      hazard: result.probability,
+      interval80: result.interval80,
+    };
+  }));
+  const forecast = {
+    record_id: "pred_provisional",
+    revision: 1,
+    data: {
+      issued_at: issuedAt,
+      knowledge_cutoff: cutoff,
+      event_process: "first_reset",
+      scope: appConfig.target,
+      horizon: {
+        start: featureSnapshots[0].data.target.start,
+        end: featureSnapshots.at(-1).data.target.end,
+        boundary: "[start,end)",
+      },
+      base_slot: "PT1H",
+      display_horizon: "PT4H",
+      slots: probabilities.slots,
+      no_reset_probability: probabilities.noResetProbability,
+      data_quality: {
+        score: 1,
+        provider_coverage: 1,
+        outcome_sample_count: 3,
+        sample_sufficiency: 1,
+      },
+      feature_snapshot_refs: featureSnapshots.map((snapshot) => ({
+        record_id: snapshot.record_id,
+        revision: snapshot.revision,
+      })),
+      model: {
+        version: model.model_version,
+        artifact_hash: model.artifact_hash,
+        model_contract_hash: model.model_contract_hash,
+        training_cutoff: model.training_cutoff,
+        validation_status: validationStatus,
+      },
+    },
+  };
+  return { model, featureSnapshots, forecast };
 }
 
 function observation(id, revision, text, publishedAt) {
@@ -291,6 +406,172 @@ test("recent evidence is aligned to the forecast cutoff and aggregator summaries
   assert.ok(evidence.pending_next_forecast.items.every((item) =>
     item.pending_next_forecast && !item.included_in_forecast,
   ));
+});
+
+test("a fresh compatible challenger forecast is served provisionally without claiming publication readiness", async (t) => {
+  const appConfig = config({
+    target: {
+      vendor: "openai",
+      product: "codex",
+      population: "paid_plans",
+      plans: ["plus"],
+      regions: ["global"],
+      quota_bucket: "platform",
+    },
+    runtime: {
+      forecast_fresh_age_hours: 1.5,
+      forecast_stale_age_hours: 3,
+      provisional_bootstrap: {
+        enabled: true,
+        minimum_outcomes: 3,
+      },
+    },
+  });
+  const fixture = provisionalForecastFixture(appConfig);
+  const store = new MemoryStore({
+    records: {
+      prediction: [fixture.forecast],
+      feature_snapshot: fixture.featureSnapshots,
+      raw_observation: [observation(
+        "obs_provisional",
+        1,
+        "Exact X source",
+        "2026-07-25T09:30:00.000Z",
+      )],
+    },
+    states: {
+      "x-provider": {
+        last_success_at: "2026-07-25T09:55:00.000Z",
+        last_error: null,
+      },
+      runtime: {
+        last_success_at: "2026-07-25T10:06:00.000Z",
+        last_error: null,
+      },
+    },
+    models: {
+      champion: new Error("stored champion artifact hash mismatch"),
+      challenger: fixture.model,
+    },
+  });
+  const now = new Date("2026-07-25T10:10:00.000Z");
+  const readiness = await getReadiness(store, appConfig, { now });
+  assert.equal(readiness.forecast_available, true);
+  assert.equal(readiness.serving_ready, true);
+  assert.equal(readiness.serving_stage, "provisional");
+  assert.deepEqual(readiness.serving_blockers, []);
+  assert.equal(readiness.publication_ready, false);
+  assert.ok(readiness.publication_blockers.includes("champion_incompatible"));
+  assert.ok(readiness.publication_blockers.includes("forecast_not_validated"));
+  assert.equal(readiness.prediction_integrity.valid, true);
+  assert.equal(
+    readiness.prediction_integrity.checked_model_version,
+    fixture.model.model_version,
+  );
+  assert.equal(readiness.provisional_model.eligibility.enabled, true);
+  assert.equal(readiness.provisional_model.eligibility.eligible, true);
+  assert.equal(readiness.provisional_model.eligibility.reason, null);
+  assert.deepEqual(readiness.provisional_model.eligibility.requirements, {
+    no_compatible_champion: true,
+    challenger_compatible: true,
+    prediction_marked_provisional: true,
+    prediction_matches_challenger: true,
+    minimum_outcomes: 3,
+    challenger_event_count: 3,
+    minimum_outcomes_met: true,
+  });
+
+  const base = await serverFor(t, store, appConfig, now);
+  const [forecastResponse, healthResponse, scriptResponse] = await Promise.all([
+    fetch(`${base}/api/forecast/current`),
+    fetch(`${base}/api/health`),
+    fetch(`${base}/app.js`),
+  ]);
+  assert.equal(forecastResponse.status, 200);
+  const forecast = await forecastResponse.json();
+  assert.equal(forecast.serving.status, "provisional");
+  assert.equal(forecast.serving.ready, true);
+  assert.equal(forecast.serving.stage, "provisional");
+  assert.equal(forecast.serving.publication_ready, false);
+  assert.equal(forecast.data.model.validation_status, "provisional");
+
+  assert.equal(healthResponse.status, 200);
+  const health = await healthResponse.json();
+  assert.equal(health.status, "degraded");
+  assert.equal(health.serving_ready, true);
+  assert.equal(health.serving_stage, "provisional");
+  assert.equal(health.publication_ready, false);
+
+  const missingChampionStore = new MemoryStore({
+    records: store.records,
+    states: store.states,
+    models: { challenger: fixture.model },
+  });
+  const missingChampionReadiness = await getReadiness(
+    missingChampionStore,
+    appConfig,
+    { now },
+  );
+  assert.equal(missingChampionReadiness.serving_ready, true);
+  assert.equal(missingChampionReadiness.serving_stage, "provisional");
+  assert.equal(
+    missingChampionReadiness.provisional_model.eligibility.eligible,
+    true,
+  );
+
+  const script = await scriptResponse.text();
+  assert.match(script, /试用模型/);
+  assert.match(script, /严格验证仍在积累中/);
+
+  const legacyForecast = structuredClone(fixture.forecast);
+  delete legacyForecast.data.model.validation_status;
+  const legacyStore = new MemoryStore({
+    records: {
+      prediction: [legacyForecast],
+      feature_snapshot: fixture.featureSnapshots,
+      raw_observation: store.records.raw_observation,
+    },
+    states: store.states,
+    models: store.models,
+  });
+  const legacyReadiness = await getReadiness(legacyStore, appConfig, { now });
+  assert.equal(legacyReadiness.forecast_available, false);
+  assert.equal(legacyReadiness.serving_ready, false);
+  assert.equal(legacyReadiness.serving_stage, "blocked");
+  assert.equal(
+    legacyReadiness.provisional_model.eligibility.reason,
+    "prediction_validation_status_missing",
+  );
+
+  const lowOutcomeFixture = provisionalForecastFixture(appConfig, {
+    eventCount: 2,
+  });
+  const lowOutcomeStore = new MemoryStore({
+    records: {
+      prediction: [lowOutcomeFixture.forecast],
+      feature_snapshot: lowOutcomeFixture.featureSnapshots,
+      raw_observation: store.records.raw_observation,
+    },
+    states: store.states,
+    models: { challenger: lowOutcomeFixture.model },
+  });
+  const lowOutcomeReadiness = await getReadiness(
+    lowOutcomeStore,
+    appConfig,
+    { now },
+  );
+  assert.equal(lowOutcomeReadiness.forecast_available, false);
+  assert.equal(lowOutcomeReadiness.serving_ready, false);
+  assert.equal(lowOutcomeReadiness.serving_stage, "blocked");
+  assert.equal(
+    lowOutcomeReadiness.provisional_model.eligibility.reason,
+    "challenger_outcome_sample_insufficient",
+  );
+  assert.equal(
+    lowOutcomeReadiness.provisional_model.eligibility.requirements
+      .minimum_outcomes_met,
+    false,
+  );
 });
 
 test("stale forecasts are explicit and cannot make health or publication readiness green", async (t) => {

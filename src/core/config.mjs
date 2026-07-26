@@ -66,6 +66,19 @@ function validateModelCalibrator(config) {
   }
 }
 
+function validateProvisionalBootstrap(config) {
+  const bootstrap = config.runtime?.provisional_bootstrap;
+  if (
+    typeof bootstrap?.enabled !== "boolean" ||
+    !Number.isInteger(bootstrap?.minimum_outcomes) ||
+    bootstrap.minimum_outcomes < 1
+  ) {
+    throw new TypeError(
+      "runtime.provisional_bootstrap must declare a boolean enabled flag and a positive integer minimum_outcomes",
+    );
+  }
+}
+
 function semanticConfigHash(config) {
   const {
     runtime: _runtime,
@@ -115,6 +128,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateXOutcomeExhaustivenessContract(config);
   validateHistoricalMonitorCoverage(config);
   validateModelCalibrator(config);
+  validateProvisionalBootstrap(config);
   config.config_hash = semanticConfigHash(config);
   return config;
 }

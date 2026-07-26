@@ -154,6 +154,10 @@
     "run_on_start": true,
     "scheduler_delay_seconds": 5,
     "retrain_interval_hours": 24,
+    "provisional_bootstrap": {
+      "enabled": false,
+      "minimum_outcomes": 10
+    },
     "forecast_fresh_age_hours": 1.5,
     "forecast_stale_age_hours": 3
   }

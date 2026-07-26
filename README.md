@@ -15,10 +15,14 @@ feature snapshots; a regularized hourly hazard model; a walk-forward promotion
 gate; JSON APIs; and the forecast/evaluation website. Personal quota integration
 remains deferred.
 
-The live profile is implemented, but a first deployment begins with pending daily
-coverage. The repository does not yet contain the 1,008 evaluated hourly windows
-and 20 eligible events required to claim measured forecasting accuracy or
-production publication readiness.
+The operating policy separates immediate usefulness from validated performance. A
+first deployment batch-fits a clearly labeled `provisional` bootstrap from the
+eligible historical data already available at its training cutoff; it does not wait
+for weeks of new wall-clock data before it may train or be inspected. Strict causal
+walk-forward and immutable `as_issued` evidence continue accumulating in the
+background. Until the original 1,008-window, 20-event promotion gate passes, the
+bootstrap must not claim that 80% event-window recall or production accuracy has
+been validated.
 
 ## Current decisions
 
@@ -37,8 +41,15 @@ production publication readiness.
   providers rather than the core model.
 - Text models extract stable claims. A statistical hazard model produces the final
   probability.
-- New intelligence may change the current forecast immediately. Model parameters
-  change only after an outcome is confirmed and the prediction can be settled.
+- New provider intelligence is incorporated into as-of features and a fresh
+  forecast on the hourly pipeline cadence; it does not wait for parameter
+  retraining.
+- Model parameters are batch-refit at most once every 24 hours and only from
+  labels that are mature and available at the frozen training cutoff. Records that
+  arrive while a fit is running enter the next batch instead of restarting the
+  current fit.
+- `provisional` means usable bootstrap, not measured 80% performance. `validated`
+  remains reserved for the original causal/as-issued sample and quality gates.
 - Personal quota windows and expiring reset vouchers are a downstream optimization
   layer and do not redefine the platform forecast. This layer is not part of the
   initial website MVP.
@@ -71,8 +82,16 @@ providers
   -> as-of feature snapshots
   -> hourly hazard and rolling four-hour forecast
   -> confirmed outcomes
-  -> append-only prediction settlements, calibration, and controlled model updates
+  -> immediate historical batch bootstrap when needed
+  -> append-only prediction settlements and background causal/as-issued validation
+  -> at-most-daily batch train/evaluate attempts
 ```
+
+The bootstrap and validation paths share the same leakage, outcome-confirmation,
+coverage, and lineage rules. The distinction is the strength of the performance
+claim: provisional use is allowed before the validation sample matures, but it is
+displayed as unvalidated and cannot inherit an exploratory or replay score as an
+80% claim.
 
 ## Repository layout
 
@@ -160,7 +179,8 @@ exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,
 deduplication, coverage, and evaluation contracts and must not be served as current
 evidence. The Tibo-authority outcome definition and delayed daily-ledger coverage
-contract are checked in, but the current honest state remains not ready: initial
-coverage is pending, and publication still needs at least 1,008 evaluated hourly
-windows, 20 eligible events, and a compatible challenger that passes the
-fixed-policy walk-forward and calibration gates.
+contract are checked in. The live profile batch-fits existing eligible history
+immediately as a provisional bootstrap; no claim of validated 80% performance
+follows from that fit. The `validated` status still requires at least 1,008
+evaluated hourly windows, 20 eligible events, and a compatible challenger that
+passes the fixed-policy walk-forward and calibration gates.

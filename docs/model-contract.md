@@ -57,7 +57,9 @@ stores the complete prior vector plus optimizer method, objective, gradient norm
 iteration count, tolerance, and convergence status. Reaching `max_iterations` is a
 failed training attempt, not convergence, and such a challenger cannot be promoted.
 A complementary log-log link remains a compatible challenger family, but it must
-pass the same walk-forward and calibration gates before replacing the champion.
+pass the same walk-forward and calibration gates before becoming validated or
+replacing a validated champion. A provisional bootstrap remains explicitly
+unvalidated even when its optimizer converges.
 
 The periodic baseline never learns 168 unrelated parameters. The current feature
 schema uses this causal, smoothed renewal-periodic score:
@@ -145,12 +147,38 @@ cannot manufacture earlier as-of coverage.
 
 New information follows two paths:
 
-1. Immediately recompute the current as-of features and forecast.
-2. Update model parameters only after outcomes mature and predictions are settled.
+1. Provider signals immediately enter the next hourly as-of feature snapshot and
+   forecast without waiting for a parameter update.
+2. Model parameters are batch-refit at most once every 24 hours, using only
+   confirmed and negative-label-eligible outcomes that are mature and available by
+   the frozen training cutoff.
 
-Early updates should be small batches rather than one parameter update per post.
-Maintain a stable champion and train a challenger. Preserve a long-term baseline
-while using controlled recent-data decay to adapt to policy changes.
+When a compatible model is not yet available, eligible historical data is batch-fit
+immediately as a provisional bootstrap. “Immediately” means that training begins
+from history already present at the cutoff; it does not mean that future records are
+backdated or that incomplete labels are treated as mature. Training keeps its
+cutoff and input lineage frozen. Provider records or newly matured labels that
+arrive while the optimizer is running enter the next batch and never restart or
+mutate the current artifact.
+
+Each due batch performs the current train/evaluate attempt in one pipeline run.
+There is no separate weekly evaluation scheduler. Maintain a stable champion and
+train a challenger, preserve a long-term baseline, and accumulate strict causal
+walk-forward plus immutable as-issued evidence in the background. Re-evaluating a
+stored pending challenger as new fold coverage matures is not a parameter update
+and does not refit the model.
+
+`provisional` and `validated` are performance-evidence states:
+
+- A provisional bootstrap may be used and displayed while background validation
+  matures, but it cannot claim that the 80% event-window-recall requirement has
+  been measured or passed.
+- A validated model has passed the original sample, recall, Brier-skill,
+  calibration, convergence, compatibility, and lineage gates.
+
+Both states obey identical as-of, outcome-confirmation, coverage, censoring, and
+evidence-independence rules. Provisional use relaxes only the timing of use, not the
+integrity of training labels.
 
 ## Validation and calibration
 
@@ -193,9 +221,13 @@ small sample; observed calibration is still measured by the promotion gate. A
 future non-identity calibrator must have its own version and must be fitted only
 from frozen out-of-fold predictions after the sample threshold is reached.
 
+An exploratory replay or provisional diagnostic may be shown with its evidence mode
+and sample counts, but it never establishes the 80% claim. Only the compatible
+validated evaluation described below may do so.
+
 ## Forecast output
 
-A production weekly prediction contains:
+A served weekly prediction, whether provisional or validated, contains:
 
 - issue time and knowledge cutoff;
 - event process and affected scope;
@@ -205,7 +237,8 @@ A production weekly prediction contains:
   probability per slot;
 - no-reset probability for a first-event forecast;
 - uncertainty and data quality separate from probability;
-- model, training cutoff, calibrator, and feature schema versions.
+- model, validation status, training cutoff, calibrator, and feature schema
+  versions.
 
 `issued_at` is the actual publication time after collection, processing, and
 forecast computation. It is never backdated to scheduler start. The knowledge
@@ -230,21 +263,24 @@ forecast issue time, ranked window, actual occurrence interval, settlement, scor
 and model version.
 
 Before enough issued forecasts and confirmed events have matured, the page may
-show the separately labeled walk-forward promotion evaluation. A walk-forward or
-verified archive reconstruction is never labeled `as_issued`, and live accuracy
-never substitutes a forecast recomputed with later evidence.
+show the separately labeled walk-forward promotion evaluation beside a provisional
+forecast. A walk-forward or verified archive reconstruction is never labeled
+`as_issued`, and live accuracy never substitutes a forecast recomputed with later
+evidence. Incomplete strict validation does not block provisional use; it keeps the
+model status provisional.
 
-Production publication requires at least 1,008 evaluated hourly windows and 20
-eligible events by default. A lower training `minimum_outcomes` remains useful
-for experimental fitting, but does not establish live probability validity.
+Validated status requires at least 1,008 evaluated hourly windows and 20 eligible
+events by default. A lower training `minimum_outcomes` remains useful for
+provisional fitting, but does not establish validated live probability quality.
 Feature snapshots and predictions expose `outcome_sample_count` and continuous
 `sample_sufficiency = min(1, outcome_sample_count / 20)`; forecasts remain
 out-of-distribution below 20 eligible historical outcomes.
 
 The checked-in Tibo-authority profile and its coverage policy do not satisfy these
-sample gates by themselves. Initial ledger observations are pending, and
-publication remains blocked until a compatible real-data evaluation reaches both
-thresholds and passes the quality and calibration gates.
+sample gates by themselves. A provisional bootstrap can still be fit immediately
+from eligible history and clearly labeled for use. It becomes validated only when
+a compatible real-data evaluation reaches both thresholds and passes the quality
+and calibration gates.
 
 Every evaluation exposes an explicit, provider-neutral `evidence_mode`:
 `synthetic_replay`, `archive_replay`, `historical_walk_forward`, or `as_issued`.

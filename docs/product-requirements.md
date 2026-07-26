@@ -79,13 +79,27 @@ configured provider adapters
 
 qualifying Tibo completion statement
   -> reset outcome
-  -> historical settlement, evaluation, and controlled retraining
+  -> historical settlement and controlled retraining
+
+eligible history available at bootstrap cutoff
+  -> immediate provisional batch fit
+  -> provisional forecast use
+
+causal walk-forward folds plus mature issued forecasts
+  -> background validation
+  -> validated status after the original promotion gate passes
 ```
 
 A qualifying completion statement may settle the operational outcome, but it must
 not be included as an input to a forecast issued before the statement was
 available. Historical training and evaluation use only records with
 `available_at <= knowledge_cutoff`.
+
+Bootstrap does not wait for new real time to pass when eligible historical data is
+already present. It freezes a training cutoff and fits one reproducible batch from
+the mature labels available by that cutoff. Data collected while the batch is
+running is not allowed into the frozen fit and does not restart it; it becomes input
+to the next batch.
 
 ## Model scope
 
@@ -103,6 +117,20 @@ model. Candidate features include:
 Cross-vendor and community effects start strongly shrunk toward zero and remain
 only if walk-forward evaluation shows stable value. Deep learning and reinforcement
 learning are outside the MVP.
+
+The model has two product statuses:
+
+- `provisional`: an immediately usable bootstrap fit whose causal/as-issued
+  validation sample is still accumulating. It must not claim 80% validated recall
+  or validated accuracy.
+- `validated`: a compatible model whose real-data evaluation satisfies the
+  original window, event, recall, Brier-skill, calibration, convergence, and
+  lineage gates.
+
+This status split changes when a forecast may be used, not which records are legal
+training inputs. Confirmed outcomes, negative-label coverage, censoring, as-of
+cutoffs, evidence independence, and revision lineage remain equally strict in both
+states.
 
 ## Current forecast page
 
@@ -129,7 +157,10 @@ not seven local calendar dates. Display-time-zone conversion changes the labels 
 does not reorder the canonical UTC slots.
 
 The page also displays the forecast issue time, knowledge cutoff, display time
-zone, source freshness, and current model version.
+zone, source freshness, current model version, and provisional or validated status.
+A provisional page states explicitly that the 80% event-window-recall threshold has
+not yet been validated; it does not turn an exploratory replay score into a
+performance claim.
 
 ## Historical evaluation page
 
@@ -144,6 +175,12 @@ false-alert counts. It switches to live `as_issued` reporting only after the
 configured minimum number of mature forecast windows and confirmed events exists.
 An evaluation made with an older coverage, feature, model, data, or fold signature
 is invalidated rather than displayed.
+
+Strict causal and as-issued validation runs in the background and does not block
+clearly labeled provisional forecast use. A provisional model may show sample
+counts and exploratory diagnostics, but the historical page must keep “not yet
+validated” distinct from both a passing walk-forward result and mature as-issued
+performance.
 
 The page includes:
 
@@ -179,7 +216,17 @@ its probabilities or retraining its model.
   walk-forward validation is labeled separately.
 - Provider failure or incomplete observation coverage is represented as degraded
   data quality or censoring, not as evidence that no reset occurred.
-- Model acceptance on real data requires optimizer convergence, at least 80%
+- Existing eligible historical data can immediately produce a frozen-cutoff,
+  batch-fit provisional forecast; the system does not wait for future wall-clock
+  collection before beginning that fit.
+- New provider signals update hourly as-of features and predictions. Model
+  parameters are batch-refit at most every 24 hours from labels mature at the
+  training cutoff; data arriving during a fit enters the next batch without
+  restarting it.
+- Provisional use does not imply that 80% recall has been measured or validated.
+  The page exposes that status while causal/as-issued evidence accumulates in the
+  background.
+- Validated model acceptance on real data requires optimizer convergence, at least 80%
   event-window recall under the configured shared alert budget, positive Brier
   skill over the historical baseline, and expected calibration error no greater
   than 0.10, evaluated over at least 1,008 hourly windows and 20 eligible events.

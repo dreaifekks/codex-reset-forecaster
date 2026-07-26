@@ -196,9 +196,15 @@ interval so that this wakeup performs a real second observation.
 Do not run `down -v` and do not copy a seed over the existing volume. The outcome
 definition changes the model compatibility signature, so an older champion or
 evaluation is retained for audit but is not served as compatible evidence.
-Immediately after switching, pending coverage and HTTP 503/not-ready are expected.
-Publication still requires at least 1,008 evaluated hourly windows, 20 eligible
-events, and a passing compatible walk-forward/calibration evaluation.
+Immediately after switching, the pipeline uses eligible historical records already
+present at its cutoff to batch-fit a provisional bootstrap; it does not wait for
+future wall-clock collection merely to begin training. The live profile enables
+this path once the batch contains at least ten eligible outcomes. If that minimum
+or negative-label coverage is still missing, HTTP 503/not-ready remains expected.
+A provisional HTTP 200 forecast is explicitly labeled `provisional` and must not be
+described as validated 80% performance. The `validated` state still requires at
+least 1,008 evaluated hourly windows, 20 eligible events, and a passing compatible
+walk-forward/calibration evaluation.
 
 Useful commands:
 
@@ -214,18 +220,24 @@ node src/cli.mjs pipeline --retrain
 node src/cli.mjs status
 ```
 
-`train` creates a challenger, evaluates rolling-origin folds, and promotes it only
-when the optimizer converged, the evaluation and challenger compatibility
-signatures match, event-window recall is at least 80%, Brier skill beats the
-historical baseline, expected calibration error stays within the configured
-ceiling, and it improves on an existing champion using the same fold definition.
+`train` batch-fits a challenger at one frozen cutoff and performs the compatible
+rolling-origin evaluation attempt in the same command; it does not itself issue a
+forecast. `pipeline --retrain` performs collection, fit/evaluation, and forecast
+issuance together. Under the enabled provisional-bootstrap policy, a converged
+challenger with the configured minimum eligible outcomes may then issue a clearly
+labeled provisional forecast while strict validation remains pending. It becomes
+validated only when the evaluation and challenger compatibility signatures match,
+event-window recall is at least 80%, Brier skill beats the historical baseline,
+expected calibration error stays within the configured ceiling, and it satisfies
+the existing champion comparison on the same fold definition.
 
-The 80% value is event-window recall, not ordinary per-hour accuracy. Each held-out
-UTC week has one shared fixed alert budget; the selected windows are reused for
-every event and for false-alert accounting. The evaluator never reselects a fresh
-top-N prefix for each event. It also reports log loss, average precision,
-calibration intercept and slope, expected calibration error, false alerts under the
-same policy, useful lead time, and policy-peak absolute event offset.
+The 80% value is a validated event-window recall threshold, not ordinary per-hour
+accuracy and not a provisional-bootstrap claim. Each held-out UTC week has one
+shared fixed alert budget; the selected windows are reused for every event and for
+false-alert accounting. The evaluator never reselects a fresh top-N prefix for each
+event. It also reports log loss, average precision, calibration intercept and slope,
+expected calibration error, false alerts under the same policy, useful lead time,
+and policy-peak absolute event offset.
 
 Only providers named in `model.outcome_coverage_providers` may establish negative
 label coverage. Context-source availability alone can never turn an unobserved hour
@@ -259,8 +271,18 @@ and, unless disabled, once at startup. A run collects and processes first, freez
 an actual post-collection knowledge cutoff, and starts its 168-hour target at the
 next complete hour. `issued_at` is recorded when publication is complete rather
 than copied from the run's start. The scheduler prevents overlapping runs and
-retries on the following hour after an error. It retrains at the configured daily
-interval; failed or non-converged challengers do not replace the champion.
+retries on the following hour after an error.
+
+New provider signals are normalized into the next hourly feature snapshot and may
+change that forecast immediately without changing model parameters. Parameter
+updates are reproducible batch fits at most once per configured 24-hour interval.
+Each batch uses only labels mature and available at its frozen training cutoff and
+performs the walk-forward evaluation attempt in the same run; there is no separate
+weekly evaluator. Data that arrives while training is running is left for the next
+batch and does not restart the current fit. Failed or non-converged challengers do
+not replace the stable model. A stored challenger can be re-evaluated between batch
+fits as a causal fold becomes scorable; this does not retrain it or alter its
+parameters.
 
 ```bash
 RESET_SCHEDULER_ENABLED=true npm start
@@ -281,13 +303,22 @@ The service exposes:
 `/api/health` reports every configured provider separately, including its role,
 last success, latest unresolved error, age threshold, and effective stale state.
 The aggregate compatibility timestamp is informational only: a fresh context
-provider cannot mask a stale required exact/outcome source. The current-forecast
-endpoint fails closed with HTTP 503 whenever `publication_ready` is false, so
-missing negative-label coverage, insufficient real evaluation, stale sources,
-pipeline failures, and model/feature integrity failures cannot be presented as a
-current probability. The sole exception is an explicitly labeled
-`synthetic_demo`; it remains available for local mechanics and carries its full
-publication blocker list beside the displayed percentage.
+provider cannot mask a stale required exact/outcome source. Provisional availability
+and validated readiness are separate. Insufficient causal/as-issued evaluation by
+itself does not block an eligible provisional forecast, but the response remains
+explicitly labeled `provisional`, retains the validation blockers, and must not be
+presented as a validated probability. Missing legal training coverage, stale
+required sources, or model/feature integrity failures still fail closed. Pipeline
+failures remain visible and prevent validated publication; a still-fresh compatible
+stable forecast may continue serving under its existing stage. An explicitly
+labeled `synthetic_demo` remains available only for local mechanics and carries its
+full blocker list beside the displayed percentage.
+
+`GET /api/readiness` makes the split machine-readable. An eligible bootstrap reports
+`serving_ready: true` and `serving_stage: "provisional"` while
+`publication_ready` remains false until the original validated gate passes.
+`serving_blockers` control whether any forecast can be returned;
+`publication_blockers` explain why it cannot yet be called validated.
 
 When an outcome provider has complete-day candidates undergoing its required
 stability observation but no adequate interval yet, this is an expected wait
@@ -300,13 +331,14 @@ forecast endpoint continues to return HTTP 503.
 Once coverage is adequate, fitting the challenger and proving it out of sample
 remain separate steps. If the challenger is saved but no causal walk-forward fold
 has matured yet, the run succeeds with
-`pipeline_status: "waiting_for_evaluation"`, `evaluation_waiting`, and
-`forecast: null` when no champion exists. Publication stays blocked with
-`model_evaluation_pending`; this expected state is not `pipeline_error`. The
-scheduler records the successful fit time and reuses the compatible challenger
-between daily retraining intervals. If a compatible champion already exists, it
-may continue issuing forecasts while the challenger waits, subject to the same
-publication gates.
+`pipeline_status: "waiting_for_evaluation"` and `evaluation_waiting`. With the live
+profile's enabled bootstrap policy and at least ten eligible outcomes, that same
+compatible challenger may issue a forecast whose model metadata says
+`validation_status: "provisional"`; it is not written as a validated champion. If
+the provisional minimum is not met, `forecast` remains null. The scheduler records
+the successful fit time and reuses the compatible challenger between daily
+retraining intervals. If a compatible validated champion already exists, it
+continues issuing validated forecasts while the challenger waits.
 
 Training freezes the exact post-processing knowledge cutoff, so coverage that
 becomes verifiably available a few minutes after an hour boundary can be used in
@@ -314,6 +346,9 @@ that run without backdating it. Walk-forward scoring remains aligned to the
 completed UTC hour. When the exact training cutoff has coverage but the hourly
 evaluation cutoff does not yet have it, the run reports
 `walk_forward_coverage_cutoff_pending` instead of a pipeline failure.
+Provider records and labels that arrive after the frozen cutoff are deliberately
+excluded from the running batch and enter the following batch; do not cancel or
+restart training to include them.
 New daily coverage candidates keep their exact recheck wake-up even while the
 top-level pipeline is waiting for evaluation, so a deadline just after an hour
 boundary is not deferred to the following hour.
@@ -325,12 +360,15 @@ payload blobs, and champion/challenger artifacts live under the same configured
 data root. Back up the whole root together.
 
 Before enough live forecasts mature, `/accuracy` explicitly shows the as-of-safe
-walk-forward result used for model promotion. Once mature saved predictions and the
+walk-forward result used for model promotion and identifies the current forecast as
+provisional. That page must say the 80% threshold is not yet validated even if an
+exploratory replay prints a similar number. Once mature saved predictions and the
 configured minimum live windows and events exist, the page switches to `as_issued`
-evaluation. Those scores use only the immutable hourly forecasts that users could
-actually have seen; the two evidence modes are never labeled as one another.
-The UI also labels a retrospective import as `ARCHIVE REPLAY` from attested
-availability provenance rather than from any specific provider name.
+evaluation and the model may become validated. Those scores use only the immutable
+hourly forecasts that users could actually have seen; the evidence modes are never
+labeled as one another. The UI also labels a retrospective import as
+`ARCHIVE REPLAY` from attested availability provenance rather than from any specific
+provider name.
 
 ## Docker
 

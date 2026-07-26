@@ -599,6 +599,42 @@ export async function getProviderFreshness(store, config, now = new Date()) {
   };
 }
 
+function predictionMatchesModel(prediction, model) {
+  const predictionModel = prediction?.data?.model;
+  return Boolean(
+    predictionModel &&
+    model &&
+    predictionModel.version === model.model_version &&
+    predictionModel.artifact_hash === model.artifact_hash &&
+    predictionModel.model_contract_hash === model.model_contract_hash &&
+    predictionModel.training_cutoff === model.training_cutoff
+  );
+}
+
+function provisionalIneligibilityReason({
+  enabled,
+  championCompatible,
+  prediction,
+  validationStatus,
+  challenger,
+  challengerCompatible,
+  predictionMatchesChallenger,
+  minimumOutcomesMet,
+}) {
+  if (!enabled) return "provisional_bootstrap_disabled";
+  if (championCompatible) return "compatible_champion_available";
+  if (!prediction) return "forecast_missing";
+  if (validationStatus === null) return "prediction_validation_status_missing";
+  if (validationStatus !== "provisional") {
+    return "prediction_not_marked_provisional";
+  }
+  if (!challenger) return "challenger_missing";
+  if (!challengerCompatible) return "challenger_incompatible";
+  if (!minimumOutcomesMet) return "challenger_outcome_sample_insufficient";
+  if (!predictionMatchesChallenger) return "forecast_challenger_mismatch";
+  return null;
+}
+
 export async function getReadiness(store, config, { now = new Date() } = {}) {
   const championRead = store.readModel("champion")
     .then((model) => ({ model, error: null }))
@@ -841,10 +877,62 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     .sort((left, right) => left.data.issued_at.localeCompare(right.data.issued_at))
     .at(-1) ?? null;
   const currentForecast = assessPredictionFreshness(latestPrediction, config, now);
+  const predictionValidationStatus =
+    latestPrediction?.data?.model?.validation_status ?? null;
+  const effectiveChampion = championArtifact ?? champion;
+  const predictionMatchesChampion = Boolean(
+    championCompatibility.compatible &&
+    predictionMatchesModel(latestPrediction, effectiveChampion),
+  );
+  const predictionMatchesChallenger = Boolean(
+    challengerCompatibility.compatible &&
+    predictionMatchesModel(latestPrediction, challenger),
+  );
+  const provisionalBootstrapEnabled =
+    config.runtime?.provisional_bootstrap?.enabled === true;
+  const provisionalMinimumOutcomes = Number(
+    config.runtime?.provisional_bootstrap?.minimum_outcomes ?? 0,
+  );
+  const challengerEventCount = Number.isInteger(challenger?.event_count)
+    ? challenger.event_count
+    : null;
+  const provisionalMinimumOutcomesMet = Boolean(
+    Number.isFinite(provisionalMinimumOutcomes) &&
+    provisionalMinimumOutcomes >= 0 &&
+    challengerEventCount !== null &&
+    challengerEventCount >= provisionalMinimumOutcomes,
+  );
+  const provisionalReason = provisionalIneligibilityReason({
+    enabled: provisionalBootstrapEnabled,
+    championCompatible: championCompatibility.compatible,
+    prediction: latestPrediction,
+    validationStatus: predictionValidationStatus,
+    challenger,
+    challengerCompatible: challengerCompatibility.compatible,
+    predictionMatchesChallenger,
+    minimumOutcomesMet: provisionalMinimumOutcomesMet,
+  });
+  const provisionalEligible = provisionalReason === null;
+  const legacyValidatedPrediction = Boolean(
+    predictionValidationStatus === null &&
+    predictionMatchesChampion,
+  );
+  const validatedEligible = Boolean(
+    predictionMatchesChampion &&
+    (
+      predictionValidationStatus === "validated" ||
+      legacyValidatedPrediction
+    ),
+  );
+  const activeModel = validatedEligible
+    ? effectiveChampion
+    : provisionalEligible
+      ? challenger
+      : null;
   const predictionIntegrity = assessPredictionIntegrity({
     prediction: latestPrediction,
     featureSnapshots,
-    champion: championArtifact ?? champion,
+    model: activeModel,
     config,
   });
   const outcomeOnlyCoverage = normalizeCoverageIntervals(
@@ -893,6 +981,50 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
           : runtime.last_success_at
             ? "completed"
             : "idle";
+  const forecastAvailable = Boolean(
+    latestPrediction &&
+    activeModel &&
+    predictionIntegrity.valid &&
+    !["stale", "invalid", "missing"].includes(currentForecast.status),
+  );
+  const servingBlockers = [];
+  if (!latestPrediction) {
+    servingBlockers.push("forecast_missing");
+  } else if (["stale", "invalid", "missing"].includes(currentForecast.status)) {
+    servingBlockers.push(`forecast_${currentForecast.status}`);
+  }
+  if (latestPrediction && !activeModel) {
+    if (predictionValidationStatus === null && !predictionMatchesChampion) {
+      servingBlockers.push("forecast_validation_status_missing");
+    } else if (
+      predictionValidationStatus !== null &&
+      !["provisional", "validated"].includes(predictionValidationStatus)
+    ) {
+      servingBlockers.push("forecast_validation_status_invalid");
+    } else if (
+      predictionValidationStatus === "provisional" &&
+      !provisionalEligible
+    ) {
+      servingBlockers.push("provisional_model_ineligible");
+    } else {
+      servingBlockers.push("active_model_unavailable");
+    }
+  }
+  if (latestPrediction && activeModel && !predictionIntegrity.valid) {
+    servingBlockers.push("forecast_integrity_failed");
+  }
+  if (providerFreshnessSummary.groups.required_outcome.status !== "fresh") {
+    servingBlockers.push("required_outcome_source_not_fresh");
+  }
+  if (providerFreshnessSummary.groups.exact.status !== "fresh") {
+    servingBlockers.push("exact_source_not_fresh");
+  }
+  const servingReady = forecastAvailable && servingBlockers.length === 0;
+  const servingStage = !servingReady
+    ? "blocked"
+    : provisionalEligible
+      ? "provisional"
+      : "validated";
   const publicationBlockers = [];
   if (championResult.error) publicationBlockers.push("champion_incompatible");
   else if (!champion) publicationBlockers.push("champion_missing");
@@ -902,6 +1034,13 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   if (!latestPrediction) publicationBlockers.push("forecast_missing");
   else if (currentForecast.status !== "fresh") {
     publicationBlockers.push(`forecast_${currentForecast.status}`);
+  }
+  if (
+    latestPrediction &&
+    predictionValidationStatus !== "validated" &&
+    !legacyValidatedPrediction
+  ) {
+    publicationBlockers.push("forecast_not_validated");
   }
   if (latestPrediction && !predictionIntegrity.valid) {
     publicationBlockers.push("forecast_integrity_failed");
@@ -1048,17 +1187,33 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     },
     current_forecast: currentForecast,
     prediction_integrity: predictionIntegrity,
-    forecast_available:
-      Boolean(latestPrediction) &&
-      predictionIntegrity.valid &&
-      championCompatibility.compatible &&
-      !["stale", "invalid", "missing"].includes(currentForecast.status) &&
-      !publicationBlockers.some((blocker) => [
-        "forecast_model_mismatch",
-        "forecast_model_artifact_mismatch",
-        "forecast_model_contract_mismatch",
-        "champion_artifact_missing",
-      ].includes(blocker)),
+    forecast_available: forecastAvailable,
+    serving_ready: servingReady,
+    serving_stage: servingStage,
+    serving_blockers: [...new Set(servingBlockers)],
+    provisional_model: {
+      available: Boolean(challenger),
+      version: challenger?.model_version ?? null,
+      artifact_hash: challenger?.artifact_hash ?? null,
+      training_cutoff: challenger?.training_cutoff ?? null,
+      compatibility: challengerCompatibility,
+      eligibility: {
+        enabled: provisionalBootstrapEnabled,
+        eligible: provisionalEligible,
+        reason: provisionalReason,
+        prediction_validation_status: predictionValidationStatus,
+        requirements: {
+          no_compatible_champion: !championCompatibility.compatible,
+          challenger_compatible: challengerCompatibility.compatible,
+          prediction_marked_provisional:
+            predictionValidationStatus === "provisional",
+          prediction_matches_challenger: predictionMatchesChallenger,
+          minimum_outcomes: provisionalMinimumOutcomes,
+          challenger_event_count: challengerEventCount,
+          minimum_outcomes_met: provisionalMinimumOutcomesMet,
+        },
+      },
+    },
     provider_freshness: providerFreshnessSummary,
     publication_ready: publicationBlockers.length === 0,
     publication_blockers: publicationBlockers,

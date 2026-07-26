@@ -48,6 +48,7 @@ const publicationBlockerLabels = {
   forecast_missing: "尚无预测",
   forecast_stale: "预测已经过期",
   forecast_invalid: "预测时间范围无效",
+  forecast_not_validated: "试用模型仍在积累严格验证",
   forecast_model_mismatch: "模型版本需要更新",
   forecast_model_artifact_mismatch: "模型版本需要更新",
   forecast_model_contract_mismatch: "模型版本需要更新",
@@ -345,6 +346,16 @@ function challengerReady(readiness) {
   return readiness?.model?.challenger?.ready === true;
 }
 
+function isProvisionalServing(forecast, readiness = {}) {
+  const serving = forecast?.serving ?? {};
+  return (
+    serving.status === "provisional" ||
+    serving.stage === "provisional" ||
+    serving.serving_stage === "provisional" ||
+    readiness.serving_stage === "provisional"
+  );
+}
+
 function forecastErrorText(result, readiness = {}) {
   if (challengerReady(readiness) && readiness.evaluation_waiting) {
     return "模型已训练，评估完成后显示 7 天概率。";
@@ -375,6 +386,7 @@ function setStatus(kind, text) {
 function renderForecast(forecast) {
   const slots = Array.isArray(forecast.data.slots) ? forecast.data.slots : [];
   if (slots.length === 0) throw new Error("预测没有小时数据");
+  const provisional = isProvisionalServing(forecast);
   const probability4h = Number.isFinite(slots[0]?.rolling_4h_probability)
     ? slots[0].rolling_4h_probability
     : null;
@@ -389,7 +401,8 @@ function renderForecast(forecast) {
     : percent(probability4h, 2);
   document.querySelector("#probability-24h").textContent = percent(probability24h, 1);
   document.querySelector("#probability-7d").textContent = percent(probability168h, 1);
-  document.querySelector("#data-quality-label").textContent = "数据状态";
+  document.querySelector("#data-quality-label").textContent =
+    provisional ? "数据状态 · 试用模型" : "数据状态";
   document.querySelector("#interval-4h").textContent = probability4h === null
     ? "滚动 4 小时窗口超出预测范围"
     : intervalText(cumulativeInterval(forecast, "four_hours"));
@@ -460,6 +473,13 @@ function renderPublicationWarning(forecastResult, readinessResult) {
   const serving = forecastResult.data?.serving ?? {};
   const blockers = serving.publication_blockers ?? readiness.publication_blockers ?? [];
   const syntheticDemo = serving.synthetic_demo === true || readiness.synthetic_only === true;
+  const provisional = isProvisionalServing(forecastResult.data, readiness);
+  if (provisional) {
+    target.hidden = false;
+    target.classList.remove("synthetic");
+    target.textContent = "试用模型：当前概率已开放试用，严格验证仍在积累中。";
+    return;
+  }
   if (
     (readiness.publication_ready === true && !syntheticDemo) ||
     (challengerReady(readiness) && readiness.evaluation_waiting)
@@ -485,10 +505,13 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   const exactLastSuccess = exact?.last_success_at;
   const synthetic = Boolean(readiness.synthetic_only);
   const servingStatus = forecast?.serving?.status ?? readiness.current_forecast?.status;
+  const provisional = isProvisionalServing(forecast, readiness);
   const coverageWaiting = readiness.coverage_waiting ?? health.coverage_waiting;
   const evaluationWaiting =
     readiness.evaluation_waiting ?? health.evaluation_waiting;
-  if (coverageWaiting || evaluationWaiting) {
+  if (provisional) {
+    setStatus("warning", "试用模型 · 严格验证积累中");
+  } else if (coverageWaiting || evaluationWaiting) {
     setStatus(
       "warning",
       coverageWaiting
