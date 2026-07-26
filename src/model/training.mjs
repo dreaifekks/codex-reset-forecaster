@@ -42,6 +42,24 @@ function overlaps(slotStart, slotEnd, range) {
   return Date.parse(slotStart) < Date.parse(range.end) && Date.parse(slotEnd) > Date.parse(range.start);
 }
 
+function hourlySlotsOverlappingRange(range, minimumStart, maximumEnd) {
+  const boundedStart = Math.max(Date.parse(range.start), minimumStart.getTime());
+  const boundedEnd = Math.min(Date.parse(range.end), maximumEnd.getTime());
+  if (!Number.isFinite(boundedStart) || !Number.isFinite(boundedEnd) || boundedStart >= boundedEnd) {
+    return [];
+  }
+  const slots = [];
+  let cursor = floorHour(new Date(boundedStart));
+  while (cursor.getTime() < boundedEnd) {
+    const end = addHours(cursor, 1);
+    if (overlaps(cursor, end, range)) {
+      slots.push({ start: toUtcIso(cursor), end: toUtcIso(end) });
+    }
+    cursor = end;
+  }
+  return slots;
+}
+
 export function intervalExposure(slotStart, slotEnd, range) {
   const start = Math.max(Date.parse(slotStart), Date.parse(range.start));
   const end = Math.min(Date.parse(slotEnd), Date.parse(range.end));
@@ -193,6 +211,7 @@ export async function buildTrainingExamples(store, config, {
     });
     return { slot, row: featuresToArray(vector.features) };
   });
+  const coveredRowStarts = new Set(baseRows.map(({ slot }) => slot.start));
   const censoredRows = new Set();
   for (const outcome of ambiguousOutcomes) {
     for (const { slot } of baseRows) {
@@ -203,14 +222,18 @@ export async function buildTrainingExamples(store, config, {
   }
   const eventExamples = [];
   for (const outcome of settledOutcomes) {
-    const matching = baseRows.filter(({ slot }) =>
-      overlaps(slot.start, slot.end, outcome.data.occurred_time_range),
+    const matching = hourlySlotsOverlappingRange(
+      outcome.data.occurred_time_range,
+      maximumStart,
+      cutoff,
     );
     if (matching.length === 0) continue;
-    matching.forEach(({ slot }) => censoredRows.add(slot.start));
+    matching.forEach((slot) => {
+      if (coveredRowStarts.has(slot.start)) censoredRows.add(slot.start);
+    });
     const exclusions = confirmationSourceExclusions(outcome);
     const eventKnowledgeCutoff = new Date(outcome.data.occurred_time_range.start);
-    const eventRows = matching.map(({ slot }) => {
+    const eventRows = matching.map((slot) => {
       const slotStart = new Date(slot.start);
       const vector = featureVectorAt({
         targetTime: slot.start,

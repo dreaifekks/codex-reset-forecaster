@@ -1,7 +1,7 @@
 {
-  "config_version": "provider-config/0.2.9",
+  "config_version": "provider-config/0.2.10",
   "taxonomy_version": "reset-taxonomy/0.2.2",
-  "feature_schema_version": "reset-features/0.2.7",
+  "feature_schema_version": "reset-features/0.2.8",
   "deduplication_version": "reset-dedup/0.2.2",
   "timezone_database_version": "system",
   "extractor": {
@@ -127,8 +127,7 @@
     "coefficient_priors": {
       "asserted_time_overlap": 0.5,
       "official_reset_intent_decay": 0.2,
-      "official_incident_decay": 0.2,
-      "renewal_periodic_kernel": 1.0
+      "official_incident_decay": 0.2
     },
     "minimum_outcomes": 3,
     "minimum_live_evaluation_windows": 1008,

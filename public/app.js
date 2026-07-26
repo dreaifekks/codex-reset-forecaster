@@ -346,6 +346,12 @@ function challengerReady(readiness) {
   return readiness?.model?.challenger?.ready === true;
 }
 
+function modelPreparationState(readiness) {
+  if (challengerReady(readiness) && readiness.evaluation_waiting) return "fitted";
+  if (readiness?.pipeline_status === "running") return "running";
+  return null;
+}
+
 function isProvisionalServing(forecast, readiness = {}) {
   const serving = forecast?.serving ?? {};
   return (
@@ -357,8 +363,12 @@ function isProvisionalServing(forecast, readiness = {}) {
 }
 
 function forecastErrorText(result, readiness = {}) {
-  if (challengerReady(readiness) && readiness.evaluation_waiting) {
-    return "模型已训练，评估完成后显示 7 天概率。";
+  const preparation = modelPreparationState(readiness);
+  if (preparation === "fitted") {
+    return "模型已完成拟合，正在生成首版 7 天试用预测。";
+  }
+  if (preparation === "running") {
+    return "模型正在更新，首版可用结果生成后立即显示。";
   }
   const blocker = primaryPublicationBlocker(
     result.data?.serving?.publication_blockers,
@@ -427,43 +437,48 @@ function renderForecast(forecast) {
 }
 
 function renderForecastError(message, readiness = {}) {
-  const trained = challengerReady(readiness) && readiness.evaluation_waiting;
+  const preparation = modelPreparationState(readiness);
+  const preparing = preparation !== null;
+  const fitted = preparation === "fitted";
   for (const selector of [
     "#probability-4h",
     "#probability-24h",
     "#probability-7d",
   ]) {
-    document.querySelector(selector).textContent = trained ? "评估中" : "—";
+    document.querySelector(selector).textContent = preparing
+      ? fitted ? "生成中" : "训练中"
+      : "—";
   }
   document.querySelector("#interval-4h").textContent =
-    trained ? "评估完成后显示" : "当前预测不可用";
+    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
   document.querySelector("#interval-24h").textContent =
-    trained ? "评估完成后显示" : "当前预测不可用";
+    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
   document.querySelector("#interval-7d").textContent =
-    trained ? "评估完成后显示" : "当前预测不可用";
+    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
   document.querySelector("#data-quality-label").textContent =
-    trained ? "模型状态" : "数据状态";
+    preparing ? "模型状态" : "数据状态";
   document.querySelector("#data-quality").textContent =
-    trained ? "已训练" : "—";
+    preparing ? fitted ? "已完成拟合" : "更新中" : "—";
   const coverageDays = Number.isFinite(readiness.outcome_coverage?.hours)
     ? Math.round(readiness.outcome_coverage.hours / 24)
     : null;
   const confirmedOutcomes = readiness.canonical_records?.confirmed_outcomes;
-  document.querySelector("#coverage").textContent = trained
+  document.querySelector("#coverage").textContent = preparing
     ? [
         Number.isInteger(coverageDays) ? `${coverageDays} 天历史覆盖` : null,
         Number.isInteger(confirmedOutcomes) ? `${confirmedOutcomes} 次确认重置` : null,
       ].filter(Boolean).join(" · ") || "正在积累真实评估数据"
     : "数据覆盖暂不可用";
-  document.querySelector("#forecast-window").textContent =
-    trained ? "评估完成后生成" : "当前预测区间不可用";
+  document.querySelector("#forecast-window").textContent = preparing
+    ? "正在生成试用预测"
+    : "当前预测区间不可用";
   document.querySelector("#heatmap-legend").hidden = true;
   document.querySelector("#heat-detail").hidden = true;
   document.querySelector("#heatmap").innerHTML =
-    `<div class="empty-state${trained ? "" : " error-state"}"><strong>${trained ? "评估完成后显示每小时概率" : "预测尚未就绪"}</strong>${trained ? "" : `<p>${escapeHtml(message)}</p>`}</div>`;
+    `<div class="empty-state${preparing ? "" : " error-state"}"><strong>${preparing ? "首版试用预测生成后显示每小时概率" : "预测尚未就绪"}</strong><p>${escapeHtml(message)}</p></div>`;
   document.querySelector("#heat-detail").innerHTML =
-    trained
-      ? "<strong>—</strong><div><span>评估完成后显示每小时概率</span><time>评估中</time></div>"
+    preparing
+      ? `<strong>—</strong><div><span>首版试用预测生成后显示每小时概率</span><time>${fitted ? "生成中" : "训练中"}</time></div>`
       : "<strong>—</strong><div><span>当前预测不可用</span><time>等待新预测</time></div>";
 }
 
@@ -503,7 +518,9 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   const forecast = forecastResult.data;
   const exact = health.provider_freshness?.exact ?? readiness.provider_freshness?.groups?.exact;
   const exactLastSuccess = exact?.last_success_at;
-  const synthetic = Boolean(readiness.synthetic_only);
+  const synthetic = Boolean(
+    readiness.synthetic_only || forecast?.serving?.synthetic_demo,
+  );
   const servingStatus = forecast?.serving?.status ?? readiness.current_forecast?.status;
   const provisional = isProvisionalServing(forecast, readiness);
   const coverageWaiting = readiness.coverage_waiting ?? health.coverage_waiting;
@@ -586,29 +603,46 @@ async function load() {
   if (loading) return;
   loading = true;
   document.querySelector("#timezone-display").textContent = `时区 · ${displayZone}`;
-  const [forecastResult, evidenceResult, healthResult, readinessResult] = await Promise.all([
-    fetchJson("/api/forecast/current"),
-    fetchJson("/api/evidence/recent"),
-    fetchJson("/api/health"),
-    fetchJson("/api/readiness"),
-  ]);
+  let readinessResult = { ok: true, status: 200, data: {} };
+  const evidencePromise = fetchJson("/api/evidence/recent").then((result) => {
+    renderEvidenceResponse(result);
+    return result;
+  });
   try {
+    const forecastResult = await fetchJson("/api/forecast/current");
     const servingStatus = forecastResult.data?.serving?.status;
-    if (
+    const forecastAvailable = (
       forecastResult.ok &&
       forecastResult.data?.data &&
       !["stale", "invalid"].includes(servingStatus)
-    ) {
+    );
+    if (forecastAvailable) {
       renderForecast(forecastResult.data);
+      renderPublicationWarning(forecastResult, readinessResult);
+      setStatus(
+        "warning",
+        isProvisionalServing(forecastResult.data)
+          ? "试用模型 · 严格验证积累中"
+          : "预测已加载 · 状态检查中",
+      );
     } else {
+      readinessResult = await fetchJson("/api/readiness");
       renderForecastError(
         forecastErrorText(forecastResult, readinessResult.data),
         readinessResult.data,
       );
     }
+    const healthResult = await fetchJson("/api/health");
+    if (forecastAvailable) {
+      readinessResult = {
+        ok: healthResult.ok,
+        status: healthResult.status,
+        data: healthResult.data ?? {},
+      };
+    }
     renderPublicationWarning(forecastResult, readinessResult);
-    renderEvidenceResponse(evidenceResult);
     renderHealth(forecastResult, healthResult, readinessResult);
+    await evidencePromise;
   } catch (error) {
     console.error(error);
     renderForecastError(error.message, readinessResult.data);

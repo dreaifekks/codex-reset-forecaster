@@ -422,6 +422,50 @@ test("partially overlapping event hours use exposure-weighted censoring and purg
   );
 });
 
+test("confirmed positives outside covered negative-label hours still enter training", async () => {
+  const confirming = observation("recent-confirmation", {
+    publishedAt: "2026-07-25T14:30:00.000Z",
+    firstSeenAt: "2026-07-25T14:35:00.000Z",
+  });
+  const range = {
+    start: "2026-07-25T14:30:00.000Z",
+    end: "2026-07-25T15:30:00.000Z",
+  };
+  const confirmingSignal = signal("recent-confirmation", confirming, {
+    availableAt: "2026-07-25T14:35:00.000Z",
+    assertedRange: range,
+  });
+  const confirmed = outcome(
+    "recent-confirmation",
+    confirming,
+    range,
+    "2026-07-25T15:35:00.000Z",
+  );
+  const records = {
+    raw_observation: [confirming],
+    normalized_signal: [confirmingSignal],
+    reset_outcome: [confirmed],
+  };
+  const dataset = await buildTrainingExamples({
+    async all(type) {
+      return records[type] ?? [];
+    },
+  }, modelConfig(), {
+    trainingCutoff: "2026-07-25T16:00:00.000Z",
+    coverageIntervals: [{
+      start: "2026-07-25T09:00:00.000Z",
+      end: "2026-07-25T13:00:00.000Z",
+    }],
+  });
+
+  const event = dataset.examples.find((example) => example.type === "event_interval");
+  assert.equal(dataset.eventCount, 1);
+  assert.deepEqual(event.exposures, [0.5, 0.5]);
+  assert.equal(event.outcome_ref.record_id, confirmed.record_id);
+  assert.equal(dataset.negativeCount, 4);
+  assert.equal(dataset.censoredSlotCount, 0);
+});
+
 test("legacy started confirmations are censored instead of becoming labels or negatives", async () => {
   const source = observation("legacy-started", {
     publishedAt: "2026-07-25T10:00:00.000Z",
@@ -1474,6 +1518,17 @@ test("the model design includes smoothed weekly and daily Fourier baselines", ()
     "daily_cos_2",
   ]) {
     assert.ok(FEATURE_NAMES.includes(name));
+  }
+  for (const name of [
+    "provider_coverage",
+    "provider_health",
+    "source_delay_hours",
+  ]) {
+    assert.equal(
+      FEATURE_NAMES.includes(name),
+      false,
+      `${name} is data quality, not a probability feature`,
+    );
   }
   assert.notDeepEqual(monday, tuesdayEvening);
   const dimension = FEATURE_NAMES.length + 1;

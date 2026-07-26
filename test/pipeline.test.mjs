@@ -130,7 +130,15 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     assert.ok(!outcomeObservationIds.has(signal.data.observation_refs[0].record_id), "scheduled post leaked into labels");
   }
 
-  const trained = await trainEvaluatePromote(store, config, { now });
+  let fittedBeforeEvaluation = null;
+  const trained = await trainEvaluatePromote(store, config, {
+    now,
+    onTrained: async (training) => {
+      fittedBeforeEvaluation = training.model.artifact_hash;
+      assert.equal(await store.readState("walk-forward-summary", null), null);
+    },
+  });
+  assert.equal(fittedBeforeEvaluation, trained.training.model.artifact_hash);
   assert.equal(
     trained.evaluation.gate.passed,
     true,
@@ -402,8 +410,26 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   const firstChallenger = await store.readModel("challenger");
   assert.ok(firstChallenger.event_count >= 3);
   config.runtime.provisional_bootstrap.enabled = true;
-  const repeated = await runPipeline(store, config, {
+  const earlyProvisional = await runPipeline(store, config, {
     now: addHours(now, 1),
+    collect: false,
+    retrain: true,
+  });
+  const refreshedChallenger = await store.readModel("challenger");
+  assert.equal(earlyProvisional.status, "waiting_for_evaluation");
+  assert.equal(earlyProvisional.training.succeeded, true);
+  assert.ok(earlyProvisional.forecast?.prediction);
+  assert.equal(
+    earlyProvisional.forecast.prediction.data.model.validation_status,
+    "provisional",
+  );
+  assert.equal(
+    earlyProvisional.forecast.prediction.data.model.artifact_hash,
+    refreshedChallenger.artifact_hash,
+  );
+
+  const repeated = await runPipeline(store, config, {
+    now: addHours(now, 2),
     collect: false,
     retrain: false,
   });
@@ -418,10 +444,13 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   );
   assert.equal(
     repeated.evaluation_waiting.evaluation_cutoff,
-    "2026-07-25T21:00:00.000Z",
+    "2026-07-25T22:00:00.000Z",
   );
-  assert.equal(reusedChallenger.artifact_hash, firstChallenger.artifact_hash);
-  assert.equal(reusedChallenger.trained_at, firstChallenger.trained_at);
+  assert.equal(
+    reusedChallenger.artifact_hash,
+    refreshedChallenger.artifact_hash,
+  );
+  assert.equal(reusedChallenger.trained_at, refreshedChallenger.trained_at);
   assert.ok(repeated.forecast?.prediction);
   assert.equal(
     repeated.forecast.prediction.data.model.validation_status,
@@ -429,11 +458,11 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   );
   assert.equal(
     repeated.forecast.prediction.data.model.artifact_hash,
-    firstChallenger.artifact_hash,
+    refreshedChallenger.artifact_hash,
   );
   assert.equal(
     await store.readModel("champion", { invalidAsNull: true }),
     null,
   );
-  assert.equal((await store.all("prediction")).length, 1);
+  assert.equal((await store.all("prediction")).length, 2);
 });

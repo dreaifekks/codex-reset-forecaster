@@ -129,15 +129,18 @@ available by that cutoff. Availability decides whether information may be seen;
 source publication/asserted event time decides its age. A newly fetched summary of
 an old post therefore does not become a fresh event. Features summarize authority,
 recency, independence, contradiction, explicit timing overlap, activity anomalies,
-release/incident proximity, and provider health.
+and release/incident proximity. Provider health, delay, and coverage are recorded
+as separate data-quality metadata rather than probability inputs.
 
-The current champion deliberately trains on ten low-dimensional fields. Its main
+The current feature contract deliberately trains on seventeen low-dimensional
+fields. Its main
 baseline is a causal renewal-periodic kernel built from outcomes already known at
 the cutoff: a Gaussian kernel over historical reset gaps in log-hours, a circular
 UTC hour-of-day kernel, and a wider circular hour-of-week kernel. Explicit asserted
 time overlap and configured-author reset intent or incident evidence have small,
-versioned coefficient priors. Community momentum, disagreement, competitor
-release context, and provider quality remain available but start at a zero prior.
+versioned coefficient priors. The renewal-periodic kernel, community momentum,
+disagreement, and competitor release context start at a zero prior and must earn
+their influence from training evidence.
 
 ### 6. Forecaster and calibrator
 

@@ -25,6 +25,30 @@ const MIME_TYPES = new Map([
   [".svg", "image/svg+xml"],
   [".json", "application/json; charset=utf-8"],
 ]);
+const API_COMPUTATION_CACHE_MS = 10_000;
+
+function timedSingleFlight(loader, ttlMs = API_COMPUTATION_CACHE_MS) {
+  let cachedValue = null;
+  let expiresAt = 0;
+  let inFlight = null;
+  return async (...args) => {
+    const requestStartedAt = Date.now();
+    if (cachedValue !== null && requestStartedAt < expiresAt) {
+      return cachedValue;
+    }
+    if (inFlight) return inFlight;
+    inFlight = loader(...args)
+      .then((value) => {
+        cachedValue = value;
+        expiresAt = Date.now() + ttlMs;
+        return value;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
+  };
+}
 
 function sendJson(response, status, value) {
   response.writeHead(status, {
@@ -217,6 +241,13 @@ async function serveStatic(response, pathname) {
 }
 
 export function createRequestHandler({ store, config, now = () => new Date() }) {
+  const readinessFor = timedSingleFlight(
+    (requestNow) => getReadiness(store, config, { now: requestNow }),
+  );
+  const evaluationFor = timedSingleFlight(
+    () => currentEvaluation(store, config),
+    0,
+  );
   return async function requestHandler(request, response) {
     securityHeaders(response);
     try {
@@ -237,8 +268,8 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
             await store.readState(providerStateKey(name), {}),
           ])),
           store.readState("runtime", {}),
-          currentEvaluation(store, config),
-          getReadiness(store, config, { now: requestNow }),
+          evaluationFor(),
+          readinessFor(requestNow),
         ]);
         const providers = readiness.provider_freshness.providers;
         const states = providerStates.map(([, , state]) => state);
@@ -296,7 +327,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         const requestNow = now();
         const [prediction, readiness] = await Promise.all([
           latestPrediction(store),
-          getReadiness(store, config, { now: requestNow }),
+          readinessFor(requestNow),
         ]);
         if (!prediction) {
           sendJson(response, 503, {
@@ -399,11 +430,11 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         return;
       }
       if (url.pathname === "/api/readiness") {
-        sendJson(response, 200, await getReadiness(store, config, { now: now() }));
+        sendJson(response, 200, await readinessFor(now()));
         return;
       }
       if (url.pathname === "/api/evaluation/summary") {
-        const result = await currentEvaluation(store, config);
+        const result = await evaluationFor();
         const evaluation = result.evaluation;
         if (!evaluation) {
           sendJson(response, 503, {
@@ -435,7 +466,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           store.all("reset_outcome", { latestOnly: false }),
           store.all("raw_observation", { latestOnly: false }),
           store.all("normalized_signal", { latestOnly: false }),
-          currentEvaluation(store, config),
+          evaluationFor(),
         ]);
         const evaluation = evaluationResult.evaluation;
         const observationByRef = new Map(

@@ -111,12 +111,15 @@ model. Candidate features include:
 - overlap with an explicitly asserted future reset interval;
 - recency-decayed, pre-confirmation configured-author reset intent and incidents;
 - independent community evidence volume, growth, and disagreement;
-- recent competing-vendor model or quota events;
-- provider health, delay, and coverage.
+- recent competing-vendor model or quota events.
 
 Cross-vendor and community effects start strongly shrunk toward zero and remain
 only if walk-forward evaluation shows stable value. Deep learning and reinforcement
 learning are outside the MVP.
+
+Provider health, delay, and coverage remain separate data-quality outputs. They
+must not enter the probability vector, because observation quality can otherwise
+be mistaken for event risk.
 
 The model has two product statuses:
 

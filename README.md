@@ -48,9 +48,10 @@ been validated.
   and the `hermes` rollback path are summary/context-only inputs: they may adjust
   features but cannot confirm an outcome or establish negative-label coverage.
 - Model parameters are batch-refit at most once every 24 hours and only from
-  labels that are mature and available at the frozen training cutoff. Records that
-  arrive while a fit is running enter the next batch instead of restarting the
-  current fit.
+  labels that are mature and available at the frozen training cutoff. Confirmed
+  positive intervals can enter immediately; only negative hours require complete
+  outcome coverage. Records that arrive while a fit is running enter the next
+  batch instead of restarting the current fit.
 - `provisional` means usable bootstrap, not measured 80% performance. `validated`
   remains reserved for the original causal/as-issued sample and quality gates.
 - Personal quota windows and expiring reset vouchers are a downstream optimization

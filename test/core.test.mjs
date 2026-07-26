@@ -54,6 +54,11 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
+  assert.equal(live.feature_schema_version, "reset-features/0.2.8");
+  assert.equal(
+    live.model.coefficient_priors.renewal_periodic_kernel ?? 0,
+    0,
+  );
 });
 
 function observation(text = "Example") {

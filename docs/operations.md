@@ -342,9 +342,10 @@ has matured yet, the run succeeds with
 `pipeline_status: "waiting_for_evaluation"` and `evaluation_waiting`. With the live
 profile's enabled bootstrap policy and at least ten eligible outcomes, that same
 compatible challenger may issue a forecast whose model metadata says
-`validation_status: "provisional"`; it is not written as a validated champion. If
-the provisional minimum is not met, `forecast` remains null. The scheduler records
-the successful fit time and reuses the compatible challenger between daily
+`validation_status: "provisional"` immediately after fitting, while strict
+evaluation continues in the same run; it is not written as a validated champion.
+If the provisional minimum is not met, `forecast` remains null. The scheduler
+records the successful fit time and reuses the compatible challenger between daily
 retraining intervals. If a compatible validated champion already exists, it
 continues issuing validated forecasts while the challenger waits.
 

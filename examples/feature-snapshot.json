@@ -13,7 +13,7 @@
   "data": {
     "knowledge_cutoff": "2026-07-23T07:00:00Z",
     "config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "feature_schema_version": "reset-features/0.2.7",
+    "feature_schema_version": "reset-features/0.2.8",
     "taxonomy_version": "reset-taxonomy/0.2.2",
     "deduplication_version": "reset-dedup/0.2.2",
     "timezone_database_version": "tzdata-example",

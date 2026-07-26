@@ -77,15 +77,21 @@ attested `replay_available_at`; it never rewrites canonical `known_at`. The broa
 kernels are intentional: they express a smooth renewal and periodic baseline
 without memorizing individual dates or hours.
 
-The trained version `reset-features/0.2.6` remains small and interpretable:
+The trained version `reset-features/0.2.8` remains small and interpretable:
 
 - three weekly Fourier harmonics and two daily Fourier harmonics;
 - the renewal-periodic kernel above;
 - overlap between asserted event ranges and the target slot;
 - recency-decayed configured-author reset intent and incident evidence;
 - community growth and disagreement after source-dependency collapse;
-- competing-vendor release context;
-- provider coverage, delay, and health.
+- competing-vendor release context.
+
+Provider coverage, delay, and health remain in the feature snapshot's data-quality
+metadata but are excluded from the probability vector. They describe whether the
+forecast is trustworthy; they must not become a proxy label for whether a reset
+occurred. The renewal-periodic kernel is learned with a zero prior, so sparse
+training data cannot turn an unlearned live-only kernel value into a large
+probability shift.
 
 Other extracted evidence remains in canonical records and may be evaluated by a
 challenger, but it is not automatically added to the champion. This prevents a
@@ -149,9 +155,11 @@ New information follows two paths:
 
 1. Provider signals immediately enter the next hourly as-of feature snapshot and
    forecast without waiting for a parameter update.
-2. Model parameters are batch-refit at most once every 24 hours, using only
-   confirmed and negative-label-eligible outcomes that are mature and available by
-   the frozen training cutoff.
+2. Model parameters are batch-refit at most once every 24 hours, using mature
+   confirmed positive intervals available by the frozen training cutoff, plus
+   negative hours drawn only from negative-label-eligible coverage. Positive
+   intervals do not need the negative-coverage ledger to have advanced past their
+   event time.
 
 When a compatible model is not yet available, eligible historical data is batch-fit
 immediately as a provisional bootstrap. “Immediately” means that training begins

@@ -116,6 +116,7 @@ function sampleEvaluationWaiting(evaluation, promotion) {
 export async function trainEvaluatePromote(store, config, {
   now = new Date(),
   train = true,
+  onTrained = null,
 } = {}) {
   const trainingCutoff = new Date(now);
   if (Number.isNaN(trainingCutoff.getTime())) {
@@ -125,6 +126,7 @@ export async function trainEvaluatePromote(store, config, {
   const training = train
     ? await trainChallenger(store, config, { trainingCutoff })
     : null;
+  if (training && onTrained) await onTrained(training);
   if (!training) {
     const challenger = await store.readModel("challenger", {
       invalidAsNull: true,
@@ -318,6 +320,24 @@ export async function runPipeline(store, config, {
       attempt = await trainEvaluatePromote(store, config, {
         now: knowledgeCutoff,
         train,
+        onTrained: async (training) => {
+          if (
+            !champion &&
+            eligibleProvisionalBootstrapModel(training.model, config)
+          ) {
+            result.forecast = await issueForecast(store, config, {
+              model: training.model,
+              validationStatus: "provisional",
+              knowledgeCutoff,
+              horizonStart,
+              clock: currentTime,
+            });
+            result.timing.horizon_start =
+              result.forecast.prediction.data.horizon.start;
+            result.timing.forecast_issued_at =
+              result.forecast.prediction.data.issued_at;
+          }
+        },
       });
     } catch (error) {
       if (!champion) throw error;

@@ -41,9 +41,6 @@ export const FEATURE_NAMES = [
   "community_momentum",
   "community_disagreement",
   "competitor_release_decay",
-  "provider_coverage",
-  "provider_health",
-  "source_delay_hours",
 ];
 
 function exponentialDecay(hours, halfLife) {
