@@ -40,6 +40,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+body.signal-dialog-open {
+  overflow: hidden;
+}
+
 .legend[hidden],
 .heat-detail[hidden],
 .evaluation-results[hidden] {
@@ -711,16 +715,45 @@ nav a:focus-visible {
   color: #a1a1aa;
 }
 
-.reference-panel .evidence-list p {
+.reference-panel .evidence-list .signal-card-text {
   color: var(--muted-foreground);
   -webkit-line-clamp: 1;
 }
 
-.evidence-list li > div {
+.signal-preview {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.signal-preview:focus-visible {
+  outline: 2px solid #4ade80;
+  outline-offset: 5px;
+}
+
+.signal-head,
+.signal-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.signal-footer {
+  min-height: 24px;
+}
+
+.signal-footer small,
+#signal-dialog-source {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .evidence-list time,
@@ -729,7 +762,7 @@ nav a:focus-visible {
   font-size: 9px;
 }
 
-.evidence-list p {
+.signal-card-text {
   display: -webkit-box;
   margin: 7px 0;
   overflow: hidden;
@@ -740,9 +773,44 @@ nav a:focus-visible {
   -webkit-line-clamp: 2;
 }
 
-.evidence-list small a {
+.signal-preview:hover .signal-card-text {
+  color: #fafafa;
+}
+
+.signal-source-link {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  min-height: 24px;
+  border-radius: 5px;
   color: #86efac;
+  padding: 3px 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
   text-decoration: none;
+}
+
+.signal-source-link:hover,
+.signal-source-link:focus-visible {
+  background: rgba(34, 197, 94, 0.1);
+  color: #bbf7d0;
+}
+
+.signal-source-link:focus-visible {
+  outline: 2px solid #4ade80;
+  outline-offset: 2px;
+}
+
+.signal-source-link svg,
+.signal-dialog-source-link svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
 }
 
 .signal-badge {
@@ -765,6 +833,164 @@ nav a:focus-visible {
 
 .signal-badge.pending {
   color: #fde047;
+}
+
+.signal-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(78dvh, 720px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: #111216;
+  color: var(--foreground);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
+}
+
+.signal-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.signal-dialog-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(78dvh, 720px);
+}
+
+.signal-dialog-header,
+.signal-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px;
+}
+
+.signal-dialog-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.signal-dialog-header .eyebrow {
+  margin-bottom: 5px;
+}
+
+.signal-dialog-close {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.signal-dialog-close:hover,
+.signal-dialog-close:focus-visible {
+  border-color: var(--border-strong);
+  color: var(--foreground);
+}
+
+.signal-dialog-close:focus-visible,
+.signal-dialog-source-link:focus-visible {
+  outline: 2px solid #4ade80;
+  outline-offset: 2px;
+}
+
+.signal-dialog-body {
+  min-height: 0;
+  padding: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.signal-dialog-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.signal-dialog-text {
+  margin: 0;
+  color: #e4e4e7;
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.signal-dialog-times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 22px 0 0;
+}
+
+.signal-dialog-times div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0d0e11;
+  padding: 10px 12px;
+}
+
+.signal-dialog-times dt,
+.signal-dialog-times dd {
+  margin: 0;
+}
+
+.signal-dialog-times dt {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.signal-dialog-times dd {
+  margin-top: 4px;
+  color: #d4d4d8;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.signal-dialog-footer {
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.signal-dialog-source-link {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 7px;
+  background: rgba(34, 197, 94, 0.08);
+  color: #86efac;
+  padding: 8px 11px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.signal-dialog-source-link[hidden] {
+  display: none;
+}
+
+.signal-dialog-source-link:hover {
+  border-color: rgba(34, 197, 94, 0.46);
+  background: rgba(34, 197, 94, 0.13);
+  color: #bbf7d0;
 }
 
 .signal-empty,
@@ -1050,6 +1276,29 @@ button:focus-visible {
 
   .heat-detail {
     gap: 14px;
+  }
+
+  .signal-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    border-radius: 12px;
+  }
+
+  .signal-dialog-card {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .signal-dialog-header,
+  .signal-dialog-body {
+    padding: 16px;
+  }
+
+  .signal-dialog-footer {
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .signal-dialog-times {
+    grid-template-columns: 1fr;
   }
 }
 

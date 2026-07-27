@@ -408,7 +408,43 @@
               "type": "string",
               "pattern": "^sha256:[a-f0-9]{64}$"
             },
-            "confidence": { "$ref": "#/$defs/probability" }
+            "confidence": { "$ref": "#/$defs/probability" },
+            "relevance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_version",
+                "decision",
+                "reason_code",
+                "basis",
+                "matched_segments",
+                "context_refs"
+              ],
+              "properties": {
+                "policy_version": { "type": "string", "minLength": 1 },
+                "decision": {
+                  "enum": ["relevant", "irrelevant", "pending_context"]
+                },
+                "reason_code": { "type": "string", "minLength": 1 },
+                "basis": {
+                  "enum": [
+                    "self",
+                    "reply_parent",
+                    "quote",
+                    "unresolved_context"
+                  ]
+                },
+                "matched_segments": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "context_refs": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/recordRef" },
+                  "uniqueItems": true
+                }
+              }
+            }
           }
         }
       }

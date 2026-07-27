@@ -30,16 +30,13 @@ function isProviderDiagnostic(signal) {
 export function selectCurrentSignals(signals) {
   const selected = new Map();
   for (const signal of signals) {
-    if (
-      signal.data.provenance?.feature_eligible === false ||
-      isProviderDiagnostic(signal)
-    ) {
-      continue;
-    }
     const observationId = signal.data.observation_refs[0]?.record_id;
     if (!observationId) continue;
     const previous = selected.get(observationId);
     if (!previous || compareSignalRank(previous, signal) < 0) selected.set(observationId, signal);
   }
-  return [...selected.values()];
+  return [...selected.values()].filter((signal) =>
+    signal.data.provenance?.feature_eligible !== false &&
+    !isProviderDiagnostic(signal)
+  );
 }

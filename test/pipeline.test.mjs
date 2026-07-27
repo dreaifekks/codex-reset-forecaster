@@ -332,6 +332,10 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(page, /每小时重置概率/);
   assert.match(page, /未来 7 天重置概率/);
   assert.match(page, /未来 168 小时内发生重置的可能性/);
+  assert.match(page, /<dialog class="signal-dialog"/);
+  assert.match(page, /id="signal-dialog-source-link"/);
+  assert.match(appScript, /aria-haspopup", "dialog"/);
+  assert.match(appScript, /rel="noopener noreferrer"/);
   assert.doesNotMatch(
     page,
     /未来 168 小时内的重置概率|未重置概率|与 OpenAI 无关联|时间与模型|指标含义/,

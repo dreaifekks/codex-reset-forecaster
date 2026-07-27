@@ -97,6 +97,146 @@ test("realistic Tibo wording separates completed, scheduled, and denied resets",
   assert.equal(denied.data.claim.stance, "contradicts");
 });
 
+test("topic screening keeps search false positives as ineligible audit signals", () => {
+  const cases = [
+    [
+      "__RATE_LIMIT__: Gemini monthly cap exceeded for gemini-2.5-flash. " +
+        "HTTP 429: You exceeded your current quota.",
+      "individual_quota_error",
+    ],
+    [
+      "Grok isn’t so sure: abundance does not automatically equal open access. " +
+        "The capacity to define objectives remains a locus of control and " +
+        "technology will force society to confront it.",
+      "generic_discussion",
+    ],
+    [
+      "Trying, but not sure this time (possible reset hint; does not explicitly " +
+        "state Codex usage-limit reset).",
+      "explicit_non_claim",
+    ],
+  ];
+  const screened = cases.map(([text], index) =>
+    signalForConfig(text, `screened-${index}`, config, {
+      identityId: "x_search_summary",
+      handle: "community",
+      mediaType: "application/vnd.x-search-summary+text",
+    })
+  );
+
+  for (const [index, signal] of screened.entries()) {
+    assert.ok(signal, `screened case ${index} should retain an audit extraction`);
+    assert.equal(signal.data.extraction.relevance.decision, "irrelevant");
+    assert.equal(
+      signal.data.extraction.relevance.reason_code,
+      cases[index][1],
+    );
+    assert.equal(signal.data.provenance.feature_eligible, false);
+  }
+  assert.deepEqual(selectCurrentSignals(screened), []);
+  assert.equal(
+    signalForConfig(
+      "Hey Tibo, can we get a Claude reset as well?",
+      "screened-request-without-claim",
+      config,
+      {
+        identityId: "x_search_summary",
+        handle: "community",
+        mediaType: "application/vnd.x-search-summary+text",
+      },
+    ),
+    null,
+  );
+});
+
+test("topic screening retains genuine target and ecosystem operations", () => {
+  const relevant = [
+    "We have reset Codex usage limits for all paid users.",
+    "Codex is degraded and the team is investigating a capacity incident.",
+    "Anthropic doubled Claude Code usage limits across all paid plans.",
+    "Google officially released Gemini 3.6 Flash today.",
+  ].map((text, index) =>
+    signalForConfig(text, `relevant-${index}`, config, {
+      identityId: "x_search_summary",
+      handle: "community",
+      mediaType: "application/vnd.x-search-summary+text",
+    })
+  );
+
+  assert.equal(selectCurrentSignals(relevant).length, relevant.length);
+  assert.ok(relevant.every((signal) =>
+    signal.data.extraction.relevance.decision === "relevant" &&
+    signal.data.provenance.feature_eligible
+  ));
+});
+
+test("resolved reply context is bound by exact reference and cannot be backdated", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-topic-context-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = await new JsonlStore(directory).init();
+  const parentId = "2081000000000000001";
+  const childId = "2081000000000000002";
+  const makeObservation = ({
+    id,
+    text,
+    firstSeenAt,
+    nativeRelations = [],
+  }) => rawObservationFromItem({
+    provider_item_id: id,
+    canonical_url: `https://x.com/example/status/${id}`,
+    published_at: "2026-07-18T03:28:00Z",
+    author: {
+      provider_author_id: "example",
+      identity_id: "x_example",
+      display_handle: "@example",
+    },
+    native_relations: nativeRelations,
+    content: { media_type: "text/plain", text, language: "en" },
+  }, {
+    providerName: "x",
+    providerVersion: "test",
+    config: config.providers.x,
+    firstSeenAt,
+    fetchedAt: firstSeenAt,
+  });
+  const child = makeObservation({
+    id: childId,
+    text: "Still seeing this in the CLI.",
+    firstSeenAt: "2026-07-18T03:29:00Z",
+    nativeRelations: [{
+      type: "reply",
+      provider_item_id: parentId,
+      url: `https://x.com/i/status/${parentId}`,
+    }],
+  });
+  const parent = makeObservation({
+    id: parentId,
+    text: "Codex is degraded and the team is investigating a capacity incident.",
+    firstSeenAt: "2026-07-18T03:31:00Z",
+  });
+  await store.append(child);
+  const unresolved = await normalizeNewObservations(store, config, {
+    now: new Date("2026-07-18T03:30:00Z"),
+  });
+  assert.equal(unresolved.records.length, 0);
+
+  await store.append(parent);
+  await normalizeNewObservations(store, config, {
+    now: new Date("2026-07-18T03:32:00Z"),
+  });
+  const childSignal = (await store.all("normalized_signal")).find((signal) =>
+    signal.data.observation_refs[0].record_id === child.record_id
+  );
+  assert.ok(childSignal);
+  assert.equal(childSignal.data.extraction.relevance.decision, "relevant");
+  assert.equal(childSignal.data.extraction.relevance.basis, "reply_parent");
+  assert.deepEqual(
+    childSignal.data.observation_refs,
+    [recordRef(child), recordRef(parent)],
+  );
+  assert.equal(childSignal.data.available_at, "2026-07-18T03:32:00.000Z");
+});
+
 test("extractor keeps Codex, ChatGPT Work, unknown, and multi-product scopes distinct", () => {
   const codex = signalFor(
     "Codex usage limits have been reset for all paid plans.",

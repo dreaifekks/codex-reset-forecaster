@@ -1,6 +1,10 @@
 import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { makeRecordId } from "../core/hash.mjs";
 import { canonicalEventType, eventTypeFamily } from "../core/event-types.mjs";
+import {
+  extractorContract,
+  matchesExtractorContract,
+} from "../core/extractor-contract.mjs";
 import { selectCurrentSignals } from "./signal-selection.mjs";
 
 const EVENT_LINK_GAP_MS = 2 * 3_600_000;
@@ -197,8 +201,13 @@ function candidateState(signals) {
 }
 
 export async function linkEventCandidates(store, config, { asOf = new Date() } = {}) {
-  const signals = selectCurrentSignals(await store.all("normalized_signal")).filter((signal) =>
-    ["quota_reset", "quota_refill", "capacity_restore"].includes(signal.data.claim.event_type),
+  const expectedExtractor = config?.extractor ? extractorContract(config) : null;
+  const signals = selectCurrentSignals(
+    (await store.all("normalized_signal")).filter((signal) =>
+      matchesExtractorContract(signal, expectedExtractor)
+    ),
+  ).filter((signal) =>
+    ["quota_reset", "quota_refill", "capacity_restore"].includes(signal.data.claim.event_type)
   );
   const existing = await store.all("event_candidate");
   const records = [];

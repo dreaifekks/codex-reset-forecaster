@@ -41,6 +41,10 @@ been validated.
   providers rather than the core model.
 - Text models extract stable claims. A statistical hazard model produces the final
   probability.
+- Search matches are candidates, not signals. A versioned provider-neutral
+  relevance gate checks the post and any exact reply/quote context first; personal
+  quota errors, requests, generic discussion, and unresolved ambiguous replies do
+  not enter features.
 - New provider intelligence is incorporated into as-of features and a fresh
   forecast on the hourly pipeline cadence; it does not wait for parameter
   retraining.
@@ -81,6 +85,7 @@ separate follow-up described in `docs/personal-optimizer.md`.
 ```text
 providers
   -> append-only raw observations
+  -> topic/context relevance decisions
   -> normalized claims
   -> event candidates and evidence-dependency graph
   -> as-of feature snapshots

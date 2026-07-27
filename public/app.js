@@ -109,6 +109,104 @@ function safeExternalUrl(value) {
   }
 }
 
+const externalLinkIcon = `
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M6 3h7v7M13 3 6.5 9.5M11 8.5V13H3V5h4.5"/>
+  </svg>
+`;
+
+const signalDialog = document.querySelector("#signal-dialog");
+const signalDialogClose = document.querySelector("#signal-dialog-close");
+let signalDialogTrigger = null;
+let signalDialogTriggerKey = null;
+
+function addSignalDialogBadge(target, text, className = "") {
+  const badge = document.createElement("span");
+  badge.className = `signal-badge${className ? ` ${className}` : ""}`;
+  badge.textContent = text;
+  target.append(badge);
+}
+
+function openSignalDialog(item, trigger) {
+  if (!signalDialog) return;
+  const source = item.source ?? {};
+  const sourceUrl = safeExternalUrl(source.canonical_url);
+  const sourceName = source.display_handle ?? "来源不可用";
+  const eventType = eventTypeLabels[item.event_type] ?? "其他信号";
+  const phase = phaseLabels[item.phase] ?? "状态未知";
+  const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? "角色未知";
+  const badges = document.querySelector("#signal-dialog-badges");
+  const sourceLink = document.querySelector("#signal-dialog-source-link");
+
+  document.querySelector("#signal-dialog-title").textContent = eventType;
+  document.querySelector("#signal-dialog-text").textContent = source.text ?? "暂无原始文本";
+  document.querySelector("#signal-dialog-published-at").textContent = source.published_at
+    ? formatTime(source.published_at)
+    : "时间未知";
+  document.querySelector("#signal-dialog-available-at").textContent = item.available_at
+    ? formatTime(item.available_at)
+    : "时间未知";
+  document.querySelector("#signal-dialog-source").textContent = `${sourceName} · ${phase}`;
+
+  badges.replaceChildren();
+  addSignalDialogBadge(badges, eventType);
+  addSignalDialogBadge(badges, role, "secondary");
+  if (item.pending_next_forecast) {
+    addSignalDialogBadge(badges, "待下一轮纳入", "pending");
+  }
+
+  if (sourceUrl) {
+    sourceLink.href = sourceUrl;
+    sourceLink.hidden = false;
+    sourceLink.setAttribute("aria-label", `在新窗口打开 ${sourceName} 的原文`);
+  } else {
+    sourceLink.removeAttribute("href");
+    sourceLink.hidden = true;
+    sourceLink.removeAttribute("aria-label");
+  }
+
+  signalDialogTrigger = trigger;
+  signalDialogTriggerKey = trigger?.dataset.signalKey ?? null;
+  document.body.classList.add("signal-dialog-open");
+  if (typeof signalDialog.showModal === "function") {
+    signalDialog.showModal();
+  } else {
+    signalDialog.setAttribute("open", "");
+  }
+}
+
+function restoreSignalDialogFocus() {
+  let target = signalDialogTrigger?.isConnected ? signalDialogTrigger : null;
+  if (!target && signalDialogTriggerKey) {
+    target = [...document.querySelectorAll(".signal-preview")].find(
+      (preview) => preview.dataset.signalKey === signalDialogTriggerKey,
+    ) ?? null;
+  }
+  (target ?? document.querySelector(".signal-grid"))?.focus();
+  signalDialogTrigger = null;
+  signalDialogTriggerKey = null;
+}
+
+function closeSignalDialog() {
+  if (!signalDialog?.open) return;
+  if (typeof signalDialog.close === "function") {
+    signalDialog.close();
+  } else {
+    signalDialog.removeAttribute("open");
+    document.body.classList.remove("signal-dialog-open");
+    restoreSignalDialogFocus();
+  }
+}
+
+signalDialogClose?.addEventListener("click", closeSignalDialog);
+signalDialog?.addEventListener("click", (event) => {
+  if (event.target === signalDialog) closeSignalDialog();
+});
+signalDialog?.addEventListener("close", () => {
+  document.body.classList.remove("signal-dialog-open");
+  restoreSignalDialogFocus();
+});
+
 function cumulative(slots) {
   if (!Array.isArray(slots) || slots.length === 0 || slots.some((slot) => !Number.isFinite(slot.hazard))) {
     return null;
@@ -289,10 +387,9 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     row.dataset.sourceRole = item.source_role ?? "unknown";
     const source = item.source;
     const sourceUrl = safeExternalUrl(source?.canonical_url);
-    const sourceName = escapeHtml(source?.display_handle ?? "来源不可用");
-    const link = sourceUrl
-      ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">${sourceName}</a>`
-      : `<span>${sourceName}</span>`;
+    const sourceDisplayName = source?.display_handle ?? "来源不可用";
+    const sourceName = escapeHtml(sourceDisplayName);
+    const sourceLabel = `<span>${sourceName}</span>`;
     const eventType = eventTypeLabels[item.event_type] ?? "其他信号";
     const phase = phaseLabels[item.phase] ?? "状态未知";
     const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? "角色未知";
@@ -300,7 +397,28 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     const pending = item.pending_next_forecast
       ? "<span class=\"signal-badge pending\">待下一轮纳入</span>"
       : "";
-    row.innerHTML = `<div><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${pending}</span><time title="系统可用于模型的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></div><p>${escapeHtml(source?.text ?? "暂无原始文本")}</p><small>${link} · ${escapeHtml(phase)}</small>`;
+    const preview = document.createElement("button");
+    preview.className = "signal-preview";
+    preview.type = "button";
+    preview.dataset.signalKey = item.signal_ref?.record_id ??
+      sourceUrl ??
+      `${tier}:${target.children.length}`;
+    preview.setAttribute("aria-haspopup", "dialog");
+    preview.setAttribute(
+      "aria-label",
+      `查看 ${sourceDisplayName} ${formatCompactTime(signalTime)} 的${eventType}完整动态`,
+    );
+    preview.title = "点击查看完整内容";
+    preview.innerHTML = `<span class="signal-head"><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${pending}</span><time title="系统可用于模型的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></span><span class="signal-card-text">${escapeHtml(source?.text ?? "暂无原始文本")}</span>`;
+    preview.addEventListener("click", () => openSignalDialog(item, preview));
+    row.append(preview);
+
+    const footer = document.createElement("div");
+    footer.className = "signal-footer";
+    footer.innerHTML = `<small>${sourceLabel} · ${escapeHtml(phase)}</small>${sourceUrl
+      ? `<a class="signal-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="在新窗口打开 ${sourceName} 的原文" title="查看原文"><span>原文</span>${externalLinkIcon}</a>`
+      : ""}`;
+    row.append(footer);
     target.append(row);
   }
 }
@@ -607,10 +725,25 @@ function renderEvidenceResponse(result) {
 let refreshTimer = null;
 let loading = false;
 let lastLoadedAt = 0;
+let latestForecastCutoff = null;
 
 function scheduleHourlyRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
   const current = new Date();
+  const currentHour = new Date(current);
+  currentHour.setMinutes(0, 0, 0);
+  const cutoffMs = Date.parse(latestForecastCutoff);
+  const waitingForCurrentHour = (
+    current.getMinutes() < 10 &&
+    Number.isFinite(cutoffMs) &&
+    cutoffMs < currentHour.getTime()
+  );
+  if (waitingForCurrentHour) {
+    refreshTimer = setTimeout(() => {
+      void load();
+    }, 45_000);
+    return;
+  }
   const next = new Date(current);
   next.setMinutes(0, 12, 0);
   next.setHours(next.getHours() + 1);
@@ -630,6 +763,11 @@ async function load() {
   });
   try {
     const forecastResult = await fetchJson("/api/forecast/current");
+    const forecastCutoff = forecastResult.data?.data?.knowledge_cutoff ??
+      forecastResult.data?.saved_prediction_ref?.knowledge_cutoff;
+    if (Number.isFinite(Date.parse(forecastCutoff))) {
+      latestForecastCutoff = forecastCutoff;
+    }
     const servingStatus = forecastResult.data?.serving?.status;
     const forecastAvailable = (
       forecastResult.ok &&
@@ -653,6 +791,9 @@ async function load() {
       );
     }
     const healthResult = await fetchJson("/api/health");
+    if (Number.isFinite(Date.parse(healthResult.data?.knowledge_cutoff))) {
+      latestForecastCutoff = healthResult.data.knowledge_cutoff;
+    }
     if (forecastAvailable) {
       readinessResult = {
         ok: healthResult.ok,

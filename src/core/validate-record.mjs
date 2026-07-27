@@ -276,6 +276,30 @@ export function assertCanonicalRecord(record) {
       /^sha256:[a-f0-9]{64}$/.test(data.extraction?.semantic_policy_hash ?? ""),
       "signal extraction semantic policy hash invalid",
     );
+    if (data.extraction?.relevance !== undefined) {
+      const relevance = data.extraction.relevance;
+      invariant(
+        typeof relevance.policy_version === "string" &&
+          ["relevant", "irrelevant", "pending_context"].includes(
+            relevance.decision,
+          ) &&
+          typeof relevance.reason_code === "string" &&
+          ["self", "reply_parent", "quote", "unresolved_context"].includes(
+            relevance.basis,
+          ) &&
+          Array.isArray(relevance.matched_segments) &&
+          Array.isArray(relevance.context_refs),
+        "signal relevance decision invalid",
+      );
+      relevance.context_refs.forEach((ref, index) =>
+        recordReference(ref, `signal relevance context ref ${index}`)
+      );
+      invariant(
+        relevance.decision === "relevant" ||
+          data.provenance?.feature_eligible === false,
+        "non-relevant signal must be feature-ineligible",
+      );
+    }
     invariant(data.provenance?.root_evidence_id && data.provenance?.independence_group_id, "signal provenance incomplete");
   } else if (record.record_type === "event_candidate") {
     invariant(isUtc(data.as_of) && data.event_cluster_id, "candidate identity incomplete");

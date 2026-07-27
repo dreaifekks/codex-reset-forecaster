@@ -336,7 +336,7 @@ test("Grokbuild summaries share the canonical X root without inheriting source r
     },
   } });
   const statusId = "2075657265508647008";
-  const sourcePublishedAt = "2026-07-10T19:03:50.000Z";
+  const sourcePublishedAt = "2026-07-10T19:03:50.601Z";
   const collectedAt = new Date("2026-07-22T20:00:00Z");
   await appendRawObservationRevision(store, {
     provider_item_id: statusId,
@@ -442,6 +442,24 @@ test("outcome-conditioned linked observations are auditable but excluded from fe
   assert.equal(signals[0].data.provenance.feature_eligible, false);
   assert.equal(signals[0].data.provenance.selection_bias, "outcome_conditioned_archive_link");
   assert.deepEqual(selectCurrentSignals(signals), []);
+});
+
+test("a newer ineligible extraction suppresses an older eligible signal for the same observation", () => {
+  const older = candidateTestSignal({
+    id: "screened-revision",
+    product: "competing_model",
+    at: "2026-07-20T00:00:00.000Z",
+    group: "ind_screened_revision",
+    root: "x_post:2081364048994521589",
+  });
+  const newer = structuredClone(older);
+  newer.record_id = "sig_screened_revision_new";
+  newer.created_at = "2026-07-21T00:00:00.000Z";
+  newer.data.available_at = newer.created_at;
+  newer.data.observation_refs[0].revision = 2;
+  newer.data.provenance.feature_eligible = false;
+
+  assert.deepEqual(selectCurrentSignals([older, newer]), []);
 });
 
 test("started claims remain candidates while completed direct observations form distinct stable outcomes", async (t) => {

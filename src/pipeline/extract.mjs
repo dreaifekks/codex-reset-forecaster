@@ -8,6 +8,10 @@ import {
 } from "../core/extractor-contract.mjs";
 import { canonicalXStatusUrl, xStatusIdentity } from "../providers/raw.mjs";
 import { MULTI_PRODUCT, UNKNOWN_PRODUCT } from "../core/product-scope.mjs";
+import {
+  assessTopicRelevance,
+  TOPIC_RELEVANCE_POLICY_VERSION,
+} from "./topic-relevance.mjs";
 
 const RESET_TERMS = /\b(reset(?:s|ting|ing|ted)?|refill(?:s|ed|ing)?|refresh(?:ed|ing)?)\b/i;
 const QUOTA_TERMS = /\b(usage|rate|quota|limit|limits|allowance)\b/i;
@@ -362,26 +366,132 @@ function evidenceRoot(observation, role) {
   };
 }
 
+function observationContextAvailableAt(observation) {
+  if (observation.revision === 1) {
+    return observation.data.availability_attestation?.available_at ??
+      observation.data.first_seen_at;
+  }
+  return observation.data.fetched_at ?? observation.created_at;
+}
+
+function contextIdentityKeys(observation) {
+  return [...new Set([
+    observation.data.provider_item_id,
+    xStatusIdentity(observation.data.provider_item_id),
+    xStatusIdentity(observation.data.canonical_url),
+  ].filter(Boolean).map(String))];
+}
+
+function contextObservationPreference(observation) {
+  return [
+    observation.data.content.media_type === "text/plain" ? 1 : 0,
+    observation.revision,
+    observationContextAvailableAt(observation),
+    observation.record_id,
+  ];
+}
+
+function compareContextObservation(left, right) {
+  const leftRank = contextObservationPreference(left);
+  const rightRank = contextObservationPreference(right);
+  for (let index = 0; index < leftRank.length; index += 1) {
+    if (leftRank[index] > rightRank[index]) return 1;
+    if (leftRank[index] < rightRank[index]) return -1;
+  }
+  return 0;
+}
+
+function contextIndex(observations) {
+  const latestByRecordId = new Map();
+  for (const observation of observations) {
+    const previous = latestByRecordId.get(observation.record_id);
+    if (!previous || observation.revision > previous.revision) {
+      latestByRecordId.set(observation.record_id, observation);
+    }
+  }
+  const index = new Map();
+  for (const observation of latestByRecordId.values()) {
+    for (const key of contextIdentityKeys(observation)) {
+      const previous = index.get(key);
+      if (!previous || compareContextObservation(observation, previous) > 0) {
+        index.set(key, observation);
+      }
+    }
+  }
+  return index;
+}
+
+function relationContexts(observation, observationsByRelationId) {
+  const relations = observation.data.native_relations.filter((relation) =>
+    ["reply", "quotes"].includes(relation.type)
+  );
+  const contexts = [];
+  let unresolved = 0;
+  for (const relation of relations) {
+    const keys = [
+      relation.provider_item_id,
+      xStatusIdentity(relation.provider_item_id),
+      xStatusIdentity(relation.url),
+    ].filter(Boolean).map(String);
+    const related = keys
+      .map((key) => observationsByRelationId.get(key))
+      .find((candidate) => candidate?.record_id !== observation.record_id);
+    if (!related) {
+      unresolved += 1;
+      continue;
+    }
+    contexts.push({
+      relation_type: relation.type,
+      text: related.data.content.text,
+      observation_ref: recordRef(related),
+      available_at: observationContextAvailableAt(related),
+    });
+  }
+  return {
+    contexts,
+    hasUnresolvedContext: unresolved > 0,
+  };
+}
+
 export function extractSignal(observation, config, {
   availableAt = observation.data.fetched_at,
   createdAt = observation.data.fetched_at,
   evidenceRootOverride = null,
+  contexts = [],
+  hasUnresolvedContext = false,
 } = {}) {
   if (!SIGNAL_MEDIA_TYPES.has(observation.data.content.media_type)) {
     return null;
   }
   const extractor = extractorContract(config);
   const text = observation.data.content.text.replace(/[*_`]/g, "");
-  const eventType = classifyEvent(text);
-  if (!eventType) return null;
-  const phase = classifyPhase(text, eventType);
-  const productScope = classifyProductScope(text, config);
+  if (
+    extractor.topic_relevance_policy_version !==
+    TOPIC_RELEVANCE_POLICY_VERSION
+  ) {
+    throw new Error(
+      `Unsupported topic relevance policy: ${extractor.topic_relevance_policy_version}`,
+    );
+  }
   const role = sourceRole(observation, config);
+  const relevance = assessTopicRelevance({
+    text,
+    sourceRole: role,
+    contexts,
+    hasUnresolvedContext,
+  });
+  const claimText = relevance.basis === "self"
+    ? text
+    : relevance.matched_segments.join("\n");
+  const eventType = classifyEvent(claimText);
+  if (!eventType) return null;
+  const phase = classifyPhase(claimText, eventType);
+  const productScope = classifyProductScope(claimText, config);
   const root = evidenceRootOverride ?? evidenceRoot(observation, role);
-  const narrowScope = hasNarrowScopeQualifier(text);
-  const bankedResetOnly = isBankedResetOnly(text);
+  const narrowScope = hasNarrowScopeQualifier(claimText);
+  const bankedResetOnly = isBankedResetOnly(claimText);
   const platform = !bankedResetOnly && !narrowScope && (
-    hasExplicitPlatformScope(text) ||
+    hasExplicitPlatformScope(claimText) ||
     policyAllowsAuthorityGenericScope({
       observation,
       config,
@@ -397,10 +507,41 @@ export function extractSignal(observation, config, {
   const explicit = phase !== "rumor" &&
     (platform || !["quota_reset", "quota_refill"].includes(eventType));
   const confidence = explicit ? 0.94 : eventType ? 0.72 : 0.5;
+  const contextRefs = relevance.context_refs.filter((reference) =>
+    reference &&
+    typeof reference.record_id === "string" &&
+    Number.isInteger(reference.revision)
+  );
+  const observationRefs = [
+    recordRef(observation),
+    ...contextRefs,
+  ].filter((reference, index, all) =>
+    all.findIndex((candidate) =>
+      candidate.record_id === reference.record_id &&
+      candidate.revision === reference.revision
+    ) === index
+  );
+  const usedContextKeys = new Set(contextRefs.map((reference) =>
+    `${reference.record_id}@${reference.revision}`
+  ));
+  const effectiveAvailableAtMs = contexts
+    .filter((context) => {
+      const reference = context.observation_ref ?? context.context_ref ?? context.ref;
+      return reference && usedContextKeys.has(
+        `${reference.record_id}@${reference.revision}`,
+      );
+    })
+    .reduce((maximum, context) => {
+      const value = Date.parse(context.available_at);
+      return Number.isFinite(value) ? Math.max(maximum, value) : maximum;
+    }, Date.parse(availableAt));
+  const effectiveAvailableAt = new Date(effectiveAvailableAtMs).toISOString();
   return createRecord({
     recordType: "normalized_signal",
     naturalKey: [
-      `${observation.record_id}@${observation.revision}`,
+      observationRefs.map((reference) =>
+        `${reference.record_id}@${reference.revision}`
+      ).join("+"),
       config.taxonomy_version,
       extractor.model,
       extractor.model_version,
@@ -415,8 +556,8 @@ export function extractSignal(observation, config, {
       semantic_policy_hash: extractor.semantic_policy_hash,
     }),
     data: {
-      observation_refs: [recordRef(observation)],
-      available_at: new Date(availableAt).toISOString(),
+      observation_refs: observationRefs,
+      available_at: effectiveAvailableAt,
       taxonomy_version: config.taxonomy_version,
       claim: {
         event_type: eventType,
@@ -428,7 +569,11 @@ export function extractSignal(observation, config, {
           plans: platform ? ["paid"] : ["unknown"],
           quota_bucket: platform ? config.target.quota_bucket : null,
         }),
-        asserted_time_range: assertedRange(text, observation.data.published_at, phase),
+        asserted_time_range: assertedRange(
+          claimText,
+          observation.data.published_at,
+          phase,
+        ),
         author_certainty: explicit ? "explicit" : phase === "expected" ? "probable" : "possible",
       },
       provenance: {
@@ -437,7 +582,9 @@ export function extractSignal(observation, config, {
         root_evidence_id: root.rootId,
         derivation: root.derivation,
         independence_group_id: makeRecordId("ind", root.rootId),
-        feature_eligible: observation.data.selection_context?.feature_eligible !== false,
+        feature_eligible:
+          relevance.decision === "relevant" &&
+          observation.data.selection_context?.feature_eligible !== false,
         selection_bias: observation.data.selection_context?.outcome_conditioned
           ? "outcome_conditioned_archive_link"
           : null,
@@ -457,6 +604,14 @@ export function extractSignal(observation, config, {
         prompt_version: extractor.prompt_version,
         semantic_policy_hash: extractor.semantic_policy_hash,
         confidence,
+        relevance: {
+          policy_version: TOPIC_RELEVANCE_POLICY_VERSION,
+          decision: relevance.decision,
+          reason_code: relevance.reason_code,
+          basis: relevance.basis,
+          matched_segments: relevance.matched_segments,
+          context_refs: contextRefs,
+        },
       },
     },
   });
@@ -480,10 +635,15 @@ export async function normalizeNewObservations(store, config, { now = new Date()
         signal.data.extraction.model_version === extractor.model_version &&
         signal.data.extraction.prompt_version === extractor.prompt_version &&
         signal.data.extraction.semantic_policy_hash === extractor.semantic_policy_hash)
-      .flatMap((signal) => signal.data.observation_refs.map(exactRef)),
+      .map((signal) => signal.data.observation_refs[0])
+      .filter(Boolean)
+      .map(exactRef),
   );
   const previouslyNormalizedRefs = new Set(
-    normalized.flatMap((signal) => signal.data.observation_refs.map(exactRef)),
+    normalized
+      .map((signal) => signal.data.observation_refs[0])
+      .filter(Boolean)
+      .map(exactRef),
   );
   const normalizationState = await store.readState("normalization", { versions: {} });
   normalizationState.versions ??= {};
@@ -503,6 +663,30 @@ export async function normalizeNewObservations(store, config, { now = new Date()
     extractor.semantic_policy_hash,
   ].join(":");
   const processed = normalizationState.versions[versionKey]?.processed ?? {};
+  const observationsByRelationId = contextIndex(observations);
+  const relationContextByRef = new Map(observations.map((observation) => [
+    exactRef(observation),
+    relationContexts(observation, observationsByRelationId),
+  ]));
+  const contextSignature = (relationContext) => [
+    relationContext.hasUnresolvedContext ? "unresolved" : "resolved",
+    ...relationContext.contexts.map((context) => {
+      const reference = context.observation_ref;
+      return [
+        context.relation_type,
+        reference.record_id,
+        reference.revision,
+      ].join(":");
+    }).sort(),
+  ].join("|");
+  const priorContextSignatures =
+    normalizationState.versions[versionKey]?.context_signatures ?? {};
+  const nextContextSignatures = Object.fromEntries(
+    [...relationContextByRef].map(([reference, relationContext]) => [
+      reference,
+      contextSignature(relationContext),
+    ]),
+  );
   const contentRoots = new Map();
   const evidenceRoots = new Map();
   for (const observation of observations) {
@@ -536,18 +720,29 @@ export async function normalizeNewObservations(store, config, { now = new Date()
   }
   const pending = observations.filter((observation) => {
     const key = exactRef(observation);
-    return !currentNormalizedRefs.has(key) && processed[key] !== true;
+    return (
+      !currentNormalizedRefs.has(key) &&
+      processed[key] !== true
+    ) || (
+      processed[key] === true &&
+      priorContextSignatures[key] !== nextContextSignatures[key]
+    );
   });
   const records = pending
-    .map((observation) => extractSignal(observation, config, {
-      createdAt: now,
-      availableAt: previouslyProcessedRefs.has(exactRef(observation))
-        ? now
-        : observation.revision === 1
-          ? observation.data.availability_attestation?.available_at ?? observation.data.fetched_at
-          : observation.data.fetched_at ?? observation.created_at,
-      evidenceRootOverride: evidenceRoots.get(exactRef(observation)),
-    }))
+    .map((observation) => {
+      const relationContext = relationContextByRef.get(exactRef(observation));
+      return extractSignal(observation, config, {
+        createdAt: now,
+        availableAt: previouslyProcessedRefs.has(exactRef(observation))
+          ? now
+          : observation.revision === 1
+            ? observation.data.availability_attestation?.available_at ??
+              observation.data.fetched_at
+            : observation.data.fetched_at ?? observation.created_at,
+        evidenceRootOverride: evidenceRoots.get(exactRef(observation)),
+        ...relationContext,
+      });
+    })
     .filter(Boolean);
   const results = await store.appendMany(records);
   normalizationState.versions[versionKey] = {
@@ -555,6 +750,10 @@ export async function normalizeNewObservations(store, config, { now = new Date()
       ...Object.keys(processed).map((key) => [key, true]),
       ...pending.map((observation) => [exactRef(observation), true]),
     ]),
+    context_signatures: {
+      ...priorContextSignatures,
+      ...nextContextSignatures,
+    },
     updated_at: new Date(now).toISOString(),
   };
   await store.writeState("normalization", normalizationState);

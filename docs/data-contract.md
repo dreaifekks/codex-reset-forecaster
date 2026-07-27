@@ -203,11 +203,13 @@ votes. Evidence relations include `independent`, `quotes`, `repost`, `summarizes
 and `unknown`.
 
 The configured extractor contract binds `model`, `model_version`,
-`prompt_version`, and `semantic_policy_hash`. The semantic policy hash is computed
-from the normalized forecast target plus the provider-neutral identity,
-source-role, and confirmation/context policy. Provider order and plan/region array
-order do not affect it. When any bound value changes, normalization reprocesses
-every stored raw-observation revision, not only the latest revision.
+`prompt_version`, topic-relevance policy version, and
+`semantic_policy_hash`. The semantic policy hash is computed from the normalized
+forecast target plus the provider-neutral identity, source-role,
+confirmation/context, and topic-relevance policies. Provider order and
+plan/region array order do not affect it. When any bound value changes,
+normalization reprocesses every stored raw-observation revision, not only the
+latest revision.
 The replayed signal has `created_at` equal to the replay time. If that exact raw
 revision was already extracted, its new signal also has `available_at` equal to
 the replay time so a historical forecast cannot see an extractor result that did
@@ -215,9 +217,14 @@ not yet exist.
 
 Consumers select one current extraction for an exact observation revision and
 then the latest observation revision, so extractor upgrades do not turn one post
-into multiple votes. If the corrected current claim changes a previously confirmed
-outcome interval, adjudication appends a new outcome revision and points to the
-exact superseded revision.
+into multiple votes. Selection chooses the newest extraction before applying
+`feature_eligible`; therefore a new `irrelevant` or `pending_context` assessment
+suppresses an older eligible interpretation instead of allowing it to survive.
+Each current extraction may include a versioned `extraction.relevance` decision,
+reason, basis, matched source segments, and exact context references. If the
+corrected current claim changes a previously confirmed outcome interval,
+adjudication appends a new outcome revision and points to the exact superseded
+revision.
 
 Feature selection requires the exact signal `semantic_policy_hash`; old
 extractions cannot survive a target or role-policy change. The complete extractor

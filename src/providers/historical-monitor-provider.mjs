@@ -15,11 +15,13 @@ import {
 import {
   appendRawObservationRevision,
   rawObservationFromItem,
+  timestampFromXSnowflake,
   xStatusIdentity,
 } from "./raw.mjs";
 
-const X_EPOCH_MS = 1_288_834_974_657n;
 const DAY_MS = 86_400_000;
+
+export { timestampFromXSnowflake } from "./raw.mjs";
 
 function decodeHtml(value) {
   let decoded = String(value);
@@ -47,11 +49,6 @@ function plainText(value) {
     .replace(/\n[ \t]+/g, "\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
-}
-
-export function timestampFromXSnowflake(id) {
-  if (!/^\d{16,22}$/.test(String(id))) throw new Error(`Invalid X snowflake: ${id}`);
-  return new Date(Number((BigInt(id) >> 22n) + X_EPOCH_MS)).toISOString();
 }
 
 export function parseHistoricalMonitorHtml(html) {

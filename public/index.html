@@ -103,7 +103,7 @@
         </div>
       </section>
 
-      <section class="lower-grid signal-grid" aria-label="近期预测信号">
+      <section class="lower-grid signal-grid" aria-label="近期预测信号" tabindex="-1">
         <article class="panel core-signal-panel">
           <div class="panel-heading compact">
             <div>
@@ -138,5 +138,47 @@
         <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>正在检查截止时间后的信号…</li></ol>
       </section>
     </main>
+
+    <dialog class="signal-dialog" id="signal-dialog" aria-labelledby="signal-dialog-title">
+      <div class="signal-dialog-card">
+        <header class="signal-dialog-header">
+          <div>
+            <p class="eyebrow">动态详情</p>
+            <h2 id="signal-dialog-title">完整内容</h2>
+          </div>
+          <button class="signal-dialog-close" id="signal-dialog-close" type="button" aria-label="关闭动态详情">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div class="signal-dialog-body">
+          <div class="signal-dialog-badges" id="signal-dialog-badges"></div>
+          <p class="signal-dialog-text" id="signal-dialog-text"></p>
+          <dl class="signal-dialog-times">
+            <div>
+              <dt>发布时间</dt>
+              <dd id="signal-dialog-published-at">—</dd>
+            </div>
+            <div>
+              <dt>模型可用时间</dt>
+              <dd id="signal-dialog-available-at">—</dd>
+            </div>
+          </dl>
+        </div>
+        <footer class="signal-dialog-footer">
+          <span id="signal-dialog-source">来源不可用</span>
+          <a
+            class="signal-dialog-source-link"
+            id="signal-dialog-source-link"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            查看原文
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 3h7v7M13 3 6.5 9.5M11 8.5V13H3V5h4.5"/>
+            </svg>
+          </a>
+        </footer>
+      </div>
+    </dialog>
   </body>
 </html>

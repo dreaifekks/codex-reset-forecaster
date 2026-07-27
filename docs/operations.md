@@ -291,6 +291,11 @@ Keep the bearer value out of commands, logs, and committed configuration.
 `grokbuild` is the current gateway default and runs the local Grok CLI search path.
 Its output is search-derived rather than attested source text, so the adapter marks
 those records as aggregator-only context and outcome adjudication rejects them.
+The adapter replays the gateway's `all_events` only when bootstrapping a new local
+provider state; later polls consume the gateway's incremental `events` result so
+wording changes in already-seen summaries do not masquerade as newly discovered
+posts. For X status URLs, `published_at` is derived deterministically from the
+status snowflake when the search response omits or varies `created_at`.
 If the Grokbuild path is unavailable, set `X_SEARCH_GATEWAY_PROVIDER=hermes` as a
 rollback; Hermes receives the same summary/context-only treatment. The SocialData
 upstream can return exact text but may bill a full upstream page even for a small

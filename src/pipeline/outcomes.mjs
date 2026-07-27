@@ -1,7 +1,10 @@
 import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { addHours, floorHour, halfOpenRange } from "../core/time.mjs";
 import { confirmationIdentityIds } from "../core/sources.mjs";
-import { extractorContract } from "../core/extractor-contract.mjs";
+import {
+  extractorContract,
+  matchesExtractorContract,
+} from "../core/extractor-contract.mjs";
 import { eventTypeFamily } from "../core/event-types.mjs";
 import {
   OUTCOME_ADJUDICATOR_VERSION,
@@ -180,7 +183,12 @@ function observationPreference(observation) {
 }
 
 export async function adjudicateOutcomes(store, config, { knownAt = null, now = new Date() } = {}) {
-  const signals = selectCurrentSignals(await store.all("normalized_signal"));
+  const expectedExtractor = config?.extractor ? extractorContract(config) : null;
+  const signals = selectCurrentSignals(
+    (await store.all("normalized_signal")).filter((signal) =>
+      matchesExtractorContract(signal, expectedExtractor)
+    ),
+  );
   const observations = new Map(
     (await store.all("raw_observation", { latestOnly: false })).map((observation) => [
       `${observation.record_id}@${observation.revision}`,

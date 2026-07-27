@@ -1,5 +1,8 @@
 import { createRecord, producer, recordRef } from "../core/records.mjs";
-import { extractorContract } from "../core/extractor-contract.mjs";
+import {
+  extractorContract,
+  matchesExtractorContract,
+} from "../core/extractor-contract.mjs";
 import { addHours, ceilHour, clamp, differenceInHours, hourOfWeek, toUtcIso } from "../core/time.mjs";
 import {
   normalizeCoverageIntervals,
@@ -149,13 +152,7 @@ function exactRefKey(ref) {
 }
 
 export function matchesExpectedExtractor(signal, expectedExtractor) {
-  if (expectedExtractor === null) return true;
-  return signal?.producer?.name === "rule-claim-extractor" &&
-    signal.producer.version === expectedExtractor.model_version &&
-    signal.data?.extraction?.model === expectedExtractor.model &&
-    signal.data.extraction.model_version === expectedExtractor.model_version &&
-    signal.data.extraction.prompt_version === expectedExtractor.prompt_version &&
-    signal.data.extraction.semantic_policy_hash === expectedExtractor.semantic_policy_hash;
+  return matchesExtractorContract(signal, expectedExtractor);
 }
 
 function signalEventTime(signal, observationsByExactRef, observationsById) {

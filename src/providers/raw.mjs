@@ -2,6 +2,8 @@ import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { hashLabel, stableStringify } from "../core/hash.mjs";
 import { toUtcIso } from "../core/time.mjs";
 
+const X_EPOCH_MS = 1_288_834_974_657n;
+
 export function xStatusIdentity(value) {
   const text = String(value ?? "").trim();
   const urlMatch = text.match(
@@ -9,6 +11,13 @@ export function xStatusIdentity(value) {
   );
   if (urlMatch) return urlMatch[1];
   return /^\d{6,24}$/.test(text) ? text : null;
+}
+
+export function timestampFromXSnowflake(id) {
+  if (!/^\d{16,22}$/.test(String(id))) {
+    throw new Error(`Invalid X snowflake: ${id}`);
+  }
+  return new Date(Number((BigInt(id) >> 22n) + X_EPOCH_MS)).toISOString();
 }
 
 export function canonicalXStatusUrl(value, fallbackHandle = "i") {

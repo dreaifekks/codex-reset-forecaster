@@ -89,7 +89,14 @@ changing an old forecast.
 
 ### 3. Claim extraction
 
-A versioned rule/LLM extractor converts text into a small taxonomy:
+A provider-neutral, versioned topic-relevance policy first checks the candidate
+post itself and any resolved reply/quote observations. Personal quota errors,
+requests for a reset, generic discussion, and explicit non-claims remain
+auditable but are feature-ineligible. A reply or quote may inherit context only
+from an exact related observation; a missing relation body is
+`pending_context`, not guessed from the search query.
+
+The rule/LLM extractor then converts relevant text into a small taxonomy:
 
 - event type;
 - phase and stance;
@@ -103,11 +110,12 @@ ChatGPT Work, unknown, and explicit multi-product statements. Only Codex or a
 multi-product statement explicitly containing Codex can confirm a Codex outcome.
 
 The active extractor contract is configuration, not a hidden code constant. Its
-`model`, `model_version`, `prompt_version`, and semantic policy hash are bound to
-every normalized signal and into model artifacts and evaluation provenance. The
-hash covers the normalized target and stable provider-neutral
-identity/role/confirmation policy. Upgrading the extractor or changing that
-semantic policy replays every exact raw-observation revision.
+`model`, `model_version`, `prompt_version`, topic-relevance policy version, and
+semantic policy hash are bound to every normalized signal and into model
+artifacts and evaluation provenance. The hash covers the normalized target,
+stable provider-neutral identity/role/confirmation policy, and topic-relevance
+policy. Upgrading the extractor or changing that semantic policy replays every
+exact raw-observation revision.
 
 The extractor does not emit the final reset probability.
 

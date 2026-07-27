@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { projectRoot } from "../core/config.mjs";
 import {
+  extractorContract,
+  matchesExtractorContract,
+} from "../core/extractor-contract.mjs";
+import {
   assessPredictionFreshness,
   assessEvaluationCompatibility,
   getReadiness,
@@ -16,6 +20,10 @@ import { verifyEvaluationArtifact } from "../model/evaluation.mjs";
 import {
   verifyIssuedEvaluationArtifact,
 } from "../model/issued-evaluation.mjs";
+import {
+  timestampFromXSnowflake,
+  xStatusIdentity,
+} from "../providers/raw.mjs";
 
 const PUBLIC_DIR = path.join(projectRoot, "public");
 const MIME_TYPES = new Map([
@@ -208,14 +216,98 @@ export function evidenceTierForSignal(signal, observation, config) {
     : "community";
 }
 
+const EVIDENCE_SOURCE_RANK = new Map([
+  ["official", 5],
+  ["product_lead", 4],
+  ["product_team_member", 3],
+  ["employee", 2],
+  ["community", 1],
+  ["media", 1],
+  ["aggregator", 0],
+  ["unknown", 0],
+]);
+const EVIDENCE_DERIVATION_RANK = new Map([
+  ["primary_statement", 3],
+  ["independent_observation", 3],
+  ["quotes", 1],
+  ["repost", 1],
+  ["summarizes", 1],
+  ["unknown", 0],
+]);
+
+function evidencePreference(signal) {
+  const provenance = signal.data.provenance;
+  return [
+    EVIDENCE_SOURCE_RANK.get(provenance.source_role) ?? 0,
+    EVIDENCE_DERIVATION_RANK.get(provenance.derivation) ?? 0,
+    Number.isFinite(Date.parse(provenance.source_published_at)) ? 1 : 0,
+    signal.data.available_at,
+    signal.created_at,
+    signal.record_id,
+  ];
+}
+
+function compareEvidencePreference(left, right) {
+  const leftRank = evidencePreference(left);
+  const rightRank = evidencePreference(right);
+  for (let index = 0; index < leftRank.length; index += 1) {
+    if (leftRank[index] > rightRank[index]) return 1;
+    if (leftRank[index] < rightRank[index]) return -1;
+  }
+  return 0;
+}
+
 function uniqueEvidenceRoots(signals) {
-  const seen = new Set();
-  return signals.filter((signal) => {
+  const selected = new Map();
+  for (const signal of signals) {
     const key = signal.data.provenance.independence_group_id;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const previous = selected.get(key);
+    if (!previous || compareEvidencePreference(signal, previous) > 0) {
+      selected.set(key, signal);
+    }
+  }
+  return [...selected.values()];
+}
+
+function observationPublishedAt(observation) {
+  const statusId = xStatusIdentity(observation?.data.canonical_url);
+  if (statusId) {
+    try {
+      return timestampFromXSnowflake(statusId);
+    } catch {
+      // Fall through to the stored source timestamp for non-snowflake IDs.
+    }
+  }
+  return observation?.data.published_at ?? null;
+}
+
+function evidenceDisplayTime(signal, observationsByRef) {
+  const observation = observationsByRef.get(
+    exactRecordKey(signal.data.observation_refs[0]),
+  );
+  return observationPublishedAt(observation) ??
+    signal.data.provenance.source_published_at ??
+    signal.data.available_at;
+}
+
+function sortEvidenceForDisplay(signals, observationsByRef) {
+  return [...signals].sort((left, right) =>
+    evidenceDisplayTime(right, observationsByRef)
+      .localeCompare(evidenceDisplayTime(left, observationsByRef)) ||
+    right.data.available_at.localeCompare(left.data.available_at) ||
+    right.created_at.localeCompare(left.created_at) ||
+    right.record_id.localeCompare(left.record_id)
+  );
+}
+
+function sortEvidenceItems(items) {
+  return [...items].sort((left, right) =>
+    (right.source?.published_at ?? right.available_at)
+      .localeCompare(left.source?.published_at ?? left.available_at) ||
+    right.available_at.localeCompare(left.available_at) ||
+    right.created_at.localeCompare(left.created_at) ||
+    right.signal_ref.record_id.localeCompare(left.signal_ref.record_id)
+  );
 }
 
 async function serveStatic(response, pathname) {
@@ -529,23 +621,25 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         const observationsByRef = new Map(
           observations.map((item) => [exactRecordKey(item), item]),
         );
+        const expectedExtractor = extractorContract(config);
+        const currentExtractorSignals = signals.filter((signal) =>
+          matchesExtractorContract(signal, expectedExtractor)
+        );
         const knowledgeCutoff = prediction?.data.knowledge_cutoff ?? now().toISOString();
         const cutoffMs = Date.parse(knowledgeCutoff);
-        const current = uniqueEvidenceRoots(selectCurrentSignals(
-          signals.filter((signal) =>
+        const current = sortEvidenceForDisplay(uniqueEvidenceRoots(selectCurrentSignals(
+          currentExtractorSignals.filter((signal) =>
             Date.parse(signal.data.available_at) <= cutoffMs &&
             Date.parse(signal.created_at) <= cutoffMs,
           ),
-        )
-          .sort((left, right) => right.data.available_at.localeCompare(left.data.available_at)));
-        const pending = uniqueEvidenceRoots(
-          selectCurrentSignals(signals)
+        )), observationsByRef);
+        const pending = sortEvidenceForDisplay(uniqueEvidenceRoots(
+          selectCurrentSignals(currentExtractorSignals)
             .filter((signal) =>
               Date.parse(signal.data.available_at) > cutoffMs ||
               Date.parse(signal.created_at) > cutoffMs,
             )
-            .sort((left, right) => right.data.available_at.localeCompare(left.data.available_at)),
-        );
+        ), observationsByRef);
         const withTier = (items) => items.map((signal) => {
           const observation = observationsByRef.get(
             exactRecordKey(signal.data.observation_refs[0]),
@@ -576,7 +670,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
               canonical_url: observation.data.canonical_url,
               display_handle: observation.data.author.display_handle,
               text: observation.data.content.text,
-              published_at: observation.data.published_at,
+              published_at: observationPublishedAt(observation),
             } : null,
           };
         };
@@ -592,8 +686,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           return {
             core,
             community,
-            items: [...core, ...community]
-              .sort((left, right) => right.available_at.localeCompare(left.available_at)),
+            items: sortEvidenceItems([...core, ...community]),
           };
         };
         const forecastEvidence = partition(withTier(current), false);
@@ -605,8 +698,10 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
             ? {
                 core: [...forecastEvidence.core, ...pendingEvidence.core],
                 community: [...forecastEvidence.community, ...pendingEvidence.community],
-                items: [...forecastEvidence.items, ...pendingEvidence.items]
-                  .sort((left, right) => right.available_at.localeCompare(left.available_at)),
+                items: sortEvidenceItems([
+                  ...forecastEvidence.items,
+                  ...pendingEvidence.items,
+                ]),
               }
             : forecastEvidence;
         sendJson(response, 200, {

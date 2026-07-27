@@ -267,11 +267,17 @@ function signal({
   derivation,
   identity = null,
   group = id,
+  runConfig = config(),
 }) {
+  const extractor = extractorContract(runConfig);
   return {
     record_id: id,
     revision: 1,
     created_at: availableAt,
+    producer: {
+      name: "rule-claim-extractor",
+      version: extractor.model_version,
+    },
     data: {
       available_at: availableAt,
       observation_refs: [observationRef],
@@ -280,7 +286,12 @@ function signal({
         phase: "completed",
         scope: { vendor: "openai", product: "codex" },
       },
-      extraction: { model_version: "test", prompt_version: "test" },
+      extraction: {
+        model: extractor.model,
+        model_version: extractor.model_version,
+        prompt_version: extractor.prompt_version,
+        semantic_policy_hash: extractor.semantic_policy_hash,
+      },
       provenance: {
         source_role: role,
         source_identity_id: identity,
@@ -360,11 +371,54 @@ test("recent evidence is aligned to the forecast cutoff and aggregator summaries
     "Community report about Codex.",
     "2026-07-25T10:02:00.000Z",
   );
+  const duplicateAggregator = observation(
+    "obs_duplicate_aggregator",
+    1,
+    "Summary of the same exact Codex source.",
+    "2026-07-25T09:59:00.000Z",
+  );
+  const obsolete = observation(
+    "obs_obsolete_extractor",
+    1,
+    "Obsolete extraction that the current topic policy rejects.",
+    "2026-07-25T09:58:00.000Z",
+  );
+  const obsoleteSignal = signal({
+    id: "sig_obsolete_extractor",
+    observationRef: { record_id: obsolete.record_id, revision: 1 },
+    availableAt: obsolete.created_at,
+    role: "aggregator",
+    derivation: "summarizes",
+  });
+  obsoleteSignal.producer.version = "old-extractor";
+  obsoleteSignal.data.extraction.model_version = "old-extractor";
+  obsoleteSignal.data.extraction.prompt_version = "old-rules";
+  obsoleteSignal.data.extraction.semantic_policy_hash =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const store = new MemoryStore({
     records: {
       prediction: [prediction()],
-      raw_observation: [before, afterAggregator, afterCommunity],
+      raw_observation: [
+        duplicateAggregator,
+        before,
+        afterAggregator,
+        afterCommunity,
+        obsolete,
+      ],
       normalized_signal: [
+        obsoleteSignal,
+        signal({
+          id: "sig_duplicate_aggregator",
+          observationRef: {
+            record_id: duplicateAggregator.record_id,
+            revision: 1,
+          },
+          availableAt: duplicateAggregator.created_at,
+          role: "aggregator",
+          derivation: "summarizes",
+          identity: "person_tibo_sottiaux",
+          group: "ind_shared_exact",
+        }),
         signal({
           id: "sig_before",
           observationRef: { record_id: before.record_id, revision: 1 },
@@ -372,6 +426,7 @@ test("recent evidence is aligned to the forecast cutoff and aggregator summaries
           role: "product_lead",
           derivation: "primary_statement",
           identity: "person_tibo_sottiaux",
+          group: "ind_shared_exact",
         }),
         signal({
           id: "sig_after_aggregator",
@@ -397,6 +452,20 @@ test("recent evidence is aligned to the forecast cutoff and aggregator summaries
   const evidence = await response.json();
   assert.equal(evidence.knowledge_cutoff, "2026-07-25T10:00:00.000Z");
   assert.deepEqual(evidence.core.map((item) => item.signal_ref.record_id), ["sig_before"]);
+  assert.ok(!evidence.community.some((item) =>
+    item.signal_ref.record_id === "sig_duplicate_aggregator"
+  ));
+  assert.ok(!evidence.items.some((item) =>
+    item.signal_ref.record_id === "sig_obsolete_extractor"
+  ));
+  assert.equal(
+    evidence.items.filter((item) =>
+      item.independence_group_id === "ind_shared_exact"
+    ).length,
+    1,
+  );
+  assert.equal(evidence.core[0].source.canonical_url, before.data.canonical_url);
+  assert.equal(evidence.core[0].source.published_at, before.data.published_at);
   assert.ok(evidence.items.every((item) => item.available_at <= evidence.knowledge_cutoff));
   assert.deepEqual(
     new Set(evidence.pending_next_forecast.items.map((item) => item.signal_ref.record_id)),
@@ -406,6 +475,91 @@ test("recent evidence is aligned to the forecast cutoff and aggregator summaries
   assert.ok(evidence.pending_next_forecast.items.every((item) =>
     item.pending_next_forecast && !item.included_in_forecast,
   ));
+});
+
+test("recent evidence sorts reprocessed exact sources by publication time before slicing", async (t) => {
+  const availableAt = "2026-07-25T09:58:00.000Z";
+  const exactObservations = Array.from({ length: 7 }, (_, index) => observation(
+    `obs_exact_${index + 1}`,
+    1,
+    `Exact Codex source ${index + 1}.`,
+    `2026-07-${String(index + 1).padStart(2, "0")}T12:00:00.000Z`,
+  ));
+  const store = new MemoryStore({
+    records: {
+      prediction: [prediction()],
+      raw_observation: exactObservations,
+      normalized_signal: exactObservations.map((item, index) => signal({
+        id: `sig_exact_${index + 1}`,
+        observationRef: { record_id: item.record_id, revision: 1 },
+        availableAt,
+        role: "product_lead",
+        derivation: "primary_statement",
+        identity: "person_tibo_sottiaux",
+        group: `ind_exact_${index + 1}`,
+      })),
+    },
+  });
+
+  const base = await serverFor(t, store, config(), "2026-07-25T10:10:00.000Z");
+  const response = await fetch(`${base}/api/evidence/recent`);
+  assert.equal(response.status, 200);
+  const evidence = await response.json();
+  assert.deepEqual(
+    evidence.core.map((item) => item.signal_ref.record_id),
+    [
+      "sig_exact_7",
+      "sig_exact_6",
+      "sig_exact_5",
+      "sig_exact_4",
+      "sig_exact_3",
+      "sig_exact_2",
+    ],
+  );
+  assert.deepEqual(
+    evidence.core.map((item) => item.source.published_at),
+    [...evidence.core.map((item) => item.source.published_at)].sort().reverse(),
+  );
+});
+
+test("recent evidence derives a stable X publication time when a summary timestamp varies", async (t) => {
+  const statusId = "2075657265508647008";
+  const summary = observation(
+    "obs_summary_without_time",
+    1,
+    "Community summary about a Codex release.",
+    "2026-07-25T09:30:00.000Z",
+  );
+  summary.data.canonical_url = `https://x.com/example/status/${statusId}`;
+  summary.data.published_at = "2026-07-25T00:00:00.000Z";
+  const store = new MemoryStore({
+    records: {
+      prediction: [prediction()],
+      raw_observation: [summary],
+      normalized_signal: [signal({
+        id: "sig_summary_without_time",
+        observationRef: { record_id: summary.record_id, revision: 1 },
+        availableAt: summary.created_at,
+        role: "aggregator",
+        derivation: "summarizes",
+        group: "ind_summary_without_time",
+      })],
+    },
+  });
+
+  const base = await serverFor(t, store, config(), "2026-07-25T10:10:00.000Z");
+  const response = await fetch(`${base}/api/evidence/recent`);
+  assert.equal(response.status, 200);
+  const evidence = await response.json();
+  assert.equal(evidence.community.length, 1);
+  assert.equal(
+    evidence.community[0].source.published_at,
+    "2026-07-10T19:03:50.601Z",
+  );
+  assert.equal(
+    evidence.community[0].available_at,
+    "2026-07-25T09:30:00.000Z",
+  );
 });
 
 test("a fresh compatible challenger forecast is served provisionally without claiming publication readiness", async (t) => {

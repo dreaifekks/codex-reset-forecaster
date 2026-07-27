@@ -7,7 +7,7 @@
   "created_at": "2026-07-23T04:03:20Z",
   "producer": {
     "name": "rule-claim-extractor",
-    "version": "0.2.7",
+    "version": "0.2.9",
     "config_hash": "sha256:example"
   },
   "data": {
@@ -50,10 +50,20 @@
     },
     "extraction": {
       "model": "deterministic-rules",
-      "model_version": "0.2.7",
-      "prompt_version": "reset-extract/rules-0.2.7",
+      "model_version": "0.2.9",
+      "prompt_version": "reset-extract/rules-0.2.9",
       "semantic_policy_hash": "sha256:e3a3ff0dacdfc9da48d9494ab2b0bd0f7fca1a55f2dc51cf289347846ef19ccf",
-      "confidence": 0.91
+      "confidence": 0.91,
+      "relevance": {
+        "policy_version": "reset-topic-relevance/2",
+        "decision": "relevant",
+        "reason_code": "target_operational_claim",
+        "basis": "self",
+        "matched_segments": [
+          "Codex usage limits will reset later today."
+        ],
+        "context_refs": []
+      }
     }
   }
 }

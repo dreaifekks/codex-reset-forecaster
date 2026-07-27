@@ -4,6 +4,7 @@ import {
   appendRawObservationRevision,
   canonicalXStatusUrl,
   rawObservationFromItem,
+  timestampFromXSnowflake,
   xStatusIdentity,
 } from "./raw.mjs";
 import {
@@ -12,11 +13,22 @@ import {
   normalizeXSearchGatewayUpstream,
 } from "./x-search-gateway-semantics.mjs";
 
-const PROVIDER_VERSION = "0.3.0";
+const PROVIDER_VERSION = "0.3.1";
 
 function validTimestamp(value) {
   if (!value || Number.isNaN(Date.parse(value))) return null;
   return new Date(value).toISOString();
+}
+
+function sourcePublishedTimestamp(event, sourceStatusId) {
+  if (sourceStatusId) {
+    try {
+      return timestampFromXSnowflake(sourceStatusId);
+    } catch {
+      // Fall through to the provider timestamp for non-snowflake identifiers.
+    }
+  }
+  return validTimestamp(event.created_at);
 }
 
 function providerItemId(event) {
@@ -124,7 +136,7 @@ export class XSearchGatewayProvider {
       canonicalXStatusUrl(event.id, handle || "i");
     const isSummary =
       isSummaryXSearchGatewayUpstream(this.upstreamProvider);
-    const sourcePublishedAt = validTimestamp(event.created_at);
+    const sourcePublishedAt = sourcePublishedTimestamp(event, sourceStatusId);
     return {
       provider_item_id: providerItemId(event),
       canonical_url: canonicalSourceUrl ?? event.url ?? null,
@@ -181,6 +193,13 @@ export class XSearchGatewayProvider {
 
   async collect(store) {
     const startedAt = this.now();
+    const stateKey = "x-search-gateway-provider";
+    const previousState = await store.readState(stateKey, {});
+    const providerConfigHash = hashLabel(this.config);
+    const bootstrapReplay =
+      previousState.upstream_provider !== this.upstreamProvider ||
+      previousState.provider_config_hash !== providerConfigHash ||
+      !previousState.last_success_at;
     try {
       const payloads = [];
       const queryErrors = [];
@@ -198,7 +217,12 @@ export class XSearchGatewayProvider {
           ).join("; ")}`,
         );
       }
-      const events = payloads.flatMap((payload) => payload.all_events ?? payload.events ?? []);
+      const events = payloads.flatMap((payload) => {
+        if (bootstrapReplay) {
+          return payload.all_events ?? payload.events ?? [];
+        }
+        return payload.events ?? payload.all_events ?? [];
+      });
       const items = [...new Map(events.map((event) => {
         const item = this.mapEvent(event);
         return [item.provider_item_id, item];
@@ -226,8 +250,9 @@ export class XSearchGatewayProvider {
         delaySeconds,
         error: partialError,
       }));
-      await store.writeState("x-search-gateway-provider", {
+      await store.writeState(stateKey, {
         upstream_provider: this.upstreamProvider,
+        provider_config_hash: providerConfigHash,
         last_success_at: fetchedAt.toISOString(),
         last_partial_at: queryErrors.length > 0 ? fetchedAt.toISOString() : null,
         last_failure_at: queryErrors.length > 0 ? fetchedAt.toISOString() : null,
@@ -237,6 +262,7 @@ export class XSearchGatewayProvider {
       return {
         collected: inserted,
         upstream_provider: this.upstreamProvider,
+        bootstrap_replay: bootstrapReplay,
         queries: payloads.length,
         query_errors: queryErrors,
         health: {
@@ -257,8 +283,10 @@ export class XSearchGatewayProvider {
       } catch {
         // Preserve the original provider error.
       }
-      await store.writeState("x-search-gateway-provider", {
+      await store.writeState(stateKey, {
+        ...previousState,
         upstream_provider: this.upstreamProvider,
+        provider_config_hash: providerConfigHash,
         last_failure_at: failedAt.toISOString(),
         last_error: error.message,
       });

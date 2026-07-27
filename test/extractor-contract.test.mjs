@@ -50,6 +50,16 @@ test("configured extractor versions bind signals, configuration, and the model c
     prompt_version: upgraded.extractor.prompt_version,
     semantic_policy_hash: upgradedContract.semantic_policy_hash,
     confidence: 0.94,
+    relevance: {
+      policy_version: upgradedContract.topic_relevance_policy_version,
+      decision: "relevant",
+      reason_code: "target_operational_claim",
+      basis: "self",
+      matched_segments: [
+        "We have reset Codex usage limits across all paid plans.",
+      ],
+      context_refs: [],
+    },
   });
   assert.equal(signal.producer.version, upgraded.extractor.model_version);
   assert.throws(
