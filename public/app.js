@@ -243,40 +243,268 @@ function coverageFreshnessTier(value) {
 
 function levelForProbability(probability, maximum) {
   if (probability <= 0 || maximum <= 0) return 0;
-  const relative = Math.sqrt(probability / maximum);
+  const relative = probability / maximum;
   if (relative < 0.35) return 1;
   if (relative < 0.58) return 2;
   if (relative < 0.82) return 3;
   return 4;
 }
 
-function slotUncertainty(slot) {
-  const interval = slot.epistemic_interval_80;
-  return Array.isArray(interval) && interval.length === 2 && interval.every(Number.isFinite)
-    ? `${percent(interval[0], 2)}–${percent(interval[1], 2)}`
-    : "不可用";
-}
-
-function rollingFourHourText(slot) {
-  return Number.isFinite(slot.rolling_4h_probability)
-    ? percent(slot.rolling_4h_probability, 2)
-    : "窗口超出预测范围";
-}
-
-function describeSlot(slot) {
-  return `${formatTime(slot.start)}，首次重置 ${percent(slot.first_reset_probability, 2)}，80% 区间 ${slotUncertainty(slot)}，未来 4 小时 ${rollingFourHourText(slot)}`;
-}
-
-function showSlotDetail(slot, button = null) {
-  const detail = document.querySelector("#heat-detail");
-  detail.innerHTML = `<strong>${escapeHtml(percent(slot.first_reset_probability, 2))}</strong><div><span>该小时首次重置 · 80% 区间 ${escapeHtml(slotUncertainty(slot))} · 未来 4 小时 ${escapeHtml(rollingFourHourText(slot))}</span><time>${escapeHtml(formatTime(slot.start))}</time></div>`;
-  if (button) {
-    document.querySelectorAll(".contribution-cell[aria-pressed='true']")
-      .forEach((item) => item.setAttribute("aria-pressed", "false"));
-    button.setAttribute("aria-pressed", "true");
-    focusCell(button);
+function cumulativeToSlot(slot, slots, index) {
+  if (Number.isFinite(slot.reset_by_end_probability)) {
+    return slot.reset_by_end_probability;
   }
+  return cumulative(slots.slice(0, index + 1));
 }
+
+function formatSlotRange(slot) {
+  return `${formatTime(slot.start)}–${clockFormatter.format(new Date(slot.end))}`;
+}
+
+function describeSlot(slot, cumulativeProbability) {
+  return [
+    formatSlotRange(slot),
+    `该小时发生首次重置的概率：${percent(slot.first_reset_probability, 2)}`,
+    `从现在到该小时结束的累计重置概率：${percent(cumulativeProbability, 2)}`,
+  ].join("\n");
+}
+
+const heatTooltip = document.querySelector("#heat-tooltip");
+let heatTooltipTrigger = null;
+let selectedSlotDetail = null;
+
+function showHeatTooltip(trigger, lines) {
+  if (!heatTooltip) return;
+  heatTooltip.replaceChildren(...lines.map((line, index) => {
+    const item = document.createElement(index === 0 ? "strong" : "span");
+    item.textContent = line;
+    return item;
+  }));
+  heatTooltip.hidden = false;
+  heatTooltip.style.visibility = "hidden";
+  heatTooltip.style.left = "0";
+  heatTooltip.style.top = "0";
+  const triggerRect = trigger.getBoundingClientRect();
+  const tooltipRect = heatTooltip.getBoundingClientRect();
+  const viewportPadding = 12;
+  const preferredLeft = triggerRect.left + (triggerRect.width - tooltipRect.width) / 2;
+  const left = Math.min(
+    Math.max(viewportPadding, preferredLeft),
+    window.innerWidth - tooltipRect.width - viewportPadding,
+  );
+  const above = triggerRect.top - tooltipRect.height - 10;
+  const top = above >= viewportPadding
+    ? above
+    : Math.min(
+        triggerRect.bottom + 10,
+        window.innerHeight - tooltipRect.height - viewportPadding,
+      );
+  heatTooltip.style.left = `${Math.round(left)}px`;
+  heatTooltip.style.top = `${Math.round(top)}px`;
+  heatTooltip.style.visibility = "";
+  heatTooltipTrigger?.removeAttribute("aria-describedby");
+  heatTooltipTrigger = trigger;
+  trigger.setAttribute("aria-describedby", "heat-tooltip");
+}
+
+function hideHeatTooltip(trigger = null) {
+  if (!heatTooltip || (trigger && trigger !== heatTooltipTrigger)) return;
+  heatTooltipTrigger?.removeAttribute("aria-describedby");
+  heatTooltipTrigger = null;
+  heatTooltip.hidden = true;
+  heatTooltip.replaceChildren();
+}
+
+document.querySelector(".heatmap-scroll")?.addEventListener(
+  "scroll",
+  () => {
+    hideHeatTooltip();
+    restoreSlotDetail();
+  },
+  { passive: true },
+);
+
+function showHourlySlotDetail(slot, cumulativeProbability) {
+  const detail = document.querySelector("#heat-detail");
+  detail.dataset.mode = "hourly";
+  detail.innerHTML = `<strong>${escapeHtml(percent(slot.first_reset_probability, 2))}</strong><div><time>${escapeHtml(formatSlotRange(slot))}</time><span>该小时发生首次重置的概率：${escapeHtml(percent(slot.first_reset_probability, 2))}</span><span>从现在到该小时结束的累计重置概率：${escapeHtml(percent(cumulativeProbability, 2))}</span></div>`;
+}
+
+function showSelectedSlotDetail(slot, cumulativeProbability) {
+  const detail = document.querySelector("#heat-detail");
+  detail.dataset.mode = "cumulative";
+  detail.innerHTML = `<strong>${escapeHtml(percent(cumulativeProbability, 2))}</strong><div><time>${escapeHtml(formatSlotRange(slot))} · 已选累计区间</time><span>所选结束小时的首次重置概率：${escapeHtml(percent(slot.first_reset_probability, 2))}</span><span>从现在到所选小时结束的累计重置概率：${escapeHtml(percent(cumulativeProbability, 2))}</span></div>`;
+}
+
+function resetSlotDetail() {
+  const detail = document.querySelector("#heat-detail");
+  detail.dataset.mode = "empty";
+  detail.innerHTML =
+    "<strong>—</strong><div><time>悬停格子查看该小时，点击可固定累计区间</time><span>该小时发生首次重置的概率：—</span><span>从现在到该小时结束的累计重置概率：—</span></div>";
+}
+
+function restoreSlotDetail() {
+  if (selectedSlotDetail) {
+    showSelectedSlotDetail(
+      selectedSlotDetail.slot,
+      selectedSlotDetail.cumulativeProbability,
+    );
+    return;
+  }
+  resetSlotDetail();
+}
+
+const svgNamespace = "http://www.w3.org/2000/svg";
+
+function createRangeBackdrop(target) {
+  const backdrop = document.createElementNS(svgNamespace, "svg");
+  backdrop.id = "range-backdrop";
+  backdrop.classList.add("range-backdrop");
+  backdrop.setAttribute("aria-hidden", "true");
+  backdrop.hidden = true;
+  target.prepend(backdrop);
+}
+
+function boxWithin(element, ancestor) {
+  let left = 0;
+  let top = 0;
+  let current = element;
+  while (current && current !== ancestor) {
+    left += current.offsetLeft;
+    top += current.offsetTop;
+    current = current.offsetParent;
+  }
+  return {
+    left,
+    top,
+    right: left + element.offsetWidth,
+    bottom: top + element.offsetHeight,
+  };
+}
+
+function roundedPolygonPath(points, radius = 7) {
+  const corners = points.map((point, index) => {
+    const previous = points[(index + points.length - 1) % points.length];
+    const next = points[(index + 1) % points.length];
+    const before = Math.hypot(previous.x - point.x, previous.y - point.y);
+    const after = Math.hypot(next.x - point.x, next.y - point.y);
+    const cornerRadius = Math.min(radius, before / 2, after / 2);
+    return {
+      point,
+      start: {
+        x: point.x + ((previous.x - point.x) / before) * cornerRadius,
+        y: point.y + ((previous.y - point.y) / before) * cornerRadius,
+      },
+      end: {
+        x: point.x + ((next.x - point.x) / after) * cornerRadius,
+        y: point.y + ((next.y - point.y) / after) * cornerRadius,
+      },
+    };
+  });
+  const coordinate = (point) => `${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+  const commands = [`M ${coordinate(corners[0].start)}`];
+  corners.forEach((corner, index) => {
+    if (index > 0) commands.push(`L ${coordinate(corner.start)}`);
+    commands.push(
+      `Q ${coordinate(corner.point)} ${coordinate(corner.end)}`,
+    );
+  });
+  commands.push("Z");
+  return commands.join(" ");
+}
+
+function hideRangeBackdrop() {
+  const backdrop = document.querySelector("#range-backdrop");
+  if (!backdrop) return;
+  backdrop.replaceChildren();
+  backdrop.hidden = true;
+}
+
+function updateRangeBackdrop(selectedIndex) {
+  const target = document.querySelector("#heatmap");
+  const backdrop = document.querySelector("#range-backdrop");
+  const first = target?.querySelector('.contribution-cell[data-index="0"]');
+  const endpoint = target?.querySelector(
+    `.contribution-cell[data-index="${selectedIndex}"]`,
+  );
+  if (!target || !backdrop || !first || !endpoint) return;
+
+  backdrop.setAttribute(
+    "viewBox",
+    `0 0 ${target.offsetWidth} ${target.offsetHeight}`,
+  );
+  backdrop.replaceChildren();
+  const padding = 3;
+  const firstBox = boxWithin(first, target);
+  const endpointBox = boxWithin(endpoint, target);
+  const column = Math.floor(selectedIndex / 12);
+  const row = selectedIndex % 12;
+  const left = firstBox.left - padding;
+  const top = firstBox.top - padding;
+  const right = endpointBox.right + padding;
+  const endpointBottom = endpointBox.bottom + padding;
+  let points = [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: endpointBottom },
+    { x: left, y: endpointBottom },
+  ];
+
+  if (column > 0 && row < 11) {
+    const previousColumnLast = target.querySelector(
+      `.contribution-cell[data-index="${column * 12 - 1}"]`,
+    );
+    const previousBox = boxWithin(previousColumnLast, target);
+    const notchX = previousBox.right + padding;
+    points = [
+      { x: left, y: top },
+      { x: right, y: top },
+      { x: right, y: endpointBottom },
+      { x: notchX, y: endpointBottom },
+      {
+        x: notchX,
+        y: previousBox.bottom + padding,
+      },
+      { x: left, y: previousBox.bottom + padding },
+    ];
+  }
+  const path = document.createElementNS(svgNamespace, "path");
+  path.classList.add("range-backdrop-path");
+  path.setAttribute("d", roundedPolygonPath(points));
+  backdrop.append(path);
+  backdrop.hidden = false;
+}
+
+function clearSlotSelection({ resetDetail = true } = {}) {
+  selectedSlotDetail = null;
+  document.querySelectorAll(".contribution-cell").forEach((item) => {
+    item.classList.remove("range-selected", "range-end");
+    item.setAttribute("aria-pressed", "false");
+  });
+  hideRangeBackdrop();
+  if (resetDetail) resetSlotDetail();
+}
+
+function selectSlot(slot, cumulativeProbability, button) {
+  clearSlotSelection({ resetDetail: false });
+  const selectedIndex = Number(button.dataset.index);
+  selectedSlotDetail = { slot, cumulativeProbability, index: selectedIndex };
+  document.querySelectorAll(".contribution-cell").forEach((item) => {
+    if (Number(item.dataset.index) > selectedIndex) return;
+    item.classList.add("range-selected");
+    item.setAttribute("aria-pressed", "true");
+  });
+  button.classList.add("range-end");
+  updateRangeBackdrop(selectedIndex);
+  focusCell(button);
+  showSelectedSlotDetail(slot, cumulativeProbability);
+}
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".contribution-cell")) return;
+  if (!event.target.closest(".day-label")) hideHeatTooltip();
+  clearSlotSelection();
+});
 
 function focusCell(button) {
   document.querySelectorAll(".contribution-cell").forEach((item) => {
@@ -284,7 +512,7 @@ function focusCell(button) {
   });
 }
 
-function cell(slot, maximum, index) {
+function cell(slot, maximum, index, visibleSlots) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "contribution-cell";
@@ -293,16 +521,31 @@ function cell(slot, maximum, index) {
   button.setAttribute("aria-rowindex", String((index % 12) + 1));
   button.setAttribute("aria-colindex", String(Math.floor(index / 12) + 1));
   button.tabIndex = index === 0 ? 0 : -1;
-  const label = describeSlot(slot);
+  const cumulativeProbability = cumulativeToSlot(slot, visibleSlots, index);
+  const label = describeSlot(slot, cumulativeProbability);
   button.setAttribute("aria-label", label);
   button.setAttribute("aria-pressed", "false");
-  button.title = label;
-  button.addEventListener("mouseenter", () => showSlotDetail(slot));
+  button.addEventListener("mouseenter", () => {
+    showHeatTooltip(button, label.split("\n"));
+    showHourlySlotDetail(slot, cumulativeProbability);
+  });
+  button.addEventListener("mouseleave", () => {
+    if (!button.matches(":focus-visible")) hideHeatTooltip(button);
+    if (!button.matches(":focus-visible")) restoreSlotDetail();
+  });
   button.addEventListener("focus", () => {
     focusCell(button);
-    showSlotDetail(slot);
+    showHeatTooltip(button, label.split("\n"));
+    showHourlySlotDetail(slot, cumulativeProbability);
   });
-  button.addEventListener("click", () => showSlotDetail(slot, button));
+  button.addEventListener("blur", () => {
+    hideHeatTooltip(button);
+    restoreSlotDetail();
+  });
+  button.addEventListener(
+    "click",
+    () => selectSlot(slot, cumulativeProbability, button),
+  );
   button.addEventListener("keydown", (event) => {
     const row = index % 12;
     const destinations = {
@@ -324,17 +567,37 @@ function cell(slot, maximum, index) {
   return button;
 }
 
-function dayBlock(slots, offset, maximum) {
+function dayBlock(slots, offset, maximum, visibleSlots, dayIndex) {
   const block = document.createElement("section");
   block.className = "forecast-day";
   const label = document.createElement("time");
   label.className = "day-label";
   label.dateTime = slots[0].start;
-  label.textContent = `${dateFormatter.format(new Date(slots[0].start))}起`;
-  label.title = `${formatTime(slots[0].start)} 至 ${formatTime(slots.at(-1).end)}`;
+  label.textContent = dateFormatter.format(new Date(slots[0].start));
+  label.tabIndex = 0;
+  const dayNames = ["一", "两", "三", "四", "五", "六", "七"];
+  const dayProbability = cumulativeToSlot(
+    slots.at(-1),
+    visibleSlots,
+    offset + slots.length - 1,
+  );
+  const dayMessage =
+    `未来${dayNames[dayIndex]}天内重置概率：${percent(dayProbability, 1)}`;
+  label.setAttribute(
+    "aria-label",
+    `${dateFormatter.format(new Date(slots[0].start))}，${dayMessage}`,
+  );
+  label.addEventListener("mouseenter", () => showHeatTooltip(label, [dayMessage]));
+  label.addEventListener("mouseleave", () => {
+    if (!label.matches(":focus-visible")) hideHeatTooltip(label);
+  });
+  label.addEventListener("focus", () => showHeatTooltip(label, [dayMessage]));
+  label.addEventListener("blur", () => hideHeatTooltip(label));
   const cells = document.createElement("div");
   cells.className = "day-cells";
-  slots.forEach((slot, index) => cells.append(cell(slot, maximum, offset + index)));
+  slots.forEach((slot, index) => {
+    cells.append(cell(slot, maximum, offset + index, visibleSlots));
+  });
   block.append(label, cells);
   return block;
 }
@@ -347,23 +610,28 @@ function renderHeatmap(slots) {
   target.setAttribute("aria-label", "从预测起点开始的 168 个连续小时");
   target.setAttribute("aria-rowcount", "12");
   target.setAttribute("aria-colcount", "14");
+  target.setAttribute("aria-multiselectable", "true");
+  createRangeBackdrop(target);
   const visible = slots.slice(0, 168);
   const maximum = Math.max(...visible.map((slot) => slot.first_reset_probability), 0);
-  const peak = visible.reduce((best, slot) => (
-    !best || slot.first_reset_probability > best.first_reset_probability ? slot : best
-  ), null);
+  hideHeatTooltip();
+  selectedSlotDetail = null;
+  resetSlotDetail();
   for (let day = 0; day < 7; day += 1) {
     const offset = day * 24;
     const daySlots = visible.slice(offset, offset + 24);
-    if (daySlots.length > 0) target.append(dayBlock(daySlots, offset, maximum));
-  }
-  if (peak) {
-    const peakButton = target.querySelector(
-      `.contribution-cell[data-index="${visible.indexOf(peak)}"]`,
-    );
-    showSlotDetail(peak, peakButton);
+    if (daySlots.length > 0) {
+      target.append(dayBlock(daySlots, offset, maximum, visible, day));
+    }
   }
 }
+
+window.addEventListener("resize", () => {
+  if (!selectedSlotDetail) return;
+  window.requestAnimationFrame(() => {
+    updateRangeBackdrop(selectedSlotDetail.index);
+  });
+});
 
 function setListMessage(targetSelector, text, kind = "empty") {
   const target = document.querySelector(targetSelector);
@@ -508,8 +776,32 @@ function setStatus(kind, text) {
   const status = document.querySelector("#source-status");
   status.classList.remove("ok", "warning", "error");
   status.classList.add(kind);
-  status.innerHTML = `<span aria-hidden="true"></span>${escapeHtml(text)}`;
+  status.querySelector(".status-text").textContent = text;
+  status.setAttribute("aria-label", `${text}。查看数据状态`);
+  document.querySelector("#status-announcement").textContent = text;
 }
+
+const statusPopover = document.querySelector(".status-popover");
+const sourceStatus = document.querySelector("#source-status");
+
+function closeStatusTooltip() {
+  statusPopover?.classList.remove("open");
+  sourceStatus?.setAttribute("aria-expanded", "false");
+}
+
+sourceStatus?.addEventListener("click", () => {
+  const open = !statusPopover.classList.contains("open");
+  statusPopover.classList.toggle("open", open);
+  sourceStatus.setAttribute("aria-expanded", String(open));
+});
+sourceStatus?.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  closeStatusTooltip();
+  sourceStatus.focus();
+});
+document.addEventListener("click", (event) => {
+  if (!statusPopover?.contains(event.target)) closeStatusTooltip();
+});
 
 function renderForecast(forecast) {
   const slots = Array.isArray(forecast.data.slots) ? forecast.data.slots : [];
@@ -519,6 +811,9 @@ function renderForecast(forecast) {
     ? slots[0].rolling_4h_probability
     : null;
   const probability24h = slots.length >= 24 ? cumulative(slots.slice(0, 24)) : null;
+  const probability72h = slots.length >= 72
+    ? cumulativeToSlot(slots[71], slots, 71)
+    : null;
   const probability168h = Number.isFinite(forecast.data.no_reset_probability)
     ? 1 - forecast.data.no_reset_probability
     : slots.length >= 168
@@ -528,6 +823,9 @@ function renderForecast(forecast) {
     ? "窗口不足"
     : percent(probability4h, 2);
   document.querySelector("#probability-24h").textContent = percent(probability24h, 1);
+  document.querySelector("#probability-72h").textContent = probability72h === null
+    ? "窗口不足"
+    : percent(probability72h, 1);
   document.querySelector("#probability-7d").textContent = percent(probability168h, 1);
   document.querySelector("#data-quality-label").textContent =
     provisional ? "数据状态 · 试用模型" : "数据状态";
@@ -536,6 +834,8 @@ function renderForecast(forecast) {
     : intervalText(cumulativeInterval(forecast, "four_hours"));
   document.querySelector("#interval-24h").textContent =
     intervalText(cumulativeInterval(forecast, "twenty_four_hours"));
+  document.querySelector("#interval-72h").textContent =
+    "未来 72 小时内发生重置的可能性";
   document.querySelector("#interval-7d").textContent =
     intervalText(cumulativeInterval(forecast, "horizon"));
   document.querySelector("#data-quality").textContent =
@@ -577,6 +877,7 @@ function renderForecastError(message, readiness = {}) {
   for (const selector of [
     "#probability-4h",
     "#probability-24h",
+    "#probability-72h",
     "#probability-7d",
   ]) {
     document.querySelector(selector).textContent = preparing
@@ -586,6 +887,8 @@ function renderForecastError(message, readiness = {}) {
   document.querySelector("#interval-4h").textContent =
     preparing ? "首版试用预测生成后显示" : "当前预测不可用";
   document.querySelector("#interval-24h").textContent =
+    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
+  document.querySelector("#interval-72h").textContent =
     preparing ? "首版试用预测生成后显示" : "当前预测不可用";
   document.querySelector("#interval-7d").textContent =
     preparing ? "首版试用预测生成后显示" : "当前预测不可用";

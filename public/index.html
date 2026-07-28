@@ -42,7 +42,24 @@
         </div>
         <div class="heading-meta">
           <div class="timezone-display" id="timezone-display">时区 · —</div>
-          <div class="status-pill" id="source-status" role="status" aria-live="polite"><span aria-hidden="true"></span>正在加载预测</div>
+          <div class="status-popover">
+            <button
+              class="status-pill"
+              id="source-status"
+              type="button"
+              aria-describedby="data-quality-tooltip"
+              aria-expanded="false"
+            >
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="status-text">正在加载预测</span>
+            </button>
+            <div class="status-tooltip" id="data-quality-tooltip" role="tooltip">
+              <p id="data-quality-label">数据状态</p>
+              <strong id="data-quality">—</strong>
+              <small id="coverage">数据覆盖暂不可用</small>
+            </div>
+          </div>
+          <p class="sr-only" id="status-announcement" aria-live="polite"></p>
         </div>
       </section>
 
@@ -78,9 +95,9 @@
           <small id="interval-24h">大致范围（80%）：等待数据</small>
         </article>
         <article class="summary-card">
-          <p id="data-quality-label">数据状态</p>
-          <strong id="data-quality">—</strong>
-          <small id="coverage">数据覆盖暂不可用</small>
+          <p>未来 3 天</p>
+          <strong id="probability-72h">—</strong>
+          <small id="interval-72h">未来 72 小时内发生重置的可能性</small>
         </article>
       </section>
 
@@ -103,9 +120,14 @@
         <div class="heatmap-scroll">
           <div id="heatmap" class="heatmap" aria-live="polite"></div>
         </div>
-        <div class="heat-detail" id="heat-detail" aria-live="polite">
+        <div class="heat-tooltip" id="heat-tooltip" role="tooltip" hidden></div>
+        <div class="heat-detail" id="heat-detail" data-mode="empty" aria-live="polite">
           <strong>—</strong>
-          <div><span>该小时首次重置概率</span><time>请选择一个小时</time></div>
+          <div>
+            <time>悬停格子查看该小时，点击可固定累计区间</time>
+            <span>该小时发生首次重置的概率：—</span>
+            <span>从现在到该小时结束的累计重置概率：—</span>
+          </div>
         </div>
       </section>
 

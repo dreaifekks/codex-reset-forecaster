@@ -297,6 +297,7 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     evidenceResponse,
     pageResponse,
     appScriptResponse,
+    stylesResponse,
   ] = await Promise.all([
     fetch(`${base}/api/health`),
     fetch(`${base}/api/forecast/current`),
@@ -304,6 +305,7 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     fetch(`${base}/api/evidence/recent`),
     fetch(`${base}/`),
     fetch(`${base}/app.js`),
+    fetch(`${base}/styles.css`),
   ]);
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
@@ -315,6 +317,7 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.equal(health.provider_last_success_at, "2026-07-22T17:30:00.000Z");
   assert.equal(health.providers.x_search_gateway.upstream_provider, "hermes");
   assert.equal(forecastResponse.status, 200);
+  assert.equal(stylesResponse.status, 200);
   const servedForecast = await forecastResponse.json();
   assert.equal(servedForecast.data.slots.length, 168);
   assert.equal(servedForecast.serving.synthetic_demo, true);
@@ -329,13 +332,58 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.ok(evidence.items.every((item) => item.scope && "derivation" in item && "published_at" in item.source));
   const page = await pageResponse.text();
   const appScript = await appScriptResponse.text();
+  const styles = await stylesResponse.text();
   assert.match(page, /每小时重置概率/);
   assert.match(page, /未来 7 天重置概率/);
   assert.match(page, /未来 168 小时内发生重置的可能性/);
+  assert.match(page, /id="probability-72h"/);
+  assert.match(page, /id="data-quality-tooltip"/);
+  assert.match(page, /id="heat-tooltip"/);
+  assert.match(page, /id="heat-detail" data-mode="empty"/);
   assert.match(page, /<dialog class="signal-dialog"/);
   assert.match(page, /id="signal-dialog-source-link"/);
   assert.match(appScript, /aria-haspopup", "dialog"/);
   assert.match(appScript, /rel="noopener noreferrer"/);
+  assert.match(appScript, /reset_by_end_probability/);
+  assert.match(appScript, /clearSlotSelection/);
+  assert.match(appScript, /showHourlySlotDetail/);
+  assert.match(appScript, /showSelectedSlotDetail/);
+  assert.match(appScript, /restoreSlotDetail/);
+  assert.match(appScript, /let selectedSlotDetail = null/);
+  assert.match(
+    appScript,
+    /selectedSlotDetail = \{ slot, cumulativeProbability, index: selectedIndex \}/,
+  );
+  assert.match(appScript, /createRangeBackdrop/);
+  assert.match(appScript, /roundedPolygonPath/);
+  assert.match(appScript, /updateRangeBackdrop\(selectedIndex\)/);
+  assert.match(appScript, /const column = Math\.floor\(selectedIndex \/ 12\)/);
+  assert.match(appScript, /if \(column > 0 && row < 11\)/);
+  assert.match(
+    appScript,
+    /const notchX = previousBox\.right \+ padding/,
+  );
+  assert.match(appScript, /backdrop\.append\(path\)/);
+  assert.match(appScript, /detail\.dataset\.mode = "hourly"/);
+  assert.match(appScript, /detail\.dataset\.mode = "cumulative"/);
+  assert.match(appScript, /range-selected/);
+  assert.match(
+    appScript,
+    /levelForProbability\(slot\.first_reset_probability,\s*maximum\)/,
+  );
+  assert.match(appScript, /const relative = probability \/ maximum/);
+  assert.doesNotMatch(appScript, /Math\.sqrt\(probability \/ maximum\)/);
+  assert.match(appScript, /closest\("\.contribution-cell"\)/);
+  assert.match(appScript, /未来\$\{dayNames\[dayIndex\]\}天内重置概率/);
+  assert.doesNotMatch(appScript, /button\.title\s*=/);
+  assert.doesNotMatch(appScript, /textContent = `\$\{dateFormatter[^`]+起`/);
+  assert.match(styles, /\.heat-tooltip/);
+  assert.doesNotMatch(styles, /\.contribution-cell\.range-selected/);
+  assert.match(styles, /\.range-backdrop-path/);
+  assert.match(styles, /z-index: -1/);
+  assert.match(styles, /drop-shadow\(0 0 3px rgba\(255, 255, 255, 0\.3\)\)/);
+  assert.match(styles, /stroke-linejoin: round/);
+  assert.match(styles, /padding: 6px;/);
   assert.doesNotMatch(
     page,
     /未来 168 小时内的重置概率|未重置概率|与 OpenAI 无关联|时间与模型|指标含义/,
