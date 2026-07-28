@@ -271,6 +271,81 @@ export function assertCanonicalRecord(record) {
     data.observation_refs.forEach((ref, index) => recordReference(ref, `signal observation ref ${index}`));
     scope(data.claim?.scope, "signal scope");
     range(data.claim?.asserted_time_range, "asserted time", true);
+    if (data.claim?.impact !== undefined && data.claim.impact !== null) {
+      const impact = data.claim.impact;
+      invariant(
+        [
+          "availability",
+          "performance",
+          "correctness",
+          "tool_execution",
+          "session_state",
+          "quota_accounting",
+          "auth",
+          "client_ux",
+          "other",
+        ].includes(impact.category) &&
+          ["critical", "high", "medium", "low", "unknown"].includes(
+            impact.severity,
+          ) &&
+          ["active", "investigating", "mitigating", "resolved", "unknown"].includes(
+            impact.lifecycle,
+          ) &&
+          ["individual", "multiple_users", "platform", "unknown"].includes(
+            impact.affected_scope,
+          ) &&
+          Array.isArray(impact.affected_surfaces) &&
+          impact.affected_surfaces.length > 0 &&
+          new Set(impact.affected_surfaces).size === impact.affected_surfaces.length &&
+          impact.affected_surfaces.every((surface) =>
+            [
+              "cli",
+              "ide",
+              "api",
+              "web",
+              "agent_loop",
+              "tool_use",
+              "mcp",
+              "auth",
+              "fast_mode",
+              "unknown",
+            ].includes(surface)
+          ) &&
+          ["none", "partial", "available", "unknown"].includes(impact.workaround) &&
+          [
+            "first_party_report",
+            "independent_corroboration",
+            "official_incident",
+            "reproduction",
+            "unknown",
+          ].includes(impact.evidence_basis),
+        "signal impact classification invalid",
+      );
+    }
+    if (
+      data.claim?.competitive_context !== undefined &&
+      data.claim.competitive_context !== null
+    ) {
+      const context = data.claim.competitive_context;
+      invariant(
+        [
+          "model_release",
+          "coding_agent_release",
+          "capability_release",
+          "limit_change",
+          "pricing_change",
+        ].includes(context.kind) &&
+          ["direct", "adjacent", "weak", "unknown"].includes(context.relevance) &&
+          [
+            "announced",
+            "preview",
+            "general_availability",
+            "rolled_out",
+            "rumor",
+          ].includes(context.stage),
+        "signal competitive context invalid",
+      );
+    }
     probability(data.extraction?.confidence, "extraction confidence");
     invariant(
       /^sha256:[a-f0-9]{64}$/.test(data.extraction?.semantic_policy_hash ?? ""),

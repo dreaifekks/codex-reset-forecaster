@@ -70,6 +70,15 @@ function validateModelCalibrator(config) {
   }
 }
 
+function validateModelFeatureTransform(config) {
+  const clip = config.model?.standardized_feature_clip;
+  if (!Number.isFinite(clip) || clip <= 0) {
+    throw new TypeError(
+      "model.standardized_feature_clip must be a positive finite number",
+    );
+  }
+}
+
 function validateProvisionalBootstrap(config) {
   const bootstrap = config.runtime?.provisional_bootstrap;
   if (
@@ -88,11 +97,53 @@ function validateOutcomeCoverageProviders(config) {
   if (
     !Array.isArray(providers) ||
     providers.some((provider) =>
-      String(provider).startsWith("x_search_gateway_")
+      String(provider).startsWith("x_search_gateway_") ||
+      String(provider) === "rsshub_x_timeline"
     )
   ) {
     throw new TypeError(
-      "model.outcome_coverage_providers cannot use X Search Gateway providers because search results are not exhaustive coverage",
+      "model.outcome_coverage_providers cannot use discovery-only gateway or RSSHub timeline providers because finite feeds are not exhaustive coverage",
+    );
+  }
+}
+
+function validateSchedulerInterval(config) {
+  const minutes = config.runtime?.scheduler_interval_minutes;
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) {
+    throw new TypeError(
+      "runtime.scheduler_interval_minutes must be an integer from 1 through 60",
+    );
+  }
+}
+
+function validateRsshubXProvider(config) {
+  const provider = config.providers?.rsshub_x_timeline;
+  const capabilities = new Set(provider?.capabilities ?? []);
+  if (
+    !provider ||
+    provider.provider_name !== "rsshub_x_timeline" ||
+    !capabilities.has("exact_evidence") ||
+    capabilities.has("outcome_coverage") ||
+    provider.include_replies !== true ||
+    !Number.isInteger(provider.count) ||
+    provider.count < 1 ||
+    provider.count > 100 ||
+    !Number.isInteger(provider.minimum_items) ||
+    provider.minimum_items < 1 ||
+    !Number.isFinite(provider.freshness_max_age_hours) ||
+    provider.freshness_max_age_hours <= 0 ||
+    !Number.isInteger(provider.max_response_bytes) ||
+    provider.max_response_bytes < 1 ||
+    !Number.isFinite(provider.request_timeout_ms) ||
+    provider.request_timeout_ms <= 0 ||
+    !Number.isFinite(provider.refresh_interval_minutes) ||
+    provider.refresh_interval_minutes <= 0 ||
+    !Array.isArray(provider.confirmation_identities) ||
+    provider.confirmation_identities.length < 1 ||
+    !Array.isArray(provider.context_identities)
+  ) {
+    throw new TypeError(
+      "providers.rsshub_x_timeline must use its fixed exact-evidence, non-coverage contract",
     );
   }
 }
@@ -157,6 +208,12 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
     config.providers.x_search_gateway.upstream_provider;
   config.providers.x_search_gateway.token_file = process.env.X_SEARCH_GATEWAY_TOKEN_FILE ??
     config.providers.x_search_gateway.token_file;
+  if (process.env.RSSHUB_X_ENABLED !== undefined) {
+    config.providers.rsshub_x_timeline.enabled =
+      process.env.RSSHUB_X_ENABLED === "true";
+  }
+  config.providers.rsshub_x_timeline.base_url = process.env.RSSHUB_BASE_URL ??
+    config.providers.rsshub_x_timeline.base_url;
   config.providers.x.token_file = process.env.X_BEARER_TOKEN_FILE ??
     config.providers.x.token_file;
   if (process.env.HISTORICAL_MONITOR_ENABLED !== undefined) {
@@ -173,9 +230,12 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateXOutcomeExhaustivenessContract(config);
   validateHistoricalMonitorCoverage(config);
   validateModelCalibrator(config);
+  validateModelFeatureTransform(config);
   validateProvisionalBootstrap(config);
   validateOutcomeCoverageProviders(config);
   validateAuthorityTiming(config);
+  validateSchedulerInterval(config);
+  validateRsshubXProvider(config);
   config.config_hash = semanticConfigHash(config);
   return config;
 }

@@ -1,8 +1,10 @@
 import { recordRef } from "../core/records.mjs";
 import { clamp } from "../core/time.mjs";
-import { extractorContract } from "../core/extractor-contract.mjs";
+import {
+  extractorContract,
+  matchesExtractorContract,
+} from "../core/extractor-contract.mjs";
 import { confirmationIdentityIds } from "../core/sources.mjs";
-import { scopeIncludesProduct } from "../core/product-scope.mjs";
 import {
   buildOutcomeEligibilityContext,
   isEligibleConfirmedOutcome,
@@ -15,7 +17,11 @@ import {
   latestSignalsAsOf,
   outcomeAvailableAt,
 } from "./as-of.mjs";
-import { matchesExpectedExtractor } from "./features.mjs";
+import { isResetTimingSignalActiveAt } from "./signal-lifecycle.mjs";
+import {
+  isAuthorityTimingCandidateSignal,
+  isAuthorityTimingSupportSignal,
+} from "./authority-timing-eligibility.mjs";
 
 const EPSILON = 1e-12;
 
@@ -26,18 +32,6 @@ export const AUTHORITY_TIMING_RELIABILITY_BASIS =
 
 function exactRefKey(reference) {
   return `${reference.record_id}@${reference.revision}`;
-}
-
-function sourceTime(signal) {
-  return signal.data.provenance.source_published_at ??
-    signal.data.available_at;
-}
-
-function sameTargetProduct(signal, target) {
-  const scope = signal.data.claim.scope;
-  return scope.vendor === target.vendor &&
-    scope.population === target.population &&
-    scopeIncludesProduct(scope, target.product);
 }
 
 function visibleEvidence({
@@ -57,7 +51,7 @@ function visibleEvidence({
   const visibleSignals = selectCurrentSignals(
     latestSignalsAsOf(signals, cutoff, asOfMode)
       .filter((signal) =>
-        matchesExpectedExtractor(signal, extractorContract(config))
+        matchesExtractorContract(signal, extractorContract(config))
       ),
   );
   const outcomeContext = buildOutcomeEligibilityContext({
@@ -111,19 +105,6 @@ export function latestRecurrenceAnchorAsOf({
     : null;
 }
 
-function isConsumedByOutcome(signal, outcomes) {
-  const asserted = signal.data.claim.asserted_time_range;
-  if (!asserted) return false;
-  return outcomes.some((outcome) =>
-    Date.parse(outcome.data.occurred_time_range.start) <
-      Date.parse(asserted.end) &&
-    Date.parse(outcome.data.occurred_time_range.end) >
-      Date.parse(asserted.start) &&
-    Date.parse(outcome.data.occurred_time_range.end) >
-      Date.parse(sourceTime(signal))
-  );
-}
-
 function authorityTimingCandidates({
   visible,
   config,
@@ -140,36 +121,18 @@ function authorityTimingCandidates({
     ]),
   );
   const authoritySignals = visible.signals.filter((signal) => {
-    const claim = signal.data.claim;
-    const provenance = signal.data.provenance;
     const observation = observationsByRef.get(
       exactRefKey(signal.data.observation_refs[0] ?? {}),
     );
-    const durationHours = claim.asserted_time_range
-      ? (
-          Date.parse(claim.asserted_time_range.end) -
-          Date.parse(claim.asserted_time_range.start)
-        ) / 3_600_000
-      : Infinity;
-    return identities.has(provenance.source_identity_id) &&
-      policy.eligible_source_roles.includes(provenance.source_role) &&
-      provenance.derivation === "primary_statement" &&
-      provenance.feature_eligible !== false &&
-      provenance.selection_bias === null &&
-      observation?.data.content.media_type === "text/plain" &&
-      !excludedSourceRecordIds.has(observation.record_id) &&
-      !excludedIndependenceGroupIds.has(
-        provenance.independence_group_id,
-      ) &&
-      ["quota_reset", "quota_refill"].includes(claim.event_type) &&
-      sameTargetProduct(signal, config.target) &&
-      (
-        claim.asserted_time_range === null ||
-        (
-          durationHours > 0 &&
-          durationHours <= policy.maximum_asserted_duration_hours
-        )
-      );
+    return isAuthorityTimingCandidateSignal({
+      signal,
+      observation,
+      policy,
+      confirmationIdentityIds: identities,
+      targetScope: config.target,
+      excludedSourceRecordIds,
+      excludedIndependenceGroupIds,
+    });
   });
   const latestContradictionAt = authoritySignals
     .filter((signal) => signal.data.claim.stance === "contradicts")
@@ -178,14 +141,23 @@ function authorityTimingCandidates({
     .at(-1) ?? -Infinity;
   return authoritySignals
     .filter((signal) => {
-      const claim = signal.data.claim;
-      return claim.stance === "supports" &&
-        Object.hasOwn(policy.phase_reliability, claim.phase) &&
-        claim.asserted_time_range &&
-        Date.parse(claim.asserted_time_range.end) >
-          Date.parse(horizonStart) &&
+      const observation = observationsByRef.get(
+        exactRefKey(signal.data.observation_refs[0] ?? {}),
+      );
+      return isAuthorityTimingSupportSignal({
+        signal,
+        observation,
+        policy,
+        confirmationIdentityIds: identities,
+        targetScope: config.target,
+        excludedSourceRecordIds,
+        excludedIndependenceGroupIds,
+      }) &&
         Date.parse(signal.data.available_at) > latestContradictionAt &&
-        !isConsumedByOutcome(signal, visible.outcomes);
+        isResetTimingSignalActiveAt(signal, {
+          outcomes: visible.outcomes,
+          targetTime: horizonStart,
+        });
     })
     .sort((left, right) =>
       right.data.available_at.localeCompare(left.data.available_at) ||

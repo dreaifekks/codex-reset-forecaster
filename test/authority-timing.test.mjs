@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/core/config.mjs";
+import { extractorContract } from "../src/core/extractor-contract.mjs";
+import { confirmationIdentityIds } from "../src/core/sources.mjs";
 import {
   extractSignal,
   normalizeNewObservations,
@@ -16,8 +18,17 @@ import {
   conditionAuthorityTimingHazards,
   latestRecurrenceAnchorAsOf,
 } from "../src/model/authority-timing.mjs";
+import {
+  FEATURE_NAMES,
+  featureVectorAt,
+  featuresToArray,
+} from "../src/model/features.mjs";
 import { deriveProbabilitySlots } from "../src/model/forecast.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
+import {
+  isResetTimingSignalActiveAt,
+  isResetTimingSignalConsumed,
+} from "../src/model/signal-lifecycle.mjs";
 
 function observation(config, {
   id,
@@ -122,6 +133,111 @@ test("exact Tibo timing contracts first-event mass into the asserted interval", 
   );
 });
 
+test("real Tibo mode aliases activate a three-hour scheduled authority window", async () => {
+  const config = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+  });
+  const source = observation(config, {
+    id: "2081899343091843463",
+    text:
+      "We’re celebrating the fast adoption of chatGPT Work and all the incredible effort that went into it today. " +
+      "I’m feeling like a limit reset.\n\nHold on tight to your ultra and /fast and see you in a few hours when I’m back at the laptop!",
+    publishedAt: "2026-07-28T00:27:37.869Z",
+    fetchedAt: "2026-07-28T00:28:00Z",
+  });
+  const signal = extractSignal(source, config);
+  assert.equal(signal.data.claim.phase, "scheduled");
+  assert.equal(signal.data.claim.scope.product, "multi_product");
+  assert.deepEqual(
+    signal.data.claim.scope.products,
+    ["chatgpt_work", "codex"],
+  );
+  assert.equal(signal.data.claim.scope.population, "platform");
+  assert.equal(
+    signal.data.claim.asserted_time_range.end,
+    "2026-07-28T03:27:37.869Z",
+  );
+
+  const baseEntries = hazards("2026-07-28T01:00:00Z", 6);
+  const vector = featureVectorAt({
+    targetTime: "2026-07-28T01:00:00Z",
+    knowledgeCutoff: "2026-07-28T00:28:00Z",
+    signals: [signal],
+    outcomes: [],
+    observations: [source],
+    confirmationIdentityIds: confirmationIdentityIds(config),
+    expectedExtractor: extractorContract(config),
+    targetScope: config.target,
+    authorityTimingPolicy: config.model.authority_timing,
+  });
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: baseEntries,
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-07-28T00:28:00Z",
+  });
+  const base = deriveProbabilitySlots(baseEntries);
+  const result = deriveProbabilitySlots(conditioned.hazardEntries);
+
+  assert.equal(conditioned.metadata.applied, true);
+  assert.equal(conditioned.metadata.phase, "scheduled");
+  assert.equal(conditioned.metadata.signal_ref.record_id, signal.record_id);
+  assert.ok(vector.features.official_reset_intent_decay > 0);
+  assert.equal(vector.features.asserted_time_overlap, 0);
+  assert.equal(FEATURE_NAMES.includes("official_reset_intent_decay"), false);
+  assert.equal(featuresToArray(vector).length, FEATURE_NAMES.length);
+  assert.equal(
+    isResetTimingSignalActiveAt(signal, {
+      targetTime: new Date("2026-07-28T03:27:37.869Z"),
+    }),
+    false,
+  );
+  assert.equal(
+    isResetTimingSignalActiveAt(signal, {
+      targetTime: new Date("2026-07-28T03:27:37.868Z"),
+    }),
+    true,
+  );
+  const millisecondOutcome = {
+    data: {
+      status: "confirmed",
+      event_type: "quota_reset",
+      scope: structuredClone(signal.data.claim.scope),
+      occurred_time_range: {
+        start: "2026-07-28T03:09:23.000Z",
+        end: "2026-07-28T03:09:23.666Z",
+      },
+    },
+  };
+  assert.equal(
+    isResetTimingSignalConsumed(
+      signal,
+      [millisecondOutcome],
+      new Date("2026-07-28T03:09:23.665Z"),
+    ),
+    false,
+  );
+  assert.equal(
+    isResetTimingSignalConsumed(
+      signal,
+      [millisecondOutcome],
+      new Date("2026-07-28T03:09:23.666Z"),
+    ),
+    true,
+  );
+  assert.ok(1 - result.noResetProbability > 0.8);
+  assert.ok(
+    result.slots[0].first_reset_probability >
+      base.slots[0].first_reset_probability,
+  );
+  assert.ok(
+    result.slots[3].first_reset_probability <
+      base.slots[3].first_reset_probability,
+  );
+});
+
 test("summaries never trigger strong authority timing conditioning", async () => {
   const config = await loadConfig();
   const source = observation(config, {
@@ -173,6 +289,32 @@ test("a newer exact denial cancels an older active authority window", async () =
     knowledgeCutoff: "2026-07-21T16:50:00Z",
   });
   assert.equal(conditioned.metadata.applied, false);
+});
+
+test("asserted reset intent expires when its timing window ends", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "20796091579348869781",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:20:00Z",
+    fetchedAt: "2026-07-21T16:21:00Z",
+  });
+  const signal = extractSignal(source, config);
+  const vector = featureVectorAt({
+    targetTime: "2026-07-21T19:00:00Z",
+    knowledgeCutoff: "2026-07-21T16:30:00Z",
+    signals: [signal],
+    outcomes: [],
+    observations: [source],
+    confirmationIdentityIds: confirmationIdentityIds(config),
+    expectedExtractor: extractorContract(config),
+    targetScope: config.target,
+    authorityTimingPolicy: config.model.authority_timing,
+  });
+
+  assert.equal(vector.features.official_reset_intent_decay, 0);
+  assert.equal(vector.features.asserted_time_overlap, 0);
 });
 
 test("a confirmed reset consumes its announcement and anchors the next cycle", async (t) => {
@@ -230,11 +372,165 @@ test("a confirmed reset consumes its announcement and anchors the next cycle", a
     config,
     knowledgeCutoff: cutoff,
   });
+  const vector = featureVectorAt({
+    targetTime: "2026-07-21T18:00:00Z",
+    knowledgeCutoff: cutoff,
+    signals,
+    outcomes,
+    observations,
+    confirmationIdentityIds: confirmationIdentityIds(config),
+    expectedExtractor: extractorContract(config),
+    targetScope: config.target,
+    authorityTimingPolicy: config.model.authority_timing,
+    outcomeCoverageProviders: new Set(
+      config.model.outcome_coverage_providers,
+    ),
+  });
 
   assert.equal(conditioned.metadata.applied, false);
+  assert.equal(vector.features.official_reset_intent_decay, 0);
+  assert.equal(vector.features.asserted_time_overlap, 0);
   assert.ok(anchor);
   assert.equal(
     anchor.occurred_time_range.start,
     "2026-07-21T17:00:00.000Z",
   );
+});
+
+test("disabled authority conditioning leaves exact timing evidence in the baseline feature", async () => {
+  const config = await loadConfig({
+    overrides: {
+      model: {
+        authority_timing: {
+          enabled: false,
+        },
+      },
+    },
+  });
+  const source = observation(config, {
+    id: "2079609157934886981",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:20:00Z",
+    fetchedAt: "2026-07-21T16:21:00Z",
+  });
+  const signal = extractSignal(source, config);
+  const vector = featureVectorAt({
+    targetTime: "2026-07-21T17:00:00Z",
+    knowledgeCutoff: "2026-07-21T16:30:00Z",
+    signals: [signal],
+    outcomes: [],
+    observations: [source],
+    confirmationIdentityIds: confirmationIdentityIds(config),
+    expectedExtractor: extractorContract(config),
+    targetScope: config.target,
+    authorityTimingPolicy: config.model.authority_timing,
+  });
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: hazards("2026-07-21T17:00:00Z", 4),
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-07-21T16:30:00Z",
+  });
+
+  assert.equal(conditioned.metadata.applied, false);
+  assert.equal(vector.features.asserted_time_overlap, 1);
+});
+
+test("account-scoped timing evidence cannot affect a platform target", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "2079609157934886982",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:20:00Z",
+    fetchedAt: "2026-07-21T16:21:00Z",
+  });
+  const signal = extractSignal(source, config);
+  signal.data.claim.scope.population = "account";
+  const vector = featureVectorAt({
+    targetTime: "2026-07-21T17:00:00Z",
+    knowledgeCutoff: "2026-07-21T16:30:00Z",
+    signals: [signal],
+    outcomes: [],
+    observations: [source],
+    confirmationIdentityIds: confirmationIdentityIds(config),
+    expectedExtractor: extractorContract(config),
+    targetScope: config.target,
+    authorityTimingPolicy: config.model.authority_timing,
+  });
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: hazards("2026-07-21T17:00:00Z", 4),
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-07-21T16:30:00Z",
+  });
+
+  assert.equal(conditioned.metadata.applied, false);
+  assert.equal(vector.features.official_reset_intent_decay, 0);
+  assert.equal(vector.features.asserted_time_overlap, 0);
+});
+
+test("overlay-ineligible role and duration preserve ordinary baseline overlap", async () => {
+  const cases = [
+    {
+      config: await loadConfig({
+        overrides: {
+          model: {
+            authority_timing: {
+              eligible_source_roles: ["official"],
+            },
+          },
+        },
+      }),
+      mutate(signal) {
+        return signal;
+      },
+    },
+    {
+      config: await loadConfig(),
+      mutate(signal) {
+        signal.data.claim.asserted_time_range.end =
+          "2026-07-24T16:20:00.000Z";
+        return signal;
+      },
+    },
+  ];
+
+  for (const [index, entry] of cases.entries()) {
+    const source = observation(entry.config, {
+      id: `207960915793488699${index}`,
+      text:
+        "We will reset Codex usage limits for all paid users in the next 2 hours.",
+      publishedAt: "2026-07-21T16:20:00Z",
+      fetchedAt: "2026-07-21T16:21:00Z",
+    });
+    const signal = entry.mutate(extractSignal(source, entry.config));
+    const vector = featureVectorAt({
+      targetTime: "2026-07-21T17:00:00Z",
+      knowledgeCutoff: "2026-07-21T16:30:00Z",
+      signals: [signal],
+      outcomes: [],
+      observations: [source],
+      confirmationIdentityIds: confirmationIdentityIds(entry.config),
+      expectedExtractor: extractorContract(entry.config),
+      targetScope: entry.config.target,
+      authorityTimingPolicy: entry.config.model.authority_timing,
+    });
+    const conditioned = conditionAuthorityTimingHazards({
+      hazardEntries: hazards("2026-07-21T17:00:00Z", 4),
+      signals: [signal],
+      observations: [source],
+      outcomes: [],
+      config: entry.config,
+      knowledgeCutoff: "2026-07-21T16:30:00Z",
+    });
+
+    assert.equal(conditioned.metadata.applied, false);
+    assert.equal(vector.features.asserted_time_overlap, 1);
+  }
 });

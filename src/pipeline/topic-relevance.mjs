@@ -1,9 +1,9 @@
-export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/2";
+export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/3";
 
 const TARGET_PRODUCT_TERMS = /\b(?:codex(?:er|ers)?|chatgpt\s+work)\b/i;
 const ECOSYSTEM_PRODUCT_TERMS =
-  /\b(?:anthropic|claude(?:\s+code)?|gemini|google\s+ai|xai|grok)\b/i;
-const NAMED_PRODUCT_PATTERN = String.raw`(?:codex(?:er|ers)?|chatgpt\s+work|anthropic|claude(?:\s+code)?|gemini|google\s+ai|xai|grok)`;
+  /\b(?:anthropic|claude(?:\s+code)?|gemini|google\s+ai|xai|grok|deepseek|mistral)\b/i;
+const NAMED_PRODUCT_PATTERN = String.raw`(?:codex(?:er|ers)?|chatgpt\s+work|anthropic|claude(?:\s+code)?|gemini|google\s+ai|xai|grok|deepseek|mistral)`;
 const QUOTA_TERMS = new RegExp([
   String.raw`\busage(?:\s+limits?)?\b`,
   String.raw`\brate[_\s-]?limits?\b`,
@@ -27,8 +27,55 @@ const NAMED_RELEASE_ACTION = new RegExp([
 ].join("|"), "i");
 const CREATION_WORKFLOW_LAUNCH =
   /\b(?:idea|startup|business|website|app|product)\b[^.!?\n]{0,32}\bto\s+launch\b/i;
+const NON_RELEASE_LAUNCH_CONTEXT = new RegExp([
+  String.raw`\b(?:on|at|during|after|before)\s+(?:app\s+|client\s+)?launch\b`,
+  String.raw`\b(?:fail(?:s|ed|ing)?|unable|can(?:not|['’]t))\s+to\s+launch\b`,
+].join("|"), "i");
 const DEVELOPMENT_ACTION =
   /\b(?:commit(?:ted)?|merg(?:e|ed|ing)|deploy(?:ed|ing)?|ship(?:ped|ping)?|development|build(?:ing|s|t)?)\b/i;
+const EXPERIENCE_ISSUE_TERMS = new RegExp([
+  String.raw`\bbugs?\b`,
+  String.raw`\bbroken\b`,
+  String.raw`\bcrash(?:es|ed|ing)?\b`,
+  String.raw`\bfail(?:s|ed|ing|ure)?\b`,
+  String.raw`\berrors?\b`,
+  String.raw`\bstuck\b`,
+  String.raw`\bhang(?:s|ing)?\b`,
+  String.raw`\bfreez(?:e|es|ing)\b`,
+  String.raw`\bunusable\b`,
+  String.raw`\bnot\s+work(?:ing)?\b`,
+  String.raw`\bdoesn['’]?t\s+work\b`,
+  String.raw`\bregress(?:ed|ion)?\b`,
+  String.raw`\btimeouts?\b`,
+  String.raw`\b(?:slow|slower|latency|laggy)\b`,
+  String.raw`\busage\b[^.!?\n]{0,16}\bdrain(?:s|ed|ing)?\b`,
+  String.raw`\b(?:mcp|tool(?:\s+call|\s+use|\s+execution)?|login|auth(?:entication)?|session)\b[^.!?\n]{0,48}\b(?:broken|fail(?:s|ed|ing)?|error|stuck|hang(?:s|ing)?|timeout|unavailable)\b`,
+  String.raw`\b(?:lost|losing|corrupt(?:ed|ion)?)\b[^.!?\n]{0,36}\b(?:session|work|changes|context|state)\b`,
+].join("|"), "i");
+const OBSERVED_EXPERIENCE_STATE = new RegExp([
+  String.raw`\bbroken\b`,
+  String.raw`\bcrash(?:es|ed|ing)?\b`,
+  String.raw`\bfail(?:s|ed|ing|ure)?\b`,
+  String.raw`\berrors?\b`,
+  String.raw`\bstuck\b`,
+  String.raw`\bhang(?:s|ing)?\b`,
+  String.raw`\bfreez(?:e|es|ing)\b`,
+  String.raw`\bunusable\b`,
+  String.raw`\bnot\s+work(?:ing)?\b`,
+  String.raw`\bdoesn['’]?t\s+work\b`,
+  String.raw`\bregress(?:ed|ion)?\b`,
+  String.raw`\btimeouts?\b`,
+  String.raw`\b(?:slow|slower|latency|laggy)\b`,
+  String.raw`\busage\b[^.!?\n]{0,16}\bdrain(?:s|ed|ing)?\b`,
+  String.raw`\b(?:lost|losing|corrupt(?:ed|ion)?)\b`,
+].join("|"), "i");
+const EXPERIENCE_RECOVERY_TERMS = new RegExp([
+  String.raw`\bfix(?:ed|ing)?\b`,
+  String.raw`\bresolved\b`,
+  String.raw`\bworking\s+again\b`,
+  String.raw`\bback\s+(?:online|to\s+normal|up)\b`,
+  String.raw`\brecover(?:ed|ing|y)\b`,
+].join("|"), "i");
 const STRONG_INCIDENT_TERMS = new RegExp([
   String.raw`\bincidents?\b`,
   String.raw`\boutages?\b`,
@@ -53,6 +100,12 @@ const ERROR_SIGNATURE = new RegExp([
   String.raw`\brate[_\s-]?limit\s+(?:error|exception|response)\b`,
   String.raw`\b(?:monthly\s+cap|current\s+quota|quota|allowance)\s+(?:was\s+|is\s+)?exceeded\b`,
   String.raw`\bexceeded\s+(?:my|your|the|current)\s+(?:quota|allowance|limit)\b`,
+].join("|"), "i");
+const QUOTA_ANOMALY = new RegExp([
+  String.raw`\b(?:reset|refill)(?:s|ting|ted)?\b[^.!?\n]{0,72}\b(?:still|yet|immediately|instantly)\b[^.!?\n]{0,72}\b(?:429|quota|limit|exhausted)\b`,
+  String.raw`\b(?:429|quota|limit|exhausted)\b[^.!?\n]{0,72}\b(?:after|despite)\b[^.!?\n]{0,36}\b(?:reset|refill)\b`,
+  String.raw`\b(?:usage|quota|allowance)\b[^.!?\n]{0,48}\b(?:vanish(?:es|ed|ing)?|wrong|incorrect|miscount(?:ed|ing)?)\b`,
+  String.raw`\b(?:vanish(?:es|ed|ing)?|wrong|incorrect|miscount(?:ed|ing)?)\b[^.!?\n]{0,48}\b(?:usage|quota|allowance)\b`,
 ].join("|"), "i");
 const PLATFORM_SCOPE_TERMS =
   /\b(?:all users|all paid users|all plans|platform[-\s]?wide|service[-\s]?wide|globally|widespread|across the (?:service|platform))\b/i;
@@ -84,12 +137,20 @@ function hasOperationalAction(segment) {
     LIMIT_POLICY_ACTION.test(segment) ||
     RELEASE_ACTION.test(segment) ||
     DEVELOPMENT_ACTION.test(segment) ||
+    EXPERIENCE_ISSUE_TERMS.test(segment) ||
+    EXPERIENCE_RECOVERY_TERMS.test(segment) ||
     STRONG_INCIDENT_TERMS.test(segment) ||
     CAPACITY_OPERATION.test(segment);
 }
 
 function requestOrHypothetical(segment) {
   if (!hasOperationalAction(segment)) return false;
+  if (
+    TARGET_PRODUCT_TERMS.test(segment) &&
+    OBSERVED_EXPERIENCE_STATE.test(segment)
+  ) {
+    return false;
+  }
   return [
     /\bplease\b[^.!?]{0,100}\b(?:reset|refill|increase|raise|lift|release|launch)\b/i,
     /\b(?:reset|refill|increase|raise|lift|release|launch)\b[^.!?]{0,60}\bplease\b/i,
@@ -100,6 +161,9 @@ function requestOrHypothetical(segment) {
     /\b(?:openai|anthropic|google|xai)\s+should\b[^.!?]{0,80}\b(?:reset|refill|increase|raise|lift|release|launch)\b/i,
     /\bwould\s+be\s+nice\s+if\b[^.!?]{0,100}\b(?:reset|refill|increase|raise|lift|release|launch)\b/i,
     /\b(?:reset|refill)\b[^.!?]{0,60}\bfor\s+(?:me|us)\b/i,
+    /\bplease\b[^.!?]{0,80}\b(?:fix|repair)\b[^.!?]{0,80}\b(?:codex|chatgpt\s+work)\b/i,
+    /\b(?:can|could|would|will)\s+you\b[^.!?]{0,80}\b(?:fix|repair)\b/i,
+    /\bfeature\s+request\b/i,
   ].some((pattern) => pattern.test(segment));
 }
 
@@ -111,7 +175,9 @@ function explicitPlatformOperation(segment) {
 }
 
 function individualQuotaError(segment) {
-  return ERROR_SIGNATURE.test(segment) && !explicitPlatformOperation(segment);
+  return ERROR_SIGNATURE.test(segment) &&
+    !explicitPlatformOperation(segment) &&
+    !(TARGET_PRODUCT_TERMS.test(segment) && QUOTA_ANOMALY.test(segment));
 }
 
 function operationalMatch(segment) {
@@ -124,22 +190,32 @@ function operationalMatch(segment) {
   const limitPolicy = QUOTA_TERMS.test(segment) && LIMIT_POLICY_ACTION.test(segment);
   const targetIncident = targetProduct &&
     (STRONG_INCIDENT_TERMS.test(segment) || CAPACITY_OPERATION.test(segment));
+  const targetExperience = targetProduct &&
+    (
+      EXPERIENCE_ISSUE_TERMS.test(segment) ||
+      EXPERIENCE_RECOVERY_TERMS.test(segment) ||
+      QUOTA_ANOMALY.test(segment)
+    );
   const release = NAMED_RELEASE_ACTION.test(segment) &&
-    !CREATION_WORKFLOW_LAUNCH.test(segment);
-  const targetDevelopment = targetProduct && DEVELOPMENT_ACTION.test(segment);
+    !CREATION_WORKFLOW_LAUNCH.test(segment) &&
+    !NON_RELEASE_LAUNCH_CONTEXT.test(segment);
   if (
     !quotaReset &&
     !limitPolicy &&
     !targetIncident &&
-    !release &&
-    !targetDevelopment
+    !targetExperience &&
+    !release
   ) return null;
 
   return {
     segment,
-    reasonCode: targetProduct
-      ? "target_operational_claim"
-      : "ecosystem_operational_claim",
+    reasonCode: targetExperience
+      ? "target_experience_issue"
+      : ecosystemProduct && release
+        ? "competitive_model_release"
+        : targetProduct
+          ? "target_operational_claim"
+          : "ecosystem_operational_claim",
   };
 }
 
@@ -225,11 +301,6 @@ export function assessTopicRelevance({
   hasUnresolvedContext = false,
 } = {}) {
   const segments = splitSegments(text);
-  const selfTerminalReason = terminalReason(segments);
-  if (selfTerminalReason) {
-    return result("irrelevant", selfTerminalReason, "self");
-  }
-
   const selfMatches = operationalMatches(segments);
   if (selfMatches.length > 0) {
     return result(
@@ -238,6 +309,10 @@ export function assessTopicRelevance({
       "self",
       selfMatches.map((match) => match.segment),
     );
+  }
+  const selfTerminalReason = terminalReason(segments);
+  if (selfTerminalReason) {
+    return result("irrelevant", selfTerminalReason, "self");
   }
 
   if (

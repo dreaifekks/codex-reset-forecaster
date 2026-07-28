@@ -7,6 +7,7 @@ import {
 } from "../pipeline/coverage.mjs";
 import { FEATURE_NAMES, featureVectorAt, featuresToArray } from "./features.mjs";
 import {
+  COEFFICIENT_PRIOR_POLICY_VERSION,
   assertModelCompatibility,
   predictHazard,
   trainLogisticHazard,
@@ -283,11 +284,30 @@ function compatibleFeatureContract(model, config) {
 }
 
 function trainingOptionsFromArtifact(model, config) {
-  const configuredPriors = model.training_hyperparameters?.coefficient_priors ??
-    Object.fromEntries(FEATURE_NAMES.map((name, index) => [
+  let configuredPriors =
+    model.training_hyperparameters?.coefficient_priors;
+  if (!configuredPriors && Array.isArray(model.raw_coefficient_priors)) {
+    configuredPriors = Object.fromEntries(
+      FEATURE_NAMES.map((name, index) => [
+        name,
+        Number(model.raw_coefficient_priors[index + 1] ?? 0),
+      ]),
+    );
+  }
+  if (
+    !configuredPriors &&
+    model.coefficient_prior_policy === COEFFICIENT_PRIOR_POLICY_VERSION
+  ) {
+    throw new Error(
+      "Current coefficient prior policy requires raw-feature priors",
+    );
+  }
+  configuredPriors ??= Object.fromEntries(
+    FEATURE_NAMES.map((name, index) => [
       name,
       Number(model.coefficient_priors?.[index + 1] ?? 0),
-    ]));
+    ]),
+  );
   return {
     lambda: Number(model.training_hyperparameters?.lambda ?? model.lambda),
     initialStep: Number(
@@ -303,6 +323,11 @@ function trainingOptionsFromArtifact(model, config) {
     ),
     hessianStep: Number(
       model.training_hyperparameters?.hessian_step ?? config.model.hessian_step,
+    ),
+    standardizedFeatureClip: Number(
+      model.training_hyperparameters?.standardized_feature_clip ??
+      model.feature_transform?.standardized_feature_clip ??
+      config.model.standardized_feature_clip,
     ),
     maxIterations: Number(
       model.training_hyperparameters?.max_iterations ?? config.model.max_iterations,
@@ -911,6 +936,7 @@ export async function evaluateWalkForward(store, config, {
         gradientTolerance: config.model.gradient_tolerance,
         objectiveTolerance: config.model.objective_tolerance,
         hessianStep: config.model.hessian_step,
+        standardizedFeatureClip: config.model.standardized_feature_clip,
         maxIterations: config.model.max_iterations,
         coefficientPriors: config.model.coefficient_priors,
       });
@@ -1007,6 +1033,7 @@ export async function evaluateWalkForward(store, config, {
           confirmationIdentityIds: confirmationIds,
           expectedExtractor: extractor,
           targetScope: config.target,
+          authorityTimingPolicy: config.model.authority_timing,
           outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
           excludedSourceRecordIds: exclusions.recordIds,
           excludedIndependenceGroupIds: exclusions.independenceGroupIds,

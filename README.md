@@ -9,11 +9,11 @@ or a completed general Codex reset statement with no narrower plan, account, or
 region qualifier. Banked vouchers and narrower segments stay outside the target.
 
 The repository contains the contracts plus a zero-dependency Node.js prototype:
-direct X, X Search Gateway, historical-monitor, and fixture adapters; append-only
-records and acquisition audit data; deterministic extraction and adjudication;
-feature snapshots; a regularized hourly hazard model; a walk-forward promotion
-gate; JSON APIs; and the forecast/evaluation website. Personal quota integration
-remains deferred.
+direct X, RSSHub X timeline, X Search Gateway, historical-monitor, and fixture
+adapters; append-only records and acquisition audit data; deterministic extraction
+and adjudication; feature snapshots; a regularized hourly hazard model; a
+walk-forward promotion gate; JSON APIs; and the forecast/evaluation website.
+Personal quota integration remains deferred.
 
 The operating policy separates immediate usefulness from validated performance. A
 first deployment batch-fits a clearly labeled `provisional` bootstrap from the
@@ -37,20 +37,43 @@ been validated.
 - The website derives its next-4-hour, next-24-hour, and seven-day `[7][24]`
   heatmaps from the same 168-slot forecast rather than producing separate models.
 - Provider adapters only collect and normalize observations. Watchdogs, X feeds,
-  official status pages, community sources, and other vendors are interchangeable
-  providers rather than the core model.
+  official status pages, user-report sources, and other vendors are
+  interchangeable providers rather than the core model.
+- The checked-in RSSHub X timeline adapter is an exact-evidence transport for
+  configured accounts' posts, replies, and reposts. A reply whose own text makes
+  an explicit relevant claim can be a `primary_statement`; a reply that is relevant
+  only through its parent is bound to the parent's evidence root and remains
+  derivative with `derivation: "reply"`, so it cannot confirm an outcome or
+  activate authority timing. A qualifying exact completion statement may support
+  a positive outcome after adjudication, but the finite feed never establishes
+  outcome coverage or a negative label.
 - Text models extract stable claims. A statistical hazard model produces the final
   probability.
 - Search matches are candidates, not signals. A versioned provider-neutral
   relevance gate checks the post and any exact reply/quote context first; personal
   quota errors, requests, generic discussion, and unresolved ambiguous replies do
   not enter features.
+- The extractor recognizes the versioned Codex mode aliases `ultra` and `/fast`
+  inside relevant reset claims. A post that quotes older evidence still owns a
+  `primary_statement` when its own text makes the reset claim; a wrapper that only
+  inherits quoted text remains derivative.
 - New provider intelligence is incorporated into as-of features and a fresh
-  forecast on the hourly pipeline cadence; it does not wait for parameter
-  retraining.
+  forecast on the 10-minute pipeline cadence; the forecast slots and conditional
+  hazards remain hourly, and this refresh does not wait for parameter retraining.
+- A timed authority statement raises probability only while its asserted window
+  remains active. Window expiry or a compatible confirmed reset removes it from
+  the probability path; the confirmed reset then anchors the next recurrence
+  cycle instead of leaving the pre-reset alert elevated. Exact authority timing is
+  excluded from the learned baseline so the same statement is not counted twice.
 - The optional X Search Gateway currently defaults to `grokbuild`. Both Grokbuild
   and the `hermes` rollback path are summary/context-only inputs: they may adjust
   features but cannot confirm an outcome or establish negative-label coverage.
+- Context collection targets Codex experience issues and recoveries, classified by
+  impact and severity, plus non-rumor competitor model or coding-agent releases.
+  Community post volume, momentum, resonance, and disagreement are not prediction
+  features. Experience reports are initially display/audit evidence; a competitor
+  event contributes at most one recency-decayed value after dependency collapse,
+  so repost volume cannot amplify it.
 - Model parameters are batch-refit at most once every 24 hours and only from
   labels that are mature and available at the frozen training cutoff. Confirmed
   positive intervals can enter immediately; only negative hours require complete
@@ -66,9 +89,12 @@ been validated.
 
 The first website release covers:
 
-- collection of Tibo posts and a configured set of relevant X community sources;
-- contextual signals such as competing-vendor model announcements and changes in
-  independent community discussion;
+- exact collection of configured Tibo posts, replies, and reposts through direct
+  X or RSSHub, with provider-neutral provenance;
+- Codex experience issues and recoveries classified by severity, lifecycle,
+  affected scope, and surface;
+- non-rumor competing-model and coding-agent announcements, previews, and
+  releases, collapsed to independent evidence roots;
 - provider-neutral normalization, provenance tracking, and dependency-aware
   deduplication;
 - a small, strongly regularized hourly hazard model;
@@ -88,7 +114,7 @@ providers
   -> topic/context relevance decisions
   -> normalized claims
   -> event candidates and evidence-dependency graph
-  -> as-of feature snapshots
+  -> 10-minute as-of refreshes of hourly-slot feature snapshots
   -> hourly hazard and rolling four-hour forecast
   -> confirmed outcomes
   -> immediate historical batch bootstrap when needed
@@ -182,7 +208,7 @@ and restart commands.
 
 ## Status
 
-Version `0.1.0` with canonical contract `reset-intel/0.2` implements the website
+Version `0.2.0` with canonical contract `reset-intel/0.2` implements the website
 prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,
@@ -193,3 +219,11 @@ immediately as a provisional bootstrap; no claim of validated 80% performance
 follows from that fit. The `validated` status still requires at least 1,008
 evaluated hourly windows, 20 eligible events, and a compatible challenger that
 passes the fixed-policy walk-forward and calibration gates.
+
+The current checked-in configuration contract is `provider-config/0.3.1`, with
+`reset-taxonomy/0.3.0`, `reset-features/0.3.0`, `reset-dedup/0.2.3`, and extractor
+rules `0.3.1` (`reset-extract/rules-0.3.1`). The model contract also binds the
+`winsorized-zscore/1` transform:
+standardized feature values are clipped to `[-8, 8]` during fitting and live
+inference. Coefficient priors use raw-feature logit units and are converted into
+the standardized training coordinates recorded in each artifact.

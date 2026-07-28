@@ -6,23 +6,25 @@ import {
 import { normalizeEvaluationWaiting } from "../model/evaluation.mjs";
 
 const HOUR_MS = 3_600_000;
+const MINUTE_MS = 60_000;
 
-function untilNextHour(now, delayMs) {
+function untilNextCadence(now, delayMs, intervalMinutes) {
   const current = now.getTime();
-  const boundary = Math.ceil(current / HOUR_MS) * HOUR_MS;
+  const intervalMs = intervalMinutes * MINUTE_MS;
+  const boundary = Math.ceil(current / intervalMs) * intervalMs;
   let target = boundary + delayMs;
-  if (target <= current) target += HOUR_MS;
+  if (target <= current) target += intervalMs;
   return target - current;
 }
 
-function untilNextRun(now, delayMs, preferredAt = null) {
-  const hourlyDelay = untilNextHour(now, delayMs);
+function untilNextRun(now, delayMs, intervalMinutes, preferredAt = null) {
+  const cadenceDelay = untilNextCadence(now, delayMs, intervalMinutes);
   const preferredMs = Date.parse(preferredAt);
   if (!Number.isFinite(preferredMs) || preferredMs <= now.getTime()) {
-    return hourlyDelay;
+    return cadenceDelay;
   }
   return Math.min(
-    hourlyDelay,
+    cadenceDelay,
     preferredMs - now.getTime() + delayMs,
   );
 }
@@ -42,12 +44,20 @@ export function startScheduler({
   function schedule(preferredAt = null) {
     if (timer) clearTimeout(timer);
     const delayMs = Math.max(0, Number(config.runtime.scheduler_delay_seconds ?? 5) * 1_000);
+    const intervalMinutes = Number(
+      config.runtime.scheduler_interval_minutes ?? 60,
+    );
     if (stopped) {
       scheduledFor = null;
       return;
     }
     const current = now();
-    const waitMs = untilNextRun(current, delayMs, preferredAt);
+    const waitMs = untilNextRun(
+      current,
+      delayMs,
+      intervalMinutes,
+      preferredAt,
+    );
     scheduledFor = new Date(current.getTime() + waitMs).toISOString();
     timer = setTimeout(execute, waitMs);
   }

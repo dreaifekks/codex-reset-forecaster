@@ -200,6 +200,27 @@ export class XSearchGatewayProvider {
       previousState.upstream_provider !== this.upstreamProvider ||
       previousState.provider_config_hash !== providerConfigHash ||
       !previousState.last_success_at;
+    const refreshIntervalMs = Number(
+      this.config.refresh_interval_minutes ?? 60,
+    ) * 60_000;
+    const lastSuccessMs = Date.parse(previousState.last_success_at);
+    if (
+      !bootstrapReplay &&
+      Number.isFinite(lastSuccessMs) &&
+      Number.isFinite(refreshIntervalMs) &&
+      refreshIntervalMs > 0 &&
+      startedAt.getTime() - lastSuccessMs < refreshIntervalMs
+    ) {
+      return {
+        fetched: false,
+        collected: 0,
+        skipped: "refresh_interval",
+        upstream_provider: this.upstreamProvider,
+        bootstrap_replay: false,
+        next_fetch_at: new Date(lastSuccessMs + refreshIntervalMs).toISOString(),
+        health: { ok: true, delay_seconds: 0, error: null },
+      };
+    }
     try {
       const payloads = [];
       const queryErrors = [];

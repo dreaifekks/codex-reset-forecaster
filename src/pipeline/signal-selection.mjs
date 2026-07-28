@@ -27,7 +27,7 @@ function isProviderDiagnostic(signal) {
     String(provenance.root_evidence_id ?? "").includes(":health-");
 }
 
-export function selectCurrentSignals(signals) {
+function currentSignals(signals) {
   const selected = new Map();
   for (const signal of signals) {
     const observationId = signal.data.observation_refs[0]?.record_id;
@@ -35,8 +35,17 @@ export function selectCurrentSignals(signals) {
     const previous = selected.get(observationId);
     if (!previous || compareSignalRank(previous, signal) < 0) selected.set(observationId, signal);
   }
-  return [...selected.values()].filter((signal) =>
-    signal.data.provenance?.feature_eligible !== false &&
-    !isProviderDiagnostic(signal)
+  return [...selected.values()].filter((signal) => !isProviderDiagnostic(signal));
+}
+
+export function selectCurrentSignals(signals) {
+  return currentSignals(signals).filter((signal) =>
+    signal.data.provenance?.feature_eligible !== false
+  );
+}
+
+export function selectCurrentRelevantSignals(signals) {
+  return currentSignals(signals).filter((signal) =>
+    signal.data.extraction?.relevance?.decision === "relevant"
   );
 }

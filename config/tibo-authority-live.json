@@ -7,6 +7,10 @@
     "negative_label_policy": "authoritative_daily_ledger_absence"
   },
   "providers": {
+    "rsshub_x_timeline": {
+      "enabled": true,
+      "base_url": "https://rss.dreaife.tokyo"
+    },
     "historical_monitor": {
       "enabled": true,
       "discover_linked_posts": false,

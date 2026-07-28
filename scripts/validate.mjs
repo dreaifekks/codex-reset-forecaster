@@ -8,6 +8,11 @@ import {
   OUTCOME_ADJUDICATOR_VERSION,
   OUTCOME_LABEL_POLICY_VERSION,
 } from "../src/core/outcome-contract.mjs";
+import { extractorContract } from "../src/core/extractor-contract.mjs";
+import { FEATURE_NAMES } from "../src/model/features.mjs";
+import {
+  MODEL_VERSION_PREFIX,
+} from "../src/model/model-version.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = path.join(root, "schemas", "reset-intel.schema.json");
@@ -71,6 +76,15 @@ function closeEnough(left, right, tolerance = 1e-9) {
 
 function validatePrediction(record, fileName) {
   const data = record.data;
+  if (
+    record.producer.name !== "reset-forecaster" ||
+    record.producer.version !== "0.3.1" ||
+    data.model?.family !== "ridge_logistic_discrete_time_hazard" ||
+    typeof data.model?.version !== "string" ||
+    !data.model.version.startsWith(`${MODEL_VERSION_PREFIX}-`)
+  ) {
+    fail(`${fileName}: prediction model or producer version is stale`);
+  }
   if (!isUtc(data.issued_at) || !isUtc(data.knowledge_cutoff)) {
     fail(`${fileName}: prediction timestamps must be UTC`);
   }
@@ -182,7 +196,36 @@ if (
 ) {
   fail("schemas/provider-config.schema.json is missing an outcome coverage contract");
 }
+if (
+  !providerSchema.properties?.providers?.properties?.rsshub_x_timeline ||
+  providerSchema.properties.providers.properties.rsshub_x_timeline
+    .properties?.include_replies?.const !== true ||
+  !schema.$defs?.normalizedSignal?.properties?.provenance?.properties
+    ?.derivation?.enum?.includes("reply") ||
+  !schema.$defs?.eventCandidate?.properties?.evidence?.items?.properties
+    ?.provenance_relation?.enum?.includes("reply") ||
+  !schema.$defs?.normalizedSignal?.properties?.claim?.properties?.event_type?.enum
+    ?.includes("experience_issue") ||
+  !schema.$defs.normalizedSignal.properties.claim.properties.event_type.enum
+    .includes("experience_recovery") ||
+  !schema.$defs.normalizedSignal.properties.claim.properties.event_type.enum
+    .includes("competitor_model_release")
+) {
+  fail("schemas are missing the RSSHub or experience/competition contracts");
+}
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
+const defaultExtractor = extractorContract(defaultConfig);
+if (
+  defaultConfig.config_version !== "provider-config/0.3.1" ||
+  defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.0" ||
+  defaultConfig.feature_schema_version !== "reset-features/0.3.0" ||
+  defaultConfig.deduplication_version !== "reset-dedup/0.2.3" ||
+  defaultExtractor.model_version !== "0.3.1" ||
+  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.1" ||
+  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/3"
+) {
+  fail("config/default.json version contracts are stale");
+}
 if (!Object.hasOwn(defaultConfig.providers?.x ?? {}, "outcome_exhaustiveness_contract")) {
   fail("config/default.json must fail closed with an explicit X exhaustiveness contract field");
 }
@@ -202,6 +245,32 @@ if (
   defaultConfig.model?.calibrator?.fit_source !== "none"
 ) {
   fail("config/default.json must declare the supported versioned identity calibrator");
+}
+if (
+  defaultConfig.providers?.rsshub_x_timeline?.provider_name !==
+    "rsshub_x_timeline" ||
+  defaultConfig.providers.rsshub_x_timeline.include_replies !== true ||
+  !defaultConfig.providers.rsshub_x_timeline.capabilities
+    ?.includes("exact_evidence") ||
+  defaultConfig.model?.outcome_coverage_providers
+    ?.includes("rsshub_x_timeline")
+) {
+  fail("RSSHub must be configured as exact evidence without outcome coverage");
+}
+if (
+  defaultConfig.runtime?.scheduler_interval_minutes !== 10 ||
+  defaultConfig.runtime?.retrain_interval_hours !== 24
+) {
+  fail("runtime must retain the 10-minute refresh and daily retraining contract");
+}
+if (
+  FEATURE_NAMES.length !== 14 ||
+  !FEATURE_NAMES.includes("competitor_model_release_decay") ||
+  FEATURE_NAMES.some((name) =>
+    ["community_momentum", "community_disagreement"].includes(name)
+  )
+) {
+  fail("model features must exclude community resonance and retain competitor release context");
 }
 
 const exampleFiles = fs.readdirSync(examplesDir).filter((name) => name.endsWith(".json")).sort();
@@ -235,6 +304,26 @@ for (const fileName of exampleFiles) {
   }
   if (record.record_type === "normalized_signal") {
     if (!isUtc(record.data.available_at)) fail(`${fileName}: available_at must be UTC`);
+    if (
+      record.producer.name !== "rule-claim-extractor" ||
+      record.producer.version !== defaultExtractor.model_version ||
+      record.data.taxonomy_version !== defaultConfig.taxonomy_version ||
+      record.data.extraction?.model !== defaultExtractor.model ||
+      record.data.extraction?.model_version !== defaultExtractor.model_version ||
+      record.data.extraction?.prompt_version !== defaultExtractor.prompt_version ||
+      record.data.extraction?.semantic_policy_hash !==
+        defaultExtractor.semantic_policy_hash ||
+      record.data.extraction?.relevance?.policy_version !==
+        defaultExtractor.topic_relevance_policy_version
+    ) {
+      fail(`${fileName}: normalized signal extractor contract is stale`);
+    }
+    if (
+      !Object.hasOwn(record.data.claim ?? {}, "impact") ||
+      !Object.hasOwn(record.data.claim ?? {}, "competitive_context")
+    ) {
+      fail(`${fileName}: normalized signal must demonstrate semantic context fields`);
+    }
     if (!/^sha256:[a-f0-9]{64}$/.test(record.data.extraction?.semantic_policy_hash ?? "")) {
       fail(`${fileName}: signal extraction semantic policy hash invalid`);
     }
@@ -277,6 +366,20 @@ for (const fileName of exampleFiles) {
   if (record.record_type === "feature_snapshot") {
     if (!isUtc(record.data.knowledge_cutoff)) fail(`${fileName}: feature cutoff must be UTC`);
     if (
+      record.producer.name !== "as-of-feature-builder" ||
+      record.producer.version !== "0.3.1" ||
+      record.data.feature_schema_version !== defaultConfig.feature_schema_version ||
+      record.data.taxonomy_version !== defaultConfig.taxonomy_version ||
+      record.data.deduplication_version !== defaultConfig.deduplication_version ||
+      record.data.extractor_model !== defaultExtractor.model ||
+      record.data.extractor_model_version !== defaultExtractor.model_version ||
+      record.data.extractor_prompt_version !== defaultExtractor.prompt_version ||
+      record.data.extractor_semantic_policy_hash !==
+        defaultExtractor.semantic_policy_hash
+    ) {
+      fail(`${fileName}: feature snapshot provenance contract is stale`);
+    }
+    if (
       !/^sha256:[a-f0-9]{64}$/.test(record.data.config_hash ?? "") ||
       !record.data.feature_schema_version ||
       !record.data.taxonomy_version ||
@@ -295,6 +398,19 @@ for (const fileName of exampleFiles) {
     assertProbability(record.data.data_quality?.provider_coverage, `${fileName}: provider coverage`);
     if (!Array.isArray(record.data.coverage_assertion_refs)) {
       fail(`${fileName}: feature coverage assertion refs missing`);
+    }
+    const missingFeatures = FEATURE_NAMES.filter(
+      (name) => !Object.hasOwn(record.data.features ?? {}, name),
+    );
+    if (missingFeatures.length > 0) {
+      fail(
+        `${fileName}: feature vector is missing ${missingFeatures.join(", ")}`,
+      );
+    }
+    for (const removed of ["community_momentum", "community_disagreement"]) {
+      if (Object.hasOwn(record.data.features ?? {}, removed)) {
+        fail(`${fileName}: removed community feature ${removed} is still present`);
+      }
     }
     if (!Array.isArray(record.data.coverage_assertion_refs)) {
       fail(`${fileName}: feature coverage assertion refs missing`);

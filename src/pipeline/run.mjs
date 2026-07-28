@@ -1,6 +1,7 @@
 import { XProvider } from "../providers/x-provider.mjs";
 import { XSearchGatewayProvider } from "../providers/x-search-gateway-provider.mjs";
 import { HistoricalMonitorProvider } from "../providers/historical-monitor-provider.mjs";
+import { RsshubXProvider } from "../providers/rsshub-x-provider.mjs";
 import { normalizeNewObservations } from "./extract.mjs";
 import { linkEventCandidates } from "./link.mjs";
 import { adjudicateOutcomes } from "./outcomes.mjs";
@@ -210,6 +211,16 @@ export async function collectConfiguredProviders(store, config, { instances = {}
     });
     addProvider(
       "x_search_gateway",
+      provider.providerName,
+      provider,
+    );
+  }
+  if (config.providers.rsshub_x_timeline.enabled) {
+    const provider = instances.rsshub_x_timeline ?? new RsshubXProvider({
+      config: config.providers.rsshub_x_timeline,
+    });
+    addProvider(
+      "rsshub_x_timeline",
       provider.providerName,
       provider,
     );

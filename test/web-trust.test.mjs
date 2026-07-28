@@ -11,12 +11,18 @@ import { createRequestHandler } from "../src/web/app.mjs";
 import {
   evaluationArtifactHash,
   evaluationContractHash,
+  MODEL_ARTIFACT_VERSION,
+  MODEL_VERSION_PREFIX,
   modelContractHash,
 } from "../src/model/contract.mjs";
 import { recomputeFrozenEvaluationArtifact } from "../src/model/evaluation.mjs";
 import { FEATURE_NAMES } from "../src/model/features.mjs";
 import { deriveProbabilitySlots } from "../src/model/forecast.mjs";
-import { predictHazard } from "../src/model/logistic-hazard.mjs";
+import {
+  COEFFICIENT_PRIOR_POLICY_VERSION,
+  FEATURE_TRANSFORM_VERSION,
+  predictHazard,
+} from "../src/model/logistic-hazard.mjs";
 
 const HOUR_MS = 3_600_000;
 
@@ -80,6 +86,7 @@ function config(overrides = {}) {
     },
     model: {
       outcome_coverage_providers: ["x"],
+      standardized_feature_clip: 8,
       minimum_live_evaluation_windows: 168,
       minimum_live_evaluation_events: 3,
       maximum_training_days: 180,
@@ -141,8 +148,9 @@ function provisionalForecastFixture(appConfig, {
 } = {}) {
   const dimension = FEATURE_NAMES.length + 1;
   const model = {
+    artifact_version: MODEL_ARTIFACT_VERSION,
     family: "ridge_logistic_discrete_time_hazard",
-    model_version: "model/provisional-test",
+    model_version: `${MODEL_VERSION_PREFIX}-provisional-test`,
     training_cutoff: "2026-07-20T00:00:00.000Z",
     feature_schema_version: appConfig.feature_schema_version,
     model_contract_hash: modelContractHash(appConfig),
@@ -150,6 +158,13 @@ function provisionalForecastFixture(appConfig, {
     means: FEATURE_NAMES.map(() => 0),
     scales: FEATURE_NAMES.map(() => 1),
     weights: [-4, ...FEATURE_NAMES.map(() => 0)],
+    feature_transform: {
+      version: FEATURE_TRANSFORM_VERSION,
+      standardized_feature_clip: appConfig.model.standardized_feature_clip,
+    },
+    coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
+    raw_coefficient_priors: Array(dimension).fill(0),
+    coefficient_priors: Array(dimension).fill(0),
     covariance: null,
     uncertainty: {
       status: "unavailable",
@@ -267,6 +282,9 @@ function signal({
   derivation,
   identity = null,
   group = id,
+  eventType = "release",
+  impact = null,
+  competitiveContext = null,
   runConfig = config(),
 }) {
   const extractor = extractorContract(runConfig);
@@ -282,15 +300,25 @@ function signal({
       available_at: availableAt,
       observation_refs: [observationRef],
       claim: {
-        event_type: "release",
+        event_type: eventType,
         phase: "completed",
         scope: { vendor: "openai", product: "codex" },
+        impact,
+        competitive_context: competitiveContext,
       },
       extraction: {
         model: extractor.model,
         model_version: extractor.model_version,
         prompt_version: extractor.prompt_version,
         semantic_policy_hash: extractor.semantic_policy_hash,
+        relevance: {
+          policy_version: "reset-topic-relevance/test",
+          decision: "relevant",
+          reason_code: "test_signal",
+          basis: "self",
+          matched_segments: [],
+          context_refs: [],
+        },
       },
       provenance: {
         source_role: role,
@@ -475,6 +503,88 @@ test("recent evidence is aligned to the forecast cutoff and aggregator summaries
   assert.ok(evidence.pending_next_forecast.items.every((item) =>
     item.pending_next_forecast && !item.included_in_forecast,
   ));
+});
+
+test("recent evidence partitions experience impact and competition by semantics", async (t) => {
+  const experienceObservation = observation(
+    "obs_experience",
+    1,
+    "Codex CLI hangs during MCP tool execution.",
+    "2026-07-25T09:20:00.000Z",
+  );
+  const competitionObservation = observation(
+    "obs_competition",
+    1,
+    "Anthropic released Claude Code 5.",
+    "2026-07-25T09:25:00.000Z",
+  );
+  const experience = signal({
+    id: "sig_experience",
+    observationRef: { record_id: experienceObservation.record_id, revision: 1 },
+    availableAt: experienceObservation.created_at,
+    role: "community",
+    derivation: "independent_observation",
+    eventType: "experience_issue",
+    impact: {
+      category: "tool_execution",
+      severity: "medium",
+      lifecycle: "active",
+      affected_scope: "individual",
+      affected_surfaces: ["cli", "mcp"],
+      workaround: "unknown",
+      evidence_basis: "first_party_report",
+    },
+  });
+  experience.data.provenance.feature_eligible = false;
+  const competition = signal({
+    id: "sig_competition",
+    observationRef: { record_id: competitionObservation.record_id, revision: 1 },
+    availableAt: competitionObservation.created_at,
+    role: "official",
+    derivation: "primary_statement",
+    eventType: "competitor_model_release",
+    competitiveContext: {
+      kind: "coding_agent_release",
+      relevance: "direct",
+      stage: "rolled_out",
+    },
+  });
+  competition.data.claim.scope = {
+    vendor: "other",
+    product: "competing_model",
+  };
+  const store = new MemoryStore({
+    records: {
+      prediction: [prediction()],
+      raw_observation: [experienceObservation, competitionObservation],
+      normalized_signal: [experience, competition],
+    },
+  });
+  const base = await serverFor(t, store, config(), "2026-07-25T10:10:00.000Z");
+  const response = await fetch(`${base}/api/evidence/recent`);
+  assert.equal(response.status, 200);
+  const evidence = await response.json();
+  assert.deepEqual(
+    evidence.experience.map((item) => item.signal_ref.record_id),
+    ["sig_experience"],
+  );
+  assert.deepEqual(
+    evidence.competition.map((item) => item.signal_ref.record_id),
+    ["sig_competition"],
+  );
+  assert.equal(evidence.experience[0].impact.severity, "medium");
+  assert.equal(evidence.experience[0].forecast_feature_eligible, false);
+  assert.equal(evidence.experience[0].known_at_forecast_cutoff, true);
+  assert.equal(evidence.experience[0].included_in_forecast, false);
+  assert.equal(evidence.competition[0].included_in_forecast, true);
+  assert.equal(
+    evidence.competition[0].competitive_context.relevance,
+    "direct",
+  );
+  assert.deepEqual(
+    new Set(evidence.community.map((item) => item.signal_ref.record_id)),
+    new Set(["sig_experience", "sig_competition"]),
+  );
 });
 
 test("recent evidence sorts reprocessed exact sources by publication time before slicing", async (t) => {

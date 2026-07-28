@@ -15,7 +15,10 @@ import {
 import { extractorContract } from "../src/core/extractor-contract.mjs";
 import { AS_OF_MODE, latestSignalsAsOf } from "../src/model/as-of.mjs";
 import { createRecord, producer, recordRef } from "../src/core/records.mjs";
-import { selectCurrentSignals } from "../src/pipeline/signal-selection.mjs";
+import {
+  selectCurrentRelevantSignals,
+  selectCurrentSignals,
+} from "../src/pipeline/signal-selection.mjs";
 import { linkEventCandidates } from "../src/pipeline/link.mjs";
 import {
   adjudicateOutcomes,
@@ -170,6 +173,63 @@ test("topic screening retains genuine target and ecosystem operations", () => {
   ));
 });
 
+test("experience severity and competitive releases are semantic categories, not source roles", () => {
+  const userIssue = signalForConfig(
+    "Codex CLI hangs indefinitely whenever an MCP tool returns.",
+    "2082000000000000001",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(userIssue.data.claim.event_type, "experience_issue");
+  assert.deepEqual(userIssue.data.claim.impact, {
+    category: "tool_execution",
+    severity: "medium",
+    lifecycle: "active",
+    affected_scope: "unknown",
+    affected_surfaces: ["cli", "tool_use", "mcp"],
+    workaround: "unknown",
+    evidence_basis: "first_party_report",
+  });
+  assert.equal(userIssue.data.provenance.source_role, "community");
+  assert.equal(userIssue.data.provenance.feature_eligible, false);
+  assert.deepEqual(selectCurrentSignals([userIssue]), []);
+  assert.deepEqual(selectCurrentRelevantSignals([userIssue]), [userIssue]);
+
+  const launchCrash = signalForConfig(
+    "Codex desktop crashes on launch with an auth error for multiple users.",
+    "2082000000000000004",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(launchCrash.data.claim.event_type, "experience_issue");
+  assert.equal(launchCrash.data.claim.impact.category, "auth");
+  assert.equal(launchCrash.data.claim.impact.severity, "high");
+
+  const officialOutage = signalForConfig(
+    "Codex is unavailable platform-wide while we investigate an outage.",
+    "2082000000000000002",
+    config,
+    { identityId: "org_openai", handle: "OpenAI" },
+  );
+  assert.equal(officialOutage.data.claim.event_type, "incident");
+  assert.equal(officialOutage.data.claim.impact.severity, "critical");
+  assert.equal(officialOutage.data.claim.impact.affected_scope, "platform");
+  assert.equal(officialOutage.data.claim.impact.evidence_basis, "official_incident");
+
+  const competitor = signalForConfig(
+    "Anthropic released Claude Code 5 for general availability.",
+    "2082000000000000003",
+    config,
+    { identityId: "org_anthropic", handle: "Anthropic" },
+  );
+  assert.equal(competitor.data.claim.event_type, "competitor_model_release");
+  assert.deepEqual(competitor.data.claim.competitive_context, {
+    kind: "coding_agent_release",
+    relevance: "direct",
+    stage: "general_availability",
+  });
+});
+
 test("resolved reply context is bound by exact reference and cannot be backdated", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-topic-context-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -230,11 +290,97 @@ test("resolved reply context is bound by exact reference and cannot be backdated
   assert.ok(childSignal);
   assert.equal(childSignal.data.extraction.relevance.decision, "relevant");
   assert.equal(childSignal.data.extraction.relevance.basis, "reply_parent");
+  assert.equal(childSignal.data.provenance.derivation, "reply");
+  assert.equal(
+    childSignal.data.provenance.root_evidence_id,
+    `x_post:${parentId}`,
+  );
   assert.deepEqual(
     childSignal.data.observation_refs,
     [recordRef(child), recordRef(parent)],
   );
   assert.equal(childSignal.data.available_at, "2026-07-18T03:32:00.000Z");
+});
+
+test("context-only authority replies cannot inherit a reset outcome", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reset-inherited-reply-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = await new JsonlStore(directory).init();
+  const parentId = "2081000000000000011";
+  const replyId = "2081000000000000012";
+  const parent = observationForConfig(
+    "Codex usage limits have been reset for all paid users.",
+    parentId,
+    authorityConfig,
+    {
+      identityId: "community_member",
+      handle: "community",
+    },
+  );
+  const reply = observationForConfig(
+    "Same here.",
+    replyId,
+    authorityConfig,
+    {
+      nativeRelations: [{
+        type: "reply",
+        provider_item_id: parentId,
+        url: `https://x.com/community/status/${parentId}`,
+      }],
+    },
+  );
+  await store.appendMany([parent, reply]);
+  await normalizeNewObservations(store, authorityConfig, {
+    now: new Date("2026-07-18T03:32:00Z"),
+  });
+  const replySignal = (await store.all("normalized_signal"))
+    .find((signal) =>
+      signal.data.observation_refs[0].record_id === reply.record_id
+    );
+  assert.ok(replySignal);
+  assert.equal(replySignal.data.extraction.relevance.basis, "reply_parent");
+  assert.equal(replySignal.data.claim.phase, "completed");
+  assert.equal(replySignal.data.provenance.derivation, "reply");
+  assert.equal(replySignal.data.provenance.feature_eligible, false);
+  assert.equal(
+    replySignal.data.provenance.root_evidence_id,
+    `x_post:${parentId}`,
+  );
+
+  await linkEventCandidates(store, authorityConfig, {
+    asOf: new Date("2026-07-18T03:33:00Z"),
+  });
+  await adjudicateOutcomes(store, authorityConfig, {
+    now: new Date("2026-07-18T03:34:00Z"),
+  });
+  assert.deepEqual(await store.all("reset_outcome"), []);
+});
+
+test("a self-contained authority reply remains its own primary statement", () => {
+  const parentId = "2081000000000000021";
+  const reply = observationForConfig(
+    "We have reset Codex usage limits for all paid users.",
+    "2081000000000000022",
+    authorityConfig,
+    {
+      nativeRelations: [{
+        type: "reply",
+        provider_item_id: parentId,
+        url: `https://x.com/community/status/${parentId}`,
+      }],
+    },
+  );
+  const signal = extractSignal(reply, authorityConfig);
+  assert.ok(signal);
+  assert.equal(signal.data.extraction.relevance.basis, "self");
+  assert.equal(signal.data.provenance.derivation, "primary_statement");
+  assert.equal(signal.data.provenance.feature_eligible, true);
+  assert.equal(
+    signal.data.provenance.root_evidence_id,
+    "x_post:2081000000000000022",
+  );
 });
 
 test("extractor keeps Codex, ChatGPT Work, unknown, and multi-product scopes distinct", () => {
@@ -473,7 +619,7 @@ test("a double reset with one banked voucher creates one immediate authority out
   assert.equal(outcomes[0].data.status, "confirmed");
 });
 
-test("authority inference requires the configured semantics, identity, and a primary statement", () => {
+test("authority inference treats a quote wrapper's own claim as a primary statement", () => {
   const text =
     "We rewrote the underlying system to track and bill usage in Codex and we have reset usage limits in the process.";
   const actualResetSemantics = signalForConfig(text, "authority-disabled", config);
@@ -499,8 +645,9 @@ test("authority inference requires the configured semantics, identity, and a pri
       }],
     },
   );
-  assert.equal(quoted.data.provenance.derivation, "quotes");
-  assert.equal(quoted.data.claim.scope.population, "unknown");
+  assert.equal(quoted.data.extraction.relevance.basis, "self");
+  assert.equal(quoted.data.provenance.derivation, "primary_statement");
+  assert.equal(quoted.data.claim.scope.population, "platform");
 
   const summary = signalForConfig(
     text,
@@ -510,6 +657,199 @@ test("authority inference requires the configured semantics, identity, and a pri
   );
   assert.equal(summary.data.provenance.source_role, "aggregator");
   assert.equal(summary.data.claim.scope.population, "unknown");
+});
+
+test("real authority hint and self-authored quoted completion form one outcome", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reset-real-authority-lifecycle-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const runConfig = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+    overrides: { runtime: { data_dir: directory } },
+  });
+  const store = await new JsonlStore(directory).init();
+  const scheduledId = "2081899343091843463";
+  const completedId = "2081940052154933696";
+  const scheduledAt = "2026-07-28T00:27:37.869Z";
+  const completedAt = "2026-07-28T03:09:23.666Z";
+  const makeAuthorityObservation = ({
+    id,
+    at,
+    text,
+    nativeRelations = [],
+  }) => rawObservationFromItem({
+    provider_item_id: id,
+    canonical_url: `https://x.com/thsottiaux/status/${id}`,
+    published_at: at,
+    author: {
+      provider_author_id: "1953337039510003712",
+      identity_id: "person_tibo_sottiaux",
+      display_handle: "@thsottiaux",
+    },
+    native_relations: nativeRelations,
+    content: { media_type: "text/plain", text, language: "en" },
+  }, {
+    providerName: "x",
+    providerVersion: "test",
+    config: runConfig.providers.x,
+    firstSeenAt: at,
+    fetchedAt: at,
+  });
+  const scheduledObservation = makeAuthorityObservation({
+    id: scheduledId,
+    at: scheduledAt,
+    text:
+      "We’re celebrating the fast adoption of chatGPT Work and all the incredible effort that went into it today. " +
+      "I’m feeling like a limit reset.\n\nHold on tight to your ultra and /fast and see you in a few hours when I’m back at the laptop!",
+  });
+  const completedObservation = makeAuthorityObservation({
+    id: completedId,
+    at: completedAt,
+    text:
+      "Back at the laptop. The usage limits have been reset for all paid users of Codex and ChatGPT Work. " +
+      "Weeeeeeeee. It’s a good day!",
+    nativeRelations: [{
+      type: "quotes",
+      provider_item_id: scheduledId,
+      url: `https://x.com/thsottiaux/status/${scheduledId}`,
+    }],
+  });
+  await store.appendMany([scheduledObservation, completedObservation]);
+
+  const normalized = await normalizeNewObservations(store, runConfig, {
+    now: new Date("2026-07-28T03:10:00Z"),
+  });
+  assert.equal(normalized.records.length, 2);
+  const [scheduled, completed] = normalized.records.sort((left, right) =>
+    left.data.available_at.localeCompare(right.data.available_at)
+  );
+  assert.equal(scheduled.data.claim.phase, "scheduled");
+  assert.equal(scheduled.data.claim.scope.product, "multi_product");
+  assert.deepEqual(
+    scheduled.data.claim.scope.products,
+    ["chatgpt_work", "codex"],
+  );
+  assert.equal(scheduled.data.claim.scope.population, "platform");
+  assert.equal(
+    scheduled.data.claim.asserted_time_range.start,
+    scheduledAt,
+  );
+  assert.equal(
+    scheduled.data.claim.asserted_time_range.end,
+    "2026-07-28T03:27:37.869Z",
+  );
+  assert.equal(scheduled.data.provenance.derivation, "primary_statement");
+
+  assert.equal(completed.data.claim.phase, "completed");
+  assert.equal(completed.data.claim.scope.population, "platform");
+  assert.equal(completed.data.extraction.relevance.basis, "self");
+  assert.equal(completed.data.provenance.derivation, "primary_statement");
+  assert.equal(
+    completed.data.provenance.root_evidence_id,
+    `x_post:${completedId}`,
+  );
+
+  const linked = await linkEventCandidates(store, runConfig, {
+    asOf: new Date("2026-07-28T03:10:30Z"),
+  });
+  assert.equal(linked.linked, 1);
+  const [candidate] = await store.all("event_candidate");
+  assert.equal(candidate.data.state, "closed");
+  assert.equal(candidate.data.evidence.length, 2);
+
+  const adjudicated = await adjudicateOutcomes(store, runConfig, {
+    now: new Date("2026-07-28T03:11:00Z"),
+  });
+  assert.equal(adjudicated.adjudicated, 1);
+  const [outcome] = await store.all("reset_outcome");
+  assert.equal(outcome.data.status, "confirmed");
+  assert.equal(outcome.data.candidate_refs[0].record_id, candidate.record_id);
+  assert.equal(
+    outcome.data.verification[0].observation_ref.record_id,
+    completedObservation.record_id,
+  );
+});
+
+test("a quote that only inherits reset text remains derivative and cannot confirm", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reset-inherited-quote-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const runConfig = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+    overrides: { runtime: { data_dir: directory } },
+  });
+  const store = await new JsonlStore(directory).init();
+  const sourceId = "2081800000000000001";
+  const wrapperId = "2081800000000000002";
+  const source = rawObservationFromItem({
+    provider_item_id: sourceId,
+    canonical_url: `https://x.com/community/status/${sourceId}`,
+    published_at: "2026-07-28T00:00:00Z",
+    author: {
+      provider_author_id: "community",
+      identity_id: "community_member",
+      display_handle: "@community",
+    },
+    native_relations: [],
+    content: {
+      media_type: "text/plain",
+      text: "Codex usage limits have been reset for all paid users.",
+      language: "en",
+    },
+  }, {
+    providerName: "x",
+    providerVersion: "test",
+    config: runConfig.providers.x,
+    firstSeenAt: "2026-07-28T00:00:00Z",
+    fetchedAt: "2026-07-28T00:00:00Z",
+  });
+  const wrapper = rawObservationFromItem({
+    provider_item_id: wrapperId,
+    canonical_url: `https://x.com/thsottiaux/status/${wrapperId}`,
+    published_at: "2026-07-28T00:05:00Z",
+    author: {
+      provider_author_id: "1953337039510003712",
+      identity_id: "person_tibo_sottiaux",
+      display_handle: "@thsottiaux",
+    },
+    native_relations: [{
+      type: "quotes",
+      provider_item_id: sourceId,
+      url: `https://x.com/community/status/${sourceId}`,
+    }],
+    content: {
+      media_type: "text/plain",
+      text: "Yep.",
+      language: "en",
+    },
+  }, {
+    providerName: "x",
+    providerVersion: "test",
+    config: runConfig.providers.x,
+    firstSeenAt: "2026-07-28T00:05:00Z",
+    fetchedAt: "2026-07-28T00:05:00Z",
+  });
+  await store.appendMany([source, wrapper]);
+  await normalizeNewObservations(store, runConfig, {
+    now: new Date("2026-07-28T00:06:00Z"),
+  });
+  const wrapperSignal = (await store.all("normalized_signal"))
+    .find((signal) =>
+      signal.data.observation_refs[0].record_id === wrapper.record_id
+    );
+  assert.ok(wrapperSignal);
+  assert.equal(wrapperSignal.data.extraction.relevance.basis, "quote");
+  assert.equal(wrapperSignal.data.provenance.derivation, "quotes");
+
+  await linkEventCandidates(store, runConfig, {
+    asOf: new Date("2026-07-28T00:07:00Z"),
+  });
+  await adjudicateOutcomes(store, runConfig, {
+    now: new Date("2026-07-28T00:08:00Z"),
+  });
+  assert.equal((await store.all("reset_outcome")).length, 0);
 });
 
 test("global outage wording does not leak into reset scope", () => {
@@ -741,6 +1081,13 @@ test("target and identity-role policy changes replay exact observations and excl
         }],
       },
       historical_monitor: {
+        confirmation_identities: [{
+          username: "thsottiaux",
+          identity_id: "person_tibo_sottiaux",
+          source_role: "official",
+        }],
+      },
+      rsshub_x_timeline: {
         confirmation_identities: [{
           username: "thsottiaux",
           identity_id: "person_tibo_sottiaux",
@@ -1086,7 +1433,7 @@ test("a correction from completed to merely started does not rewrite a confirmed
   assert.equal(outcome.data.verification[0].observation_ref.revision, 1);
 });
 
-test("copied posts collapse within one wave without erasing the authoritative root or later events", async (t) => {
+test("copied posts collapse within one wave without granting authority or erasing later events", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-extraction-dedup-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = await new JsonlStore(directory).init();
@@ -1151,9 +1498,10 @@ test("copied posts collapse within one wave without erasing the authoritative ro
     confirmationIdentityIds: confirmationIdentityIds(config),
     outcomeCoverageProviders: new Set(["x"]),
   });
-  assert.ok(
-    vector.features.official_reset_activity_decay > 0,
-    "a later copy must not replace the authoritative evidence root",
+  assert.equal(
+    vector.features.official_reset_activity_decay,
+    0,
+    "a derivative copy must not inherit the configured authority's weight",
   );
 
   assert.equal((await normalizeNewObservations(store, config)).normalized, 0);

@@ -149,15 +149,18 @@ test("ingest-timeline CLI imports a valid JSONL file", async (t) => {
   const filePath = path.join(directory, "timeline.jsonl");
   await fs.writeFile(filePath, JSON.stringify(row()), "utf8");
   const before = Date.now();
-  const { stdout } = await execFileAsync(
+  const childEnv = { ...process.env, RESET_DATA_DIR: directory };
+  delete childEnv.NODE_TEST_CONTEXT;
+  const { stdout, stderr } = await execFileAsync(
     process.execPath,
     ["src/cli.mjs", "ingest-timeline", "--file", filePath],
     {
       cwd: projectRoot,
-      env: { ...process.env, RESET_DATA_DIR: directory },
+      env: childEnv,
     },
   );
   const after = Date.now();
+  assert.ok(stdout.trim(), `ingest-timeline produced no JSON: ${stderr}`);
   const result = JSON.parse(stdout);
   assert.equal(result.collected, 1);
   assert.equal(result.coverage_created, false);

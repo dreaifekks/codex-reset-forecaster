@@ -35,14 +35,30 @@ Initial provider classes may include:
 
 - official product/status/changelog sources;
 - named product-team social accounts;
-- X, Reddit, Hacker News, and other community feeds;
+- exact account timelines and curated user reports;
 - release and public-development activity sources;
 - other model vendors, retained under their own subject vendor and product.
 
-The MVP begins with an X adapter. Its configuration identifies a Tibo account as
-the primary confirmation source and a separate set of community and ecosystem
-sources as context. This source choice does not change the provider-neutral record
-or adapter contracts.
+The MVP begins with X adapters. Their configuration identifies a Tibo account as
+the primary confirmation source and a separate set of Codex-experience and
+competitor-release sources as context. This source choice does not change the
+provider-neutral record or adapter contracts.
+
+The RSSHub X timeline adapter polls configured account routes as JSON Feed and
+preserves the exact wrapper status ID, account identity, text, and native
+reply/quote/repost relations. Wrapper publication time is derived from its X
+snowflake; `first_seen_at` and `fetched_at` remain the real collection clocks.
+Ambiguous identity, relation, RT, quote-body, or timestamp metadata fails closed
+rather than being inferred. A reply whose own text contains an explicit relevant
+claim owns its status root and may be a `primary_statement`. A reply whose own
+text is relevant only with its exact parent context is bound to the parent evidence
+root with `derivation: "reply"`; it cannot confirm an outcome or activate exact
+authority timing. This makes RSSHub an exact transport for positive observations,
+including a completion statement that may later qualify through adjudication. It
+does not make a scheduled statement an outcome, and a finite timeline feed cannot
+prove that no qualifying statement or reset occurred. RSSHub therefore has
+`exact_evidence` and `context_discovery` capabilities but never contributes
+outcome coverage or negative labels.
 
 An optional X Search Gateway adapter can supply additional current context. The
 current default upstream is `grokbuild`, backed by the gateway's local Grok CLI.
@@ -96,18 +112,36 @@ auditable but are feature-ineligible. A reply or quote may inherit context only
 from an exact related observation; a missing relation body is
 `pending_context`, not guessed from the search query.
 
+Context inheritance never grants primary authority. When a reply's own text is an
+explicit relevant operational claim, relevance uses `self` and the reply keeps its
+own primary evidence root. When the reply is meaningful only because an exact
+parent contains the operational claim, relevance uses `reply_parent`, the signal
+binds the parent reference/root, and normalized provenance uses the non-primary
+`derivation: "reply"`. Such a context-only reply may remain auditable context but
+cannot adjudicate an outcome or enter the exact-authority timing conditioner.
+
 The rule/LLM extractor then converts relevant text into a small taxonomy:
 
 - event type;
 - phase and stance;
 - product and affected scope;
 - asserted time range and its precision;
+- Codex experience impact, severity, lifecycle, affected surfaces, and workaround;
+- competitor release kind, relevance, and delivery stage;
 - source role and evidence provenance;
 - extraction confidence.
 
 Product is not copied from the model target. The extractor distinguishes Codex,
 ChatGPT Work, unknown, and explicit multi-product statements. Only Codex or a
-multi-product statement explicitly containing Codex can confirm a Codex outcome.
+multi-product statement containing Codex can confirm a Codex outcome. Within a
+relevant reset claim, the versioned aliases `ultra` and `/fast` identify Codex
+modes even when the product name is omitted.
+
+Native relations do not automatically make the wrapper derivative. If a quote
+wrapper's own text contains the operational claim, that wrapper is its own
+`primary_statement` evidence root. If the wrapper contributes no reset claim and
+only inherits the quoted observation's text, it remains `quotes`-derived and
+cannot confirm an outcome.
 
 The active extractor contract is configuration, not a hidden code constant. Its
 `model`, `model_version`, `prompt_version`, topic-relevance policy version, and
@@ -122,13 +156,14 @@ The extractor does not emit the final reset probability.
 ### 4. Event linking and evidence dependencies
 
 Deterministic relationships are linked first: canonical X status IDs across
-providers, identical URLs, native quotes, reposts, thread identifiers, and exact
-content hashes. Semantic linking then uses subject vendor, product, event type,
-overlapping asserted times, and constrained text similarity.
+providers, identical URLs, native replies, quotes, reposts, thread identifiers,
+and exact content hashes. Semantic linking then uses subject vendor, product,
+event type, overlapping asserted times, and constrained text similarity.
 
-The linker records whether evidence is independent, quoted, reposted, summarized,
-supporting, or contradicting. Twenty derivative reports from one original post
-remain one independent evidence root.
+The linker records whether evidence is independent, a reply, quoted, reposted,
+summarized, supporting, or contradicting. Event-candidate evidence uses
+`provenance_relation: "reply"` for the parent-bound reply case. Twenty derivative
+reports from one original post remain one independent evidence root.
 
 ### 5. As-of feature builder
 
@@ -140,15 +175,28 @@ recency, independence, contradiction, explicit timing overlap, activity anomalie
 and release/incident proximity. Provider health, delay, and coverage are recorded
 as separate data-quality metadata rather than probability inputs.
 
-The current feature contract deliberately trains on seventeen low-dimensional
+The current feature contract deliberately trains on fourteen low-dimensional
 fields. Its main
 baseline is a causal renewal-periodic kernel built from outcomes already known at
 the cutoff: a Gaussian kernel over historical reset gaps in log-hours, a circular
 UTC hour-of-day kernel, and a wider circular hour-of-week kernel. Explicit asserted
-time overlap and configured-author reset intent or incident evidence have small,
-versioned coefficient priors. The renewal-periodic kernel, community momentum,
-disagreement, and competitor release context start at a zero prior and must earn
-their influence from training evidence.
+time overlap and configured-author incident evidence have small, versioned
+coefficient priors. Exact configured-author reset intent remains in the canonical
+snapshot for diagnosis but is excluded from the learned probability vector; its
+timing effect belongs to the authority conditioner. Community volume, momentum,
+resonance, and disagreement are not features. Codex experience reports remain
+canonical display/audit evidence in this first version and do not enter the
+forecast vector. A direct or adjacent non-rumor competitor model/coding-agent
+event contributes a single recency-decayed maximum after evidence-root collapse,
+not a sum of posts. The renewal-periodic kernel and competitor release context
+start at a zero prior and must earn their influence from training evidence.
+
+Reset-timing features share one as-of lifecycle with the authority conditioner.
+An asserted range contributes only before its half-open end, and a compatible
+confirmed reset occurring after the statement consumes it once that outcome is
+known. Expired or consumed statements no longer contribute intent diagnostics or
+asserted-time overlap. An active exact authority statement is also excluded from
+baseline overlap so the conditioner does not reuse the same evidence.
 
 ### 6. Forecaster and calibrator
 
@@ -161,14 +209,27 @@ probability. Probability, epistemic uncertainty, source/data quality, and
 extraction confidence remain separate. A separately versioned calibrator is fitted
 only to saved out-of-sample predictions.
 
+Training and inference use the same versioned standardized-feature transform.
+After subtracting the stored mean and dividing by the stored scale, each feature
+is clipped to `[-8, 8]`. The clip and transform version are persisted in the model
+artifact and bound into the model contract so a rare feature with a tiny training
+scale cannot create an unbounded live logit shift.
+
+Configured coefficient priors are expressed as logit change per one raw feature
+unit. Training converts each prior into standardized coordinates by multiplying it
+by the stored feature scale; the raw and effective vectors plus the versioned
+coordinate policy are persisted in the artifact.
+
 After the baseline hazards, a versioned exact-authority timing conditioner may
 mix first-event mass into one active asserted interval, then invert that mass back
 to hourly hazards. It uses only as-of-visible primary evidence, never a summary or
 extraction confidence, and the walk-forward evaluator runs the same path. Until
 timed-statement collection has an exhaustive denominator, its phase reliability
 is exposed as a semantic prior rather than described as learned accuracy. A newly
-confirmed reset consumes the old assertion and re-anchors the next first-reset
-forecast in the same pipeline run without waiting for retraining.
+confirmed compatible reset consumes the old assertion and re-anchors the next
+first-reset forecast in the same pipeline run without waiting for retraining.
+If no completion arrives, the assertion stops conditioning probability when its
+half-open timing window ends.
 
 Bootstrap fitting and performance validation are separate lifecycle concerns. When
 eligible historical labels already exist, the service may batch-fit a provisional
@@ -214,6 +275,13 @@ The serving layer reads one saved 168-slot forecast. It slices the first four an
 into seven 24-hour heatmap rows. Time-zone conversion changes display labels, not
 slot order or canonical UTC storage.
 
+Recent evidence is projected into semantic `core`, `experience`, `competition`,
+and `other_context` groups. Experience entries carry the structured impact
+classification, while competition entries carry the structured release context.
+The API retains `community` for one compatibility version as a deprecated aggregate
+of the three non-core groups; the website no longer uses community resonance as a
+product concept.
+
 The evaluation view joins immutable as-issued predictions with settled outcomes.
 It reports calibration and rare-event forecast quality rather than plain
 classification accuracy.
@@ -236,9 +304,9 @@ compatibility gates; provisional use does not weaken those gates.
 - Bootstrap: when no compatible usable model exists, batch-fit immediately from
   historical labels that are mature and available at the frozen training cutoff.
   Do not wait for future wall-clock data solely to start the fit.
-- Hourly: collect, normalize, extract, link, freeze features, and issue a new
-  seven-day forecast. New provider signals can therefore change features and
-  probabilities without a parameter refit.
+- Every 10 minutes: collect, normalize, extract, link, freeze hourly-slot
+  features, and issue a new seven-day forecast. New provider signals can therefore
+  change probabilities without a parameter refit.
 - After a forecast slot matures: settle it as positive, negative, pending, or
   censored using outcome coverage.
 - At most every 24 hours: batch-fit a challenger from labels mature by that run's

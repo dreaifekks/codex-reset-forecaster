@@ -855,6 +855,17 @@ nav a:focus-visible {
   -webkit-line-clamp: 1;
 }
 
+.reference-subsection {
+  margin-top: 18px;
+}
+
+.reference-subsection h3 {
+  margin: 0 0 5px;
+  color: #e4e4e7;
+  font-size: 12px;
+  font-weight: 620;
+}
+
 .signal-preview {
   width: 100%;
   margin: 0;
@@ -968,6 +979,22 @@ nav a:focus-visible {
 
 .signal-badge.pending {
   color: #fde047;
+}
+
+.signal-badge.severity-critical {
+  color: #fca5a5;
+}
+
+.signal-badge.severity-high {
+  color: #fdba74;
+}
+
+.signal-badge.severity-medium {
+  color: #fde047;
+}
+
+.signal-badge.severity-low {
+  color: #bfdbfe;
 }
 
 .signal-dialog {

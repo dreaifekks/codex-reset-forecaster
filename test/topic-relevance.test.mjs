@@ -17,7 +17,7 @@ const relevantParent = {
 test("topic relevance policy exposes a stable version", () => {
   assert.equal(
     TOPIC_RELEVANCE_POLICY_VERSION,
-    "reset-topic-relevance/2",
+    "reset-topic-relevance/3",
   );
 });
 
@@ -51,6 +51,11 @@ test("real gateway false positives and reset requests are rejected", () => {
     {
       name: "generic model release cycle",
       text: "Models are releasing in a cycle, so the next Google release after Gemini will outperform the current best.",
+      reason: "generic_discussion",
+    },
+    {
+      name: "competitor client crash on launch",
+      text: "Claude Code crashes on launch with an authentication error.",
       reason: "generic_discussion",
     },
   ];
@@ -101,15 +106,15 @@ test("genuine target operations and ecosystem policy or release claims are relev
     },
     {
       text: "Google officially released Gemini 3.6 Flash today.",
-      reason: "ecosystem_operational_claim",
+      reason: "competitive_model_release",
     },
     {
       text: "Anthropic launched Claude 5 for general availability.",
-      reason: "ecosystem_operational_claim",
+      reason: "competitive_model_release",
     },
     {
       text: "Claude Opus 5 launched at half the prior price.",
-      reason: "ecosystem_operational_claim",
+      reason: "competitive_model_release",
     },
   ];
 
@@ -123,6 +128,39 @@ test("genuine target operations and ecosystem policy or release claims are relev
     assert.equal(assessed.basis, "self", entry.text);
     assert.deepEqual(assessed.matched_segments, [entry.text], entry.text);
     assert.deepEqual(assessed.context_refs, [], entry.text);
+  }
+});
+
+test("Codex experience impact is relevant without using community resonance", () => {
+  const cases = [
+    "Codex CLI hangs indefinitely when a tool call returns.",
+    "The Codex MCP integration is broken after the latest update.",
+    "Codex usage is draining incorrectly even while the agent is idle.",
+    "Codex is much slower today and every run times out.",
+    "Codex is working again after the session-state bug was fixed.",
+    "Codex still returns HTTP 429 after the usage limits were reset.",
+    "Codex CLI hangs on every run, please fix Codex.",
+    "Codex CLI is stuck on every run. Please fix this Codex bug.",
+  ];
+  for (const text of cases) {
+    const assessed = assessTopicRelevance({
+      text,
+      sourceRole: "community",
+    });
+    assert.equal(assessed.decision, "relevant", text);
+    assert.equal(assessed.reason_code, "target_experience_issue", text);
+  }
+
+  for (const text of [
+    "Codex returned HTTP 429 because I used my full weekly allowance.",
+    "Please fix this Codex bug.",
+    "Codex is bad and I dislike it.",
+  ]) {
+    assert.equal(
+      assessTopicRelevance({ text, sourceRole: "community" }).decision,
+      "irrelevant",
+      text,
+    );
   }
 });
 

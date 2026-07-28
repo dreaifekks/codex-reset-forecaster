@@ -1,5 +1,14 @@
 import { sha256, stableStringify } from "../core/hash.mjs";
 import { clamp } from "../core/time.mjs";
+import {
+  MODEL_ARTIFACT_VERSION,
+  MODEL_VERSION_PREFIX,
+} from "./model-version.mjs";
+
+export const FEATURE_TRANSFORM_VERSION = "winsorized-zscore/1";
+export const DEFAULT_STANDARDIZED_FEATURE_CLIP = 8;
+export const COEFFICIENT_PRIOR_POLICY_VERSION =
+  "raw-feature-logit-per-unit/1";
 
 function sigmoid(value) {
   if (value >= 0) {
@@ -95,17 +104,44 @@ function exposuresFor(example) {
   });
 }
 
-function transform(row, means, scales) {
-  return [1, ...row.map((value, index) => (value - means[index]) / scales[index])];
+function transform(
+  row,
+  means,
+  scales,
+  standardizedFeatureClip = Infinity,
+) {
+  return [
+    1,
+    ...row.map((value, index) =>
+      clamp(
+        (value - means[index]) / scales[index],
+        -standardizedFeatureClip,
+        standardizedFeatureClip,
+      )
+    ),
+  ];
 }
 
-function contributions(example, weights, means, scales) {
+function contributions(
+  example,
+  weights,
+  means,
+  scales,
+  standardizedFeatureClip,
+) {
   if (example.type === "negative") {
-    const x = transform(example.row, means, scales);
+    const x = transform(
+      example.row,
+      means,
+      scales,
+      standardizedFeatureClip,
+    );
     const probability = sigmoid(dot(weights, x));
     return [{ x, gradientFactor: -probability, probability, target: 0 }];
   }
-  const transformed = example.rows.map((row) => transform(row, means, scales));
+  const transformed = example.rows.map((row) =>
+    transform(row, means, scales, standardizedFeatureClip)
+  );
   const probabilities = transformed.map((x) => sigmoid(dot(weights, x)));
   const exposures = exposuresFor(example);
   const survival = probabilities.reduce(
@@ -121,16 +157,34 @@ function contributions(example, weights, means, scales) {
   }));
 }
 
-function logLikelihood(examples, weights, means, scales, lambda, coefficientPriors) {
+function logLikelihood(
+  examples,
+  weights,
+  means,
+  scales,
+  lambda,
+  coefficientPriors,
+  standardizedFeatureClip,
+) {
   let value = 0;
   for (const example of examples) {
     if (example.type === "negative") {
-      const x = transform(example.row, means, scales);
+      const x = transform(
+        example.row,
+        means,
+        scales,
+        standardizedFeatureClip,
+      );
       value += Math.log(clamp(1 - sigmoid(dot(weights, x)), 1e-12, 1));
     } else {
       const exposures = exposuresFor(example);
       const survival = example.rows
-        .map((row) => sigmoid(dot(weights, transform(row, means, scales))))
+        .map((row) =>
+          sigmoid(dot(
+            weights,
+            transform(row, means, scales, standardizedFeatureClip),
+          ))
+        )
         .reduce(
           (result, probability, index) => result * (1 - probability) ** exposures[index],
           1,
@@ -144,10 +198,26 @@ function logLikelihood(examples, weights, means, scales, lambda, coefficientPrio
   return value;
 }
 
-function objectiveAndGradient(examples, weights, means, scales, lambda, coefficientPriors) {
+function objectiveAndGradient(
+  examples,
+  weights,
+  means,
+  scales,
+  lambda,
+  coefficientPriors,
+  standardizedFeatureClip,
+) {
   const gradient = Array(weights.length).fill(0);
   for (const example of examples) {
-    for (const contribution of contributions(example, weights, means, scales)) {
+    for (
+      const contribution of contributions(
+        example,
+        weights,
+        means,
+        scales,
+        standardizedFeatureClip,
+      )
+    ) {
       contribution.x.forEach((value, index) => {
         gradient[index] += contribution.gradientFactor * value;
       });
@@ -158,7 +228,15 @@ function objectiveAndGradient(examples, weights, means, scales, lambda, coeffici
   }
   const scale = Math.max(1, examples.length);
   return {
-    objective: -logLikelihood(examples, weights, means, scales, lambda, coefficientPriors) / scale,
+    objective: -logLikelihood(
+      examples,
+      weights,
+      means,
+      scales,
+      lambda,
+      coefficientPriors,
+      standardizedFeatureClip,
+    ) / scale,
     gradient: gradient.map((value) => -value / scale),
   };
 }
@@ -171,6 +249,7 @@ function numericalObservedHessian(
   lambda,
   coefficientPriors,
   relativeStep,
+  standardizedFeatureClip,
 ) {
   const size = weights.length;
   const hessian = Array.from({ length: size }, () => Array(size).fill(0));
@@ -187,6 +266,7 @@ function numericalObservedHessian(
       scales,
       lambda,
       coefficientPriors,
+      standardizedFeatureClip,
     ).gradient;
     const minusGradient = objectiveAndGradient(
       examples,
@@ -195,6 +275,7 @@ function numericalObservedHessian(
       scales,
       lambda,
       coefficientPriors,
+      standardizedFeatureClip,
     ).gradient;
     for (let row = 0; row < size; row += 1) {
       hessian[row][column] =
@@ -255,6 +336,9 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
   const objectiveTolerance = options.objectiveTolerance ?? 1e-10;
   const initialStep = options.initialStep ?? options.learningRate ?? 1;
   const hessianStep = options.hessianStep ?? 1e-4;
+  const standardizedFeatureClip =
+    options.standardizedFeatureClip ??
+    DEFAULT_STANDARDIZED_FEATURE_CLIP;
   if (!Number.isFinite(initialStep) || initialStep <= 0) {
     throw new RangeError("Optimizer initial step must be positive");
   }
@@ -267,12 +351,24 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
   if (!Number.isFinite(hessianStep) || hessianStep <= 0) {
     throw new RangeError("Numerical Hessian step must be positive");
   }
+  if (
+    !Number.isFinite(standardizedFeatureClip) ||
+    standardizedFeatureClip <= 0
+  ) {
+    throw new RangeError("Standardized feature clip must be positive");
+  }
+  const { means, scales } = standardization(examples, featureNames.length);
   const configuredPriors = options.coefficientPriors ?? {};
-  const coefficientPriors = [
+  const rawCoefficientPriors = [
     0,
     ...featureNames.map((name) => Number(configuredPriors[name] ?? 0)),
   ];
-  const { means, scales } = standardization(examples, featureNames.length);
+  const coefficientPriors = [
+    0,
+    ...rawCoefficientPriors.slice(1).map((value, index) =>
+      value * scales[index]
+    ),
+  ];
   const totalRows = examples.reduce((sum, example) => sum + (example.rows?.length ?? 1), 0);
   const prevalence = clamp(eventCount / totalRows, 1e-5, 1 - 1e-5);
   const weights = [...coefficientPriors];
@@ -285,6 +381,7 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
     scales,
     lambda,
     coefficientPriors,
+    standardizedFeatureClip,
   );
   let iterations = 0;
   let converged = norm(state.gradient) <= gradientTolerance;
@@ -309,6 +406,7 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
         scales,
         lambda,
         coefficientPriors,
+        standardizedFeatureClip,
       );
       if (
         Number.isFinite(candidateState.objective) &&
@@ -352,6 +450,7 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
     lambda,
     coefficientPriors,
     hessianStep,
+    standardizedFeatureClip,
   );
   const inverseResult = invertSymmetricPositiveDefinite(hessian);
   const covariance = inverseResult?.inverse ?? null;
@@ -377,7 +476,13 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
     covariance,
     uncertainty,
     lambda,
+    coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
+    raw_coefficient_priors: rawCoefficientPriors,
     coefficient_priors: coefficientPriors,
+    feature_transform: {
+      version: FEATURE_TRANSFORM_VERSION,
+      standardized_feature_clip: standardizedFeatureClip,
+    },
     iterations,
     converged,
     stop_reason: stopReason,
@@ -449,6 +554,21 @@ export function assertModelCompatibility(model, {
   if (modelContractHash && model.model_contract_hash !== modelContractHash) {
     throw new Error("Model contract hash does not match runtime model configuration");
   }
+  if (
+    modelContractHash &&
+    model.artifact_version !== MODEL_ARTIFACT_VERSION
+  ) {
+    throw new Error("Model artifact version does not match the runtime model contract");
+  }
+  if (
+    modelContractHash &&
+    (
+      typeof model.model_version !== "string" ||
+      !model.model_version.startsWith(`${MODEL_VERSION_PREFIX}-`)
+    )
+  ) {
+    throw new Error("Model version does not match the runtime model contract");
+  }
   if (requireConverged && model.converged !== true) {
     throw new Error(`Model optimizer is not converged (${model.stop_reason ?? "unknown"})`);
   }
@@ -458,11 +578,78 @@ export function assertModelCompatibility(model, {
   if (model.scales.some((scale) => scale <= 0)) {
     throw new Error("Model artifact contains a non-positive feature scale");
   }
+  if (
+    model.feature_transform &&
+    (
+      model.feature_transform.version !== FEATURE_TRANSFORM_VERSION ||
+      !Number.isFinite(
+        model.feature_transform.standardized_feature_clip,
+      ) ||
+      model.feature_transform.standardized_feature_clip <= 0
+    )
+  ) {
+    throw new Error("Model artifact contains an unsupported feature transform");
+  }
+  if (modelContractHash && !model.feature_transform) {
+    throw new Error("Model artifact is missing its feature transform");
+  }
+  if (
+    model.coefficient_prior_policy &&
+    model.coefficient_prior_policy !== COEFFICIENT_PRIOR_POLICY_VERSION
+  ) {
+    throw new Error("Model artifact contains an unsupported coefficient prior policy");
+  }
+  if (model.coefficient_prior_policy === COEFFICIENT_PRIOR_POLICY_VERSION) {
+    if (
+      !Array.isArray(model.raw_coefficient_priors) ||
+      model.raw_coefficient_priors.length !== coefficientCount ||
+      !model.raw_coefficient_priors.every(Number.isFinite)
+    ) {
+      throw new Error("Model artifact is missing its raw-feature coefficient priors");
+    }
+    if (
+      !Array.isArray(model.coefficient_priors) ||
+      model.coefficient_priors.length !== coefficientCount ||
+      !model.coefficient_priors.every(Number.isFinite)
+    ) {
+      throw new Error("Model artifact has invalid effective coefficient priors");
+    }
+    const expectedEffectivePriors = model.raw_coefficient_priors.map(
+      (rawPrior, index) =>
+        index === 0 ? rawPrior : rawPrior * model.scales[index - 1],
+    );
+    if (
+      model.coefficient_priors.some((prior, index) => {
+        const expected = expectedEffectivePriors[index];
+        const tolerance = 1e-12 * Math.max(
+          1,
+          Math.abs(prior),
+          Math.abs(expected),
+        );
+        return Math.abs(prior - expected) > tolerance;
+      })
+    ) {
+      throw new Error(
+        "Model effective coefficient priors do not match raw priors and feature scales",
+      );
+    }
+  }
+  if (
+    modelContractHash &&
+    model.coefficient_prior_policy !== COEFFICIENT_PRIOR_POLICY_VERSION
+  ) {
+    throw new Error("Model artifact is missing its raw-feature coefficient priors");
+  }
   return true;
 }
 
 export function predictHazard(model, row) {
-  const x = transform(row, model.means, model.scales);
+  const x = transform(
+    row,
+    model.means,
+    model.scales,
+    model.feature_transform?.standardized_feature_clip ?? Infinity,
+  );
   const linear = dot(model.weights, x);
   const probability = sigmoid(linear);
   if (

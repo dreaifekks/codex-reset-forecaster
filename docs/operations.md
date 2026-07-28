@@ -40,8 +40,9 @@ For Docker Compose, keep the token out of `.env`: write only the token value to
 read-only. An empty `X_BEARER_TOKEN_FILE` keeps direct X disabled.
 
 The default provider follows the configured Tibo identity and configured context
-accounts and queries. It paginates user timelines, preserves native quote/repost
-relations, stores raw payloads, and maintains `since_id` cursors. Override
+accounts and queries. It paginates user timelines, preserves native
+reply/quote/repost relations, stores raw payloads, and maintains `since_id`
+cursors. Override
 `config/default.json` with a file referenced by `RESET_CONFIG`; never put a token in
 that file.
 
@@ -91,6 +92,55 @@ cover the asserted half-open interval, and remain unexpired at assertion time.
 Missing, unreadable, hash-mismatched, wrong-scope, incomplete, or expired
 attestations fail closed to `outcome_only`; the default configuration is `null`.
 An empty X timeline is therefore never a training negative on its own.
+
+### RSSHub exact X timeline
+
+The provider `rsshub_x_timeline` reads configured account posts, replies, and
+reposts from the self-hosted HTTPS origin in `RSSHUB_BASE_URL`. The checked-in live
+profile enables `https://rss.dreaife.tokyo`; the adapter requests the JSON Feed
+form of:
+
+```text
+/twitter/user/<handle>/includeReplies=true&includeRts=1&showSymbolForRetweetAndReply=1&count=100?format=json
+```
+
+Run one collection and normalization pass with:
+
+```bash
+export RESET_CONFIG="$PWD/config/tibo-authority-live.json"
+export RSSHUB_BASE_URL='https://rss.dreaife.tokyo'
+node src/cli.mjs ingest-rsshub
+node src/cli.mjs process
+```
+
+For another profile, set `RSSHUB_X_ENABLED=true` or enable
+`providers.rsshub_x_timeline` in its override. The base URL must be a credential-free
+HTTPS origin. The adapter bounds response size and request time, supports ETag and
+Last-Modified revalidation, and rejects a feed whose account identity, status ID,
+wrapper publication time, reply/RT relation, or quote boundary cannot be verified.
+For reposts it derives `published_at` from the wrapper status snowflake rather than
+copying the original post's feed date.
+
+A reply with a self-contained explicit relevant claim keeps its own status root
+and may be a `primary_statement`. A reply such as “same here” or “still seeing
+this” becomes relevant only after its exact parent is present. That signal must
+include the parent reference, bind the parent evidence root, and record the
+non-primary `derivation: "reply"`; it cannot confirm an outcome or activate
+authority timing. If the parent is missing, the reply remains `pending_context`
+instead of inheriting meaning from a query or feed title.
+
+This is the exact positive-observation path, not an outcome-coverage path. A
+present exact completion statement may become outcome evidence only after the
+normal target/source/phase adjudication. Scheduled, expected, or started
+statements remain signals. A finite or empty feed cannot prove absence and the
+runtime rejects `rsshub_x_timeline` in `model.outcome_coverage_providers`; it never
+creates negative labels.
+
+The default scheduler runs every 10 minutes and the RSSHub source contract uses a
+five-minute refresh interval. Once the source exposes a new item, it is available
+to the next collection/recalculation run without waiting for daily training. This
+cadence is an acquisition target, not a guarantee about X or RSSHub upstream
+availability.
 
 ### Manual author timeline JSONL import
 
@@ -204,6 +254,7 @@ To switch an existing Compose service, edit the ignored `.env` file:
 ```dotenv
 RESET_CONFIG=/app/config/tibo-authority-live.json
 HISTORICAL_MONITOR_ENABLED=true
+RSSHUB_BASE_URL=https://rss.dreaife.tokyo
 ```
 
 Then recreate only the application container while preserving the external data
@@ -219,9 +270,9 @@ curl http://127.0.0.1:8799/api/readiness
 candidates. Do not start a second manual ingestion process while the scheduled
 pipeline is running.
 
-While coverage is waiting, the scheduler keeps the normal hourly cadence and
+While coverage is waiting, the scheduler keeps the normal 10-minute cadence and
 also wakes just after `earliest_recheck_at` when that deadline falls before the
-next hourly run. A due stability recheck bypasses the provider's normal refresh
+next scheduled run. A due stability recheck bypasses the provider's normal refresh
 interval so that this wakeup performs a real second observation.
 
 Do not run `down -v` and do not copy a seed over the existing volume. The outcome
@@ -242,6 +293,7 @@ Useful commands:
 ```bash
 node src/cli.mjs ingest-x
 node src/cli.mjs ingest-gateway --query tibo-reset-signals
+node src/cli.mjs ingest-rsshub
 node src/cli.mjs ingest-archive
 node src/cli.mjs process
 node src/cli.mjs train
@@ -310,19 +362,21 @@ and, unless disabled, once at startup. A run collects and processes first, freez
 an actual post-collection knowledge cutoff, and starts its 168-hour target at the
 next complete hour. `issued_at` is recorded when publication is complete rather
 than copied from the run's start. The scheduler prevents overlapping runs. The
-provider/forecast pipeline retries on the following hour after an error, while
+checked-in `runtime.scheduler_interval_minutes` is 10, so the provider/forecast
+pipeline retries on the following 10-minute boundary after an error, while
 parameter-refit requests remain limited by the configured batch interval.
 
-New provider signals are normalized into the next hourly feature snapshot and may
-change that forecast immediately without changing model parameters. Parameter
-updates are reproducible batch fits at most once per configured 24-hour interval.
+New provider signals are normalized into the next run's hourly-slot feature
+snapshots and may change that forecast within the 10-minute cadence without
+changing model parameters. Parameter updates are reproducible batch fits at most
+once per configured 24-hour interval.
 Each batch uses only labels mature and available at its frozen training cutoff and
 performs the walk-forward evaluation attempt in the same run; there is no separate
 weekly evaluator. Data that arrives while training is running is left for the next
 batch and does not restart the current fit. Failed or non-converged challengers do
 not replace the stable model. A failed retrain request is also rate-limited by the
-same interval instead of launching the optimizer again every hour. A stored
-challenger can be re-evaluated between batch fits as a causal fold becomes
+same interval instead of launching the optimizer again every 10-minute run. A
+stored challenger can be re-evaluated between batch fits as a causal fold becomes
 scorable; this does not retrain it or alter its parameters. If a mature evaluation
 sample fails the quality gate, a validated champion remains active. With no
 validated champion, new forecasts fail closed until a later batch using newly
@@ -343,6 +397,17 @@ The service exposes:
 - `/` for the 4-hour, 24-hour, and 7-day forecast views
 - `/accuracy` for separately labeled walk-forward or mature as-issued metrics,
   calibration, and event history
+
+`GET /api/evidence/recent` returns semantic arrays `core`, `experience`,
+`competition`, and `other_context`, plus a combined `items` view. Experience items
+include `impact`; competition items include `competitive_context`; every item
+states whether it was known at the forecast cutoff, whether it was actually
+feature-eligible, and its exact source/collection provenance. Thus a displayed
+experience report can have `known_at_forecast_cutoff=true` while
+`included_in_forecast=false`. For one compatibility version the endpoint also
+returns deprecated `community`, equal to the aggregate of the three non-core
+groups. New clients must use the semantic arrays; the website no longer treats
+community resonance as a signal.
 
 `/api/health` reports every configured provider separately, including its role,
 last success, latest unresolved error, age threshold, and effective stale state.
@@ -396,7 +461,7 @@ excluded from the running batch and enter the following batch; do not cancel or
 restart training to include them.
 New daily coverage candidates keep their exact recheck wake-up even while the
 top-level pipeline is waiting for evaluation, so a deadline just after an hour
-boundary is not deferred to the following hour.
+boundary is not deferred beyond the next scheduled run.
 
 The canonical data directory is append-only under `data/records`. Immutable
 coverage assertions live under `data/audit`; `data/state/coverage.json` is only a
@@ -433,7 +498,7 @@ curl http://127.0.0.1:8799/api/readiness
 The local production container binds only to loopback on host port `8799`; the
 Cloudflare Tunnel reaches it over the configured external Docker network using the alias
 `codex-reset-forecaster`. It persists `/data` in the explicitly created
-`codex-reset-forecaster-data-v1` volume and enables the hourly scheduler.
+`codex-reset-forecaster-data-v1` volume and enables the 10-minute scheduler.
 
 The volume must be seeded only while it is new and empty. Preserve the complete
 data root together: canonical records, blobs, provider state, coverage,

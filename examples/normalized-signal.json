@@ -7,7 +7,7 @@
   "created_at": "2026-07-23T04:03:20Z",
   "producer": {
     "name": "rule-claim-extractor",
-    "version": "0.2.9",
+    "version": "0.3.1",
     "config_hash": "sha256:example"
   },
   "data": {
@@ -18,7 +18,7 @@
       }
     ],
     "available_at": "2026-07-23T04:03:20Z",
-    "taxonomy_version": "reset-taxonomy/0.2.2",
+    "taxonomy_version": "reset-taxonomy/0.3.0",
     "claim": {
       "event_type": "quota_reset",
       "phase": "scheduled",
@@ -39,7 +39,9 @@
         "timezone_basis": "author_local_inferred",
         "original_text": "later today"
       },
-      "author_certainty": "probable"
+      "author_certainty": "probable",
+      "impact": null,
+      "competitive_context": null
     },
     "provenance": {
       "source_identity_id": "person_example",
@@ -50,12 +52,12 @@
     },
     "extraction": {
       "model": "deterministic-rules",
-      "model_version": "0.2.9",
-      "prompt_version": "reset-extract/rules-0.2.9",
-      "semantic_policy_hash": "sha256:e3a3ff0dacdfc9da48d9494ab2b0bd0f7fca1a55f2dc51cf289347846ef19ccf",
+      "model_version": "0.3.1",
+      "prompt_version": "reset-extract/rules-0.3.1",
+      "semantic_policy_hash": "sha256:6ab696ad3e10716773e34d8b22954f7d7f96616640842c4c80bc0eed717d34da",
       "confidence": 0.91,
       "relevance": {
-        "policy_version": "reset-topic-relevance/2",
+        "policy_version": "reset-topic-relevance/3",
         "decision": "relevant",
         "reason_code": "target_operational_claim",
         "basis": "self",

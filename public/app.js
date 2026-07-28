@@ -19,6 +19,9 @@ const eventTypeLabels = {
   release: "产品发布",
   development_activity: "开发动态",
   competitor_limit_change: "竞品限额调整",
+  competitor_model_release: "竞争模型发布",
+  experience_issue: "体验问题",
+  experience_recovery: "体验恢复",
 };
 
 const phaseLabels = {
@@ -35,10 +38,18 @@ const sourceRoleLabels = {
   official: "官方",
   product_lead: "产品负责人",
   product_team_member: "产品团队",
-  community: "社区",
+  community: "用户报告",
   aggregator: "聚合摘要",
   media: "媒体",
   unknown: "角色未知",
+};
+
+const impactSeverityLabels = {
+  critical: "严重级 · S1",
+  high: "严重级 · S2",
+  medium: "严重级 · S3",
+  low: "严重级 · S4",
+  unknown: "严重级待确认",
 };
 
 const publicationBlockerLabels = {
@@ -665,6 +676,24 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     const pending = item.pending_next_forecast
       ? "<span class=\"signal-badge pending\">待下一轮纳入</span>"
       : "";
+    const impact = item.impact?.severity
+      ? `<span class="signal-badge severity-${escapeHtml(item.impact.severity)}">${escapeHtml(
+          impactSeverityLabels[item.impact.severity] ?? "严重级待确认",
+        )}</span>`
+      : "";
+    const competitionStage = item.competitive_context?.stage
+      ? `<span class="signal-badge secondary">${escapeHtml(
+          item.competitive_context.stage === "rolled_out"
+            ? "已发布"
+            : item.competitive_context.stage === "general_availability"
+              ? "正式可用"
+              : item.competitive_context.stage === "preview"
+                ? "预览"
+                : item.competitive_context.stage === "rumor"
+                  ? "传闻"
+                  : "已宣布",
+        )}</span>`
+      : "";
     const preview = document.createElement("button");
     preview.className = "signal-preview";
     preview.type = "button";
@@ -677,7 +706,7 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
       `查看 ${sourceDisplayName} ${formatCompactTime(signalTime)} 的${eventType}完整动态`,
     );
     preview.title = "点击查看完整内容";
-    preview.innerHTML = `<span class="signal-head"><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${pending}</span><time title="系统可用于模型的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></span><span class="signal-card-text">${escapeHtml(source?.text ?? "暂无原始文本")}</span>`;
+    preview.innerHTML = `<span class="signal-head"><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${impact}${competitionStage}${pending}</span><time title="系统首次获取并可用于分析的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></span><span class="signal-card-text">${escapeHtml(source?.text ?? "暂无原始文本")}</span>`;
     preview.addEventListener("click", () => openSignalDialog(item, preview));
     row.append(preview);
 
@@ -1009,19 +1038,24 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
 function renderEvidenceResponse(result) {
   if (!result.ok || !result.data) {
     setListMessage("#core-signal-list", `核心信号加载失败：${result.error}`, "error");
-    setListMessage("#community-signal-list", `社区参考加载失败：${result.error}`, "error");
+    setListMessage("#experience-signal-list", `体验问题加载失败：${result.error}`, "error");
+    setListMessage("#competition-signal-list", `竞争动态加载失败：${result.error}`, "error");
     setListMessage("#pending-signal-list", `待纳入信号加载失败：${result.error}`, "error");
     return;
   }
   const evidence = result.data;
   const currentItems = Array.isArray(evidence.items) ? evidence.items : [];
   const core = evidence.core ?? currentItems.filter(isCoreEvidence);
-  const community = evidence.community ?? currentItems.filter((item) => !isCoreEvidence(item));
+  const experience = evidence.experience ??
+    currentItems.filter((item) => item.category === "experience");
+  const competition = evidence.competition ??
+    currentItems.filter((item) => item.category === "competition");
   const pending = evidence.pending_next_forecast?.items ?? evidence.post_cutoff?.items ?? [];
   document.querySelector("#evidence-cutoff").textContent =
     `仅显示信息截止 ${formatCompactTime(evidence.knowledge_cutoff)} 前已知的信号。`;
   renderEvidence("#core-signal-list", core, "截止时间前暂无新的精确官方核心信号", "core");
-  renderEvidence("#community-signal-list", community, "截止时间前暂无新的社区参考", "community");
+  renderEvidence("#experience-signal-list", experience, "截止时间前暂无新的 Codex 体验问题", "experience");
+  renderEvidence("#competition-signal-list", competition, "截止时间前暂无新的竞争模型发布", "competition");
   renderEvidence("#pending-signal-list", pending, "当前没有晚于截止时间的新信号", "pending");
 }
 
@@ -1030,26 +1064,33 @@ let loading = false;
 let lastLoadedAt = 0;
 let latestForecastCutoff = null;
 
-function scheduleHourlyRefresh() {
+function scheduleCadenceRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
   const current = new Date();
-  const currentHour = new Date(current);
-  currentHour.setMinutes(0, 0, 0);
-  const cutoffMs = Date.parse(latestForecastCutoff);
-  const waitingForCurrentHour = (
-    current.getMinutes() < 10 &&
-    Number.isFinite(cutoffMs) &&
-    cutoffMs < currentHour.getTime()
+  const currentCadence = new Date(current);
+  currentCadence.setMinutes(
+    Math.floor(current.getMinutes() / 10) * 10,
+    0,
+    0,
   );
-  if (waitingForCurrentHour) {
+  const cutoffMs = Date.parse(latestForecastCutoff);
+  const waitingForCurrentCadence = (
+    current.getTime() - currentCadence.getTime() < 2 * 60_000 &&
+    Number.isFinite(cutoffMs) &&
+    cutoffMs < currentCadence.getTime()
+  );
+  if (waitingForCurrentCadence) {
     refreshTimer = setTimeout(() => {
       void load();
     }, 45_000);
     return;
   }
   const next = new Date(current);
-  next.setMinutes(0, 12, 0);
-  next.setHours(next.getHours() + 1);
+  next.setMinutes(
+    Math.floor(current.getMinutes() / 10) * 10 + 10,
+    12,
+    0,
+  );
   refreshTimer = setTimeout(() => {
     void load();
   }, Math.max(1_000, next.getTime() - current.getTime()));
@@ -1114,7 +1155,7 @@ async function load() {
   } finally {
     lastLoadedAt = Date.now();
     loading = false;
-    scheduleHourlyRefresh();
+    scheduleCadenceRefresh();
   }
 }
 

@@ -20,6 +20,7 @@ services:
       X_SEARCH_GATEWAY_URL: "${X_SEARCH_GATEWAY_URL:-http://host.docker.internal:8787}"
       X_SEARCH_GATEWAY_PROVIDER: "${X_SEARCH_GATEWAY_PROVIDER:-grokbuild}"
       X_SEARCH_GATEWAY_TOKEN_FILE: "${X_SEARCH_GATEWAY_TOKEN_FILE:-/run/secrets/x-search-gateway-token}"
+      RSSHUB_BASE_URL: "${RSSHUB_BASE_URL:-https://rss.dreaife.tokyo}"
       HISTORICAL_MONITOR_ENABLED: "${HISTORICAL_MONITOR_ENABLED:-false}"
       HISTORICAL_MONITOR_URL: "${HISTORICAL_MONITOR_URL:-https://codex-resets.com/}"
       RESET_CONFIG: "${RESET_CONFIG:-/app/config/default.json}"

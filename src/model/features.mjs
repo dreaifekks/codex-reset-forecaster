@@ -25,6 +25,14 @@ import {
   adequateCoverageAssertionsAsOf,
   coverageAssertionRevisions,
 } from "./coverage-as-of.mjs";
+import {
+  isResetTimingSignal,
+  isResetTimingSignalActiveAt,
+} from "./signal-lifecycle.mjs";
+import {
+  isAuthorityTimingSupportSignal,
+  matchesAuthorityTimingTarget,
+} from "./authority-timing-eligibility.mjs";
 
 export const FEATURE_NAMES = [
   "weekly_sin_1",
@@ -39,11 +47,8 @@ export const FEATURE_NAMES = [
   "daily_cos_2",
   "renewal_periodic_kernel",
   "asserted_time_overlap",
-  "official_reset_intent_decay",
   "official_incident_decay",
-  "community_momentum",
-  "community_disagreement",
-  "competitor_release_decay",
+  "competitor_model_release_decay",
 ];
 
 function exponentialDecay(hours, halfLife) {
@@ -113,6 +118,7 @@ function independentLatest(signals) {
     ["independent_observation", 3],
     ["quotes", 1],
     ["repost", 1],
+    ["reply", 1],
     ["summarizes", 1],
     ["unknown", 0],
   ]);
@@ -151,6 +157,33 @@ function exactRefKey(ref) {
   return `${ref.record_id}@${ref.revision}`;
 }
 
+function matchesTargetScope(signal, targetScope) {
+  return matchesAuthorityTimingTarget(signal, targetScope);
+}
+
+function usesExactAuthorityTimingPath(
+  signal,
+  observationsByExactRef,
+  confirmationIdentities,
+  targetScope,
+  authorityTimingPolicy,
+) {
+  const observation = observationsByExactRef.get(
+    exactRefKey(signal?.data?.observation_refs?.[0] ?? {}),
+  );
+  return isAuthorityTimingSupportSignal({
+    signal,
+    observation,
+    policy: authorityTimingPolicy,
+    confirmationIdentityIds: confirmationIdentities,
+    targetScope,
+  });
+}
+
+function isPrimaryStatement(signal) {
+  return signal.data.provenance?.derivation === "primary_statement";
+}
+
 export function matchesExpectedExtractor(signal, expectedExtractor) {
   return matchesExtractorContract(signal, expectedExtractor);
 }
@@ -176,6 +209,7 @@ export function featureVectorAt({
   confirmationIdentityIds = new Set(),
   expectedExtractor = null,
   targetScope = null,
+  authorityTimingPolicy = null,
   outcomeCoverageProviders = null,
   excludedSourceRecordIds = new Set(),
   excludedIndependenceGroupIds = new Set(),
@@ -232,6 +266,15 @@ export function featureVectorAt({
       }),
     )
     .sort((a, b) => a.data.occurred_time_range.start.localeCompare(b.data.occurred_time_range.start));
+  const activeResetTimingSignals = new Set(
+    knownSignals.filter((signal) =>
+      matchesTargetScope(signal, targetScope) &&
+      isResetTimingSignalActiveAt(signal, {
+        outcomes: knownOutcomes,
+        targetTime: target,
+      })
+    ),
+  );
   const latestOutcome = knownOutcomes
     .filter((outcome) => rangeMidpoint(outcome.data.occurred_time_range) < target)
     .at(-1);
@@ -279,13 +322,6 @@ export function featureVectorAt({
 
   const supports = recent.filter(({ signal }) => signal.data.claim.stance === "supports");
   const contradicts = recent.filter(({ signal }) => signal.data.claim.stance === "contradicts");
-  const communityRecent4 = recent.filter(({ signal, age }) =>
-    signal.data.provenance.source_role === "community" && age <= 4,
-  ).length;
-  const communityPrior20 = recent.filter(({ signal, age }) =>
-    signal.data.provenance.source_role === "community" && age > 4 && age <= 24,
-  ).length;
-  const communityTotal = communityRecent4 + communityPrior20;
   const developmentAges = recent
     .filter(({ signal }) => signal.data.claim.event_type === "development_activity")
     .map(({ age }) => age);
@@ -321,13 +357,16 @@ export function featureVectorAt({
     official_reset_intent_decay: supports.reduce((sum, { signal, age }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
+        isPrimaryStatement(signal) &&
         ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type) &&
-        ["scheduled", "expected"].includes(signal.data.claim.phase)
+        ["scheduled", "expected"].includes(signal.data.claim.phase) &&
+        activeResetTimingSignals.has(signal)
         ? exponentialDecay(age, 24)
         : 0), 0),
     official_reset_activity_decay: supports.reduce((sum, { signal, age }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
+        isPrimaryStatement(signal) &&
         ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type) &&
         ["started", "completed"].includes(signal.data.claim.phase)
         ? exponentialDecay(age, 18)
@@ -335,6 +374,7 @@ export function featureVectorAt({
     official_incident_decay: supports.reduce((sum, { signal, age }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
+        isPrimaryStatement(signal) &&
         ["incident", "capacity_restore"].includes(signal.data.claim.event_type)
         ? exponentialDecay(age, 24)
         : 0), 0),
@@ -347,32 +387,44 @@ export function featureVectorAt({
     independent_contradict_decay: contradicts.reduce((sum, { age }) => sum + exponentialDecay(age, 18), 0),
     asserted_time_overlap: knownSignals.reduce((sum, signal) => {
       if (signal.data.claim.stance !== "supports") return sum;
+      if (!matchesTargetScope(signal, targetScope)) return sum;
+      if (
+        usesExactAuthorityTimingPath(
+          signal,
+          observationsByExactRef,
+          confirmationIdentityIds,
+          targetScope,
+          authorityTimingPolicy,
+        )
+      ) return sum;
+      if (
+        isResetTimingSignal(signal) &&
+        !activeResetTimingSignals.has(signal)
+      ) return sum;
       const range = signal.data.claim.asserted_time_range;
       if (!range || Date.parse(range.start) >= targetEnd.getTime() || Date.parse(range.end) <= target.getTime()) {
         return sum;
       }
       const authority = ["official", "product_lead", "product_team_member"].includes(
         signal.data.provenance.source_role,
-      ) ? 1 : 0.35;
+      ) && isPrimaryStatement(signal) ? 1 : 0.35;
       return sum + authority;
     }, 0),
-    community_momentum: Math.log1p(communityRecent4) - Math.log1p(communityPrior20 / 5),
-    community_disagreement: communityTotal === 0
-      ? 0
-      : recent.filter(({ signal, age }) =>
-        signal.data.provenance.source_role === "community" &&
-        signal.data.claim.stance === "contradicts" &&
-        age <= 24,
-      ).length / communityTotal,
     openai_release_decay: recent.reduce((sum, { signal, age }) =>
       sum + (signal.data.claim.event_type === "release" && signal.data.claim.scope.vendor === "openai"
         ? exponentialDecay(age, 36)
         : 0), 0),
-    competitor_release_decay: recent.reduce((sum, { signal, age }) =>
-      sum + (["release", "competitor_limit_change"].includes(signal.data.claim.event_type) &&
+    competitor_model_release_decay: Math.max(0, ...recent.map(({ signal, age }) =>
+      ["competitor_model_release", "competitor_limit_change"].includes(
+        signal.data.claim.event_type,
+      ) &&
+      ["direct", "adjacent"].includes(
+        signal.data.claim.competitive_context?.relevance,
+      ) &&
+      signal.data.claim.competitive_context?.stage !== "rumor" &&
       signal.data.claim.scope.vendor === "other"
         ? exponentialDecay(age, 36)
-        : 0), 0),
+        : 0)),
     development_activity_anomaly:
       Math.log1p(development4h) - Math.log1p(developmentPrior68h / 17),
     incident_decay: recent.reduce((sum, { signal, age }) =>
@@ -460,13 +512,14 @@ export async function buildForecastFeatureSnapshots(store, config, {
       confirmationIdentityIds: confirmationIds,
       expectedExtractor: extractor,
       targetScope: config.target,
+      authorityTimingPolicy: config.model.authority_timing,
       outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
     });
     const candidate = createRecord({
       recordType: "feature_snapshot",
       naturalKey: `${config.config_hash}:${config.feature_schema_version}:${toUtcIso(cutoff)}:${toUtcIso(targetStart)}`,
       createdAt,
-      producer: producer("as-of-feature-builder", "0.3.0", {
+      producer: producer("as-of-feature-builder", "0.3.1", {
         config_hash: config.config_hash,
         feature_schema_version: config.feature_schema_version,
         taxonomy_version: config.taxonomy_version,

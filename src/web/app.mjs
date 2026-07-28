@@ -10,7 +10,9 @@ import {
   assessEvaluationCompatibility,
   getReadiness,
 } from "../runtime/readiness.mjs";
-import { selectCurrentSignals } from "../pipeline/signal-selection.mjs";
+import {
+  selectCurrentRelevantSignals,
+} from "../pipeline/signal-selection.mjs";
 import { verifiedCoverageAssertionRevisions } from "../pipeline/coverage.mjs";
 import {
   buildOutcomeEligibilityContext,
@@ -211,9 +213,11 @@ function isCoreSignal(signal, observation, confirmationIdentityIds) {
 }
 
 export function evidenceTierForSignal(signal, observation, config) {
+  if (signal.data.claim.impact) return "experience";
+  if (signal.data.claim.competitive_context) return "competition";
   return isCoreSignal(signal, observation, configuredConfirmationIdentityIds(config))
     ? "core"
-    : "community";
+    : "other_context";
 }
 
 const EVIDENCE_SOURCE_RANK = new Map([
@@ -231,6 +235,7 @@ const EVIDENCE_DERIVATION_RANK = new Map([
   ["independent_observation", 3],
   ["quotes", 1],
   ["repost", 1],
+  ["reply", 1],
   ["summarizes", 1],
   ["unknown", 0],
 ]);
@@ -627,14 +632,14 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         );
         const knowledgeCutoff = prediction?.data.knowledge_cutoff ?? now().toISOString();
         const cutoffMs = Date.parse(knowledgeCutoff);
-        const current = sortEvidenceForDisplay(uniqueEvidenceRoots(selectCurrentSignals(
+        const current = sortEvidenceForDisplay(uniqueEvidenceRoots(selectCurrentRelevantSignals(
           currentExtractorSignals.filter((signal) =>
             Date.parse(signal.data.available_at) <= cutoffMs &&
             Date.parse(signal.created_at) <= cutoffMs,
           ),
         )), observationsByRef);
         const pending = sortEvidenceForDisplay(uniqueEvidenceRoots(
-          selectCurrentSignals(currentExtractorSignals)
+          selectCurrentRelevantSignals(currentExtractorSignals)
             .filter((signal) =>
               Date.parse(signal.data.available_at) > cutoffMs ||
               Date.parse(signal.created_at) > cutoffMs,
@@ -646,22 +651,30 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           );
           return {
             signal,
-            core: evidenceTierForSignal(signal, observation, config) === "core",
+            tier: evidenceTierForSignal(signal, observation, config),
           };
         });
         const toItem = (signal, pendingNextForecast = false) => {
           const observation = observationsByRef.get(
             exactRecordKey(signal.data.observation_refs[0]),
           );
+          const forecastFeatureEligible =
+            signal.data.provenance.feature_eligible !== false;
           return {
             signal_ref: { record_id: signal.record_id, revision: signal.revision },
             available_at: signal.data.available_at,
             created_at: signal.created_at,
-            included_in_forecast: !pendingNextForecast,
+            known_at_forecast_cutoff: !pendingNextForecast,
+            included_in_forecast:
+              !pendingNextForecast && forecastFeatureEligible,
             pending_next_forecast: pendingNextForecast,
             event_type: signal.data.claim.event_type,
             phase: signal.data.claim.phase,
             scope: signal.data.claim.scope,
+            impact: signal.data.claim.impact ?? null,
+            competitive_context: signal.data.claim.competitive_context ?? null,
+            category: evidenceTierForSignal(signal, observation, config),
+            forecast_feature_eligible: forecastFeatureEligible,
             source_role: signal.data.provenance.source_role,
             source_identity_id: signal.data.provenance.source_identity_id,
             derivation: signal.data.provenance.derivation,
@@ -671,22 +684,32 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
               display_handle: observation.data.author.display_handle,
               text: observation.data.content.text,
               published_at: observationPublishedAt(observation),
+              first_seen_at: observation.data.first_seen_at,
+              ingest_provider: observation.data.ingest_provider,
             } : null,
           };
         };
         const partition = (tiered, pendingNextForecast) => {
-          const core = tiered.filter((item) => item.core)
+          const byTier = (tier) => tiered.filter((item) => item.tier === tier)
             .map((item) => item.signal)
             .slice(0, 6)
             .map((signal) => toItem(signal, pendingNextForecast));
-          const community = tiered.filter((item) => !item.core)
-            .map((item) => item.signal)
-            .slice(0, 6)
-            .map((signal) => toItem(signal, pendingNextForecast));
+          const core = byTier("core");
+          const experience = byTier("experience");
+          const competition = byTier("competition");
+          const otherContext = byTier("other_context");
+          const communityCompatibility = [
+            ...experience,
+            ...competition,
+            ...otherContext,
+          ];
           return {
             core,
-            community,
-            items: sortEvidenceItems([...core, ...community]),
+            experience,
+            competition,
+            other_context: otherContext,
+            community: communityCompatibility,
+            items: sortEvidenceItems([...core, ...communityCompatibility]),
           };
         };
         const forecastEvidence = partition(withTier(current), false);
@@ -697,7 +720,22 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           : view === "all"
             ? {
                 core: [...forecastEvidence.core, ...pendingEvidence.core],
-                community: [...forecastEvidence.community, ...pendingEvidence.community],
+                experience: [
+                  ...forecastEvidence.experience,
+                  ...pendingEvidence.experience,
+                ],
+                competition: [
+                  ...forecastEvidence.competition,
+                  ...pendingEvidence.competition,
+                ],
+                other_context: [
+                  ...forecastEvidence.other_context,
+                  ...pendingEvidence.other_context,
+                ],
+                community: [
+                  ...forecastEvidence.community,
+                  ...pendingEvidence.community,
+                ],
                 items: sortEvidenceItems([
                   ...forecastEvidence.items,
                   ...pendingEvidence.items,

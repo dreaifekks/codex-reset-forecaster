@@ -42,11 +42,26 @@ The context set may include:
 
 - other Tibo posts available before a forecast cutoff;
 - OpenAI/Codex product, release, capacity, and incident discussion;
-- independent community discussion and changes in its intensity or disagreement;
-- competing-vendor model releases, quota changes, and related ecosystem events.
+- Codex experience issues and recoveries, classified by severity, lifecycle,
+  affected scope, affected surface, and workaround;
+- verifiable competing-model and coding-agent announcements, previews, general
+  availability, rollouts, and related limit changes.
 
-Quotes, reposts, copied articles, and summaries are collapsed to independent
-evidence roots. Raw post count is not a model feature.
+Context-only replies, quotes, reposts, copied articles, and summaries are collapsed
+to their independent evidence roots. Community volume, momentum, resonance,
+disagreement, and raw post count are not model features. Experience reports remain
+visible as structured evidence even when they are not yet eligible for the
+forecast vector.
+
+The live profile also enables a self-hosted RSSHub X timeline route for configured
+accounts. Its exact status IDs, author identity, wrapper text, and native
+reply/quote/repost relations make it a deterministic evidence origin for posts,
+replies, and reposts that are present in the feed. A self-contained relevant reply
+may be primary. A reply that needs its parent to become relevant must bind that
+parent's evidence root with `derivation: "reply"`, so it cannot confirm an outcome
+or activate authority timing. Only an adjudicated qualifying completion statement
+can settle a positive outcome. The finite feed cannot prove absence, so RSSHub
+never provides outcome coverage or negative labels.
 
 For development-time outcome discovery, the historical-monitor adapter may import
 an external daily archive only after it verifies the configured author, exact
@@ -72,7 +87,7 @@ configured provider adapters
   -> append-only raw observations
   -> normalized claims
   -> evidence dependency and event linking
-  -> hourly as-of feature snapshots
+  -> 10-minute refreshes of hourly-slot as-of feature snapshots
   -> hourly hazard model
   -> one 168-hour forecast
   -> website views and later settlement
@@ -109,13 +124,18 @@ model. Candidate features include:
 - a smooth renewal-periodic kernel over prior confirmed reset gaps, UTC hour of
   day, and hour of week;
 - overlap with an explicitly asserted future reset interval;
-- recency-decayed, pre-confirmation configured-author reset intent and incidents;
-- independent community evidence volume, growth, and disagreement;
-- recent competing-vendor model or quota events.
+- recency-decayed configured-author incidents, while exact timed reset intent is
+  handled once by the authority conditioner rather than duplicated in the
+  learned vector;
+- a single recency-decayed value for a recent direct or adjacent non-rumor
+  competing-model, coding-agent, or limit event.
 
-Cross-vendor and community effects start strongly shrunk toward zero and remain
-only if walk-forward evaluation shows stable value. Deep learning and reinforcement
-learning are outside the MVP.
+The competitor effect starts strongly shrunk toward zero and remains only if
+walk-forward evaluation shows stable value. Multiple posts derived from the same
+event cannot add probability mass. Codex experience severity is initially an
+audit/display taxonomy rather than a probability feature; promoting it later
+requires a separately versioned challenger and causal ablation. Deep learning and
+reinforcement learning are outside the MVP.
 
 Provider health, delay, and coverage remain separate data-quality outputs. They
 must not enter the probability vector, because observation quality can otherwise
@@ -164,6 +184,12 @@ zone, source freshness, current model version, and provisional or validated stat
 A provisional page states explicitly that the 80% event-window-recall threshold has
 not yet been validated; it does not turn an exploratory replay score into a
 performance claim.
+
+The recent-evidence endpoint and page separate `core`, `experience`,
+`competition`, and `other_context`. Experience items expose their structured
+`impact`; competition items expose `competitive_context`. A `community` array is
+retained for one API compatibility version as a deprecated aggregate of the
+non-core groups, but the UI does not present it as community resonance.
 
 ## Historical evaluation page
 
@@ -222,10 +248,10 @@ its probabilities or retraining its model.
 - Existing eligible historical data can immediately produce a frozen-cutoff,
   batch-fit provisional forecast; the system does not wait for future wall-clock
   collection before beginning that fit.
-- New provider signals update hourly as-of features and predictions. Model
-  parameters are batch-refit at most every 24 hours from labels mature at the
-  training cutoff; data arriving during a fit enters the next batch without
-  restarting it.
+- New provider signals update hourly-slot as-of features and predictions on the
+  10-minute collection/recalculation cadence. Model parameters are batch-refit at
+  most every 24 hours from labels mature at the training cutoff; data arriving
+  during a fit enters the next batch without restarting it.
 - Provisional use does not imply that 80% recall has been measured or validated.
   The page exposes that status while causal/as-issued evidence accumulates in the
   background.

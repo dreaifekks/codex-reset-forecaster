@@ -9,7 +9,13 @@ import { assertCanonicalRecord } from "../src/core/validate-record.mjs";
 import { rawObservationFromItem } from "../src/providers/raw.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
 import { deriveProbabilitySlots } from "../src/model/forecast.mjs";
-import { predictHazard, trainLogisticHazard } from "../src/model/logistic-hazard.mjs";
+import {
+  COEFFICIENT_PRIOR_POLICY_VERSION,
+  FEATURE_TRANSFORM_VERSION,
+  assertModelCompatibility,
+  predictHazard,
+  trainLogisticHazard,
+} from "../src/model/logistic-hazard.mjs";
 import { startScheduler } from "../src/runtime/scheduler.mjs";
 import { latestRevisionsAsOf } from "../src/core/revisions.mjs";
 import { addCoverageInterval } from "../src/pipeline/coverage.mjs";
@@ -23,6 +29,10 @@ import { sha256, stableStringify } from "../src/core/hash.mjs";
 import { extractorContract } from "../src/core/extractor-contract.mjs";
 import { DEMO_CONFIG_OVERRIDES } from "../src/demo/config.mjs";
 import { modelContractHash } from "../src/model/contract.mjs";
+import {
+  AS_OF_MODE,
+  latestOutcomesAsOf,
+} from "../src/model/as-of.mjs";
 import {
   OUTCOME_ADJUDICATOR_VERSION,
   OUTCOME_LABEL_POLICY_VERSION,
@@ -54,7 +64,15 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
-  assert.equal(live.feature_schema_version, "reset-features/0.2.8");
+  assert.equal(live.config_version, "provider-config/0.3.1");
+  assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.0");
+  assert.equal(live.feature_schema_version, "reset-features/0.3.0");
+  assert.equal(live.deduplication_version, "reset-dedup/0.2.3");
+  assert.equal(live.extractor.model_version, "0.3.1");
+  assert.equal(
+    live.extractor.prompt_version,
+    "reset-extract/rules-0.3.1",
+  );
   assert.equal(
     live.model.coefficient_priors.renewal_periodic_kernel ?? 0,
     0,
@@ -297,8 +315,47 @@ test("ridge hazard retains an explicit coefficient prior when evidence is sparse
     maxIterations: 300,
     coefficientPriors: { intent: 0.5 },
   });
-  assert.equal(informed.coefficient_priors[1], 0.5);
+  assert.equal(
+    informed.coefficient_prior_policy,
+    COEFFICIENT_PRIOR_POLICY_VERSION,
+  );
+  assert.equal(informed.raw_coefficient_priors[1], 0.5);
+  assert.equal(
+    informed.coefficient_priors[1],
+    informed.raw_coefficient_priors[1] * informed.scales[0],
+  );
+  const inconsistent = structuredClone(informed);
+  delete inconsistent.artifact_hash;
+  inconsistent.coefficient_priors[1] += 0.25;
+  assert.throws(
+    () => assertModelCompatibility(inconsistent, {
+      featureNames: ["intent"],
+    }),
+    /effective coefficient priors/,
+  );
   assert.ok(informed.weights[1] > neutral.weights[1]);
+});
+
+test("live inference clips extreme standardized feature drift", () => {
+  const model = {
+    feature_names: ["rare_intent"],
+    means: [0],
+    scales: [0.000001],
+    weights: [-6, 0.2],
+    covariance: null,
+    uncertainty: {
+      status: "unavailable",
+      reason: "test",
+    },
+    feature_transform: {
+      version: FEATURE_TRANSFORM_VERSION,
+      standardized_feature_clip: 8,
+    },
+  };
+  const result = predictHazard(model, [1]);
+  assert.ok(result.probability > 0.01);
+  assert.ok(result.probability < 0.02);
+  assert.equal(result.interval80, null);
 });
 
 test("renewal-periodic baseline uses only outcomes known by the cutoff", () => {
@@ -461,6 +518,32 @@ test("hourly scheduler records success and does not overlap manual runs", async 
   assert.equal(state.last_error, null);
   assert.equal(state.current_run_started_at, null);
   assert.equal(state.last_timing.knowledge_cutoff, "2026-07-22T18:30:00.000Z");
+});
+
+test("scheduler can refresh collection and forecasts on ten-minute boundaries", async (t) => {
+  const store = await temporaryStore(t);
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: {
+        run_on_start: false,
+        retrain_interval_hours: 24,
+        scheduler_delay_seconds: 5,
+        scheduler_interval_minutes: 10,
+      },
+    },
+    now: () => new Date("2026-07-22T18:31:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "completed",
+      training: {},
+      forecast: { prediction: { record_id: "pred_ten_minute" } },
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-22T18:31:00.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+  assert.equal(scheduler.nextRunAt, "2026-07-22T18:40:05.000Z");
 });
 
 test("hourly scheduler records coverage observation as waiting, not failure", async (t) => {
@@ -775,6 +858,49 @@ test("as-of selection cannot leak a later correction into an old cutoff", () => 
   assert.equal(current[0].revision, 2);
 });
 
+test("as-of selection preserves millisecond precision for Date cutoffs", () => {
+  const records = [{
+    record_id: "millisecond-boundary",
+    revision: 1,
+    created_at: "2026-07-28T05:56:29.293Z",
+    data: { available_at: "2026-07-28T05:56:29.293Z" },
+  }];
+  assert.equal(
+    latestRevisionsAsOf(
+      records,
+      new Date("2026-07-28T05:56:29.292Z"),
+      (record) => record.data.available_at,
+    ).length,
+    0,
+  );
+  assert.equal(
+    latestRevisionsAsOf(
+      records,
+      new Date("2026-07-28T05:56:29.293Z"),
+      (record) => record.data.available_at,
+    ).length,
+    1,
+  );
+  const outcome = {
+    record_id: "outcome-millisecond-boundary",
+    revision: 1,
+    supersedes: null,
+    created_at: "2026-07-28T05:56:29.293Z",
+    data: {
+      known_at: "2026-07-28T05:56:29.293Z",
+      replay_available_at: null,
+    },
+  };
+  assert.equal(
+    latestOutcomesAsOf(
+      [outcome],
+      new Date("2026-07-28T05:56:29.293Z"),
+      AS_OF_MODE.ARCHIVE_REPLAY,
+    ).length,
+    1,
+  );
+});
+
 test("outcome-only archive coverage never proves real negative-label readiness", async (t) => {
   const store = await temporaryStore(t);
   const config = await loadConfig({ overrides: {
@@ -854,7 +980,78 @@ test("X Search Gateway cannot be configured as exhaustive outcome coverage", asy
         outcome_coverage_providers: ["x_search_gateway_socialdata"],
       },
     } }),
-    /cannot use X Search Gateway providers/,
+    /cannot use discovery-only gateway or RSSHub timeline providers/,
+  );
+});
+
+test("RSSHub exact timelines cannot be configured as outcome coverage", async () => {
+  await assert.rejects(
+    loadConfig({ overrides: {
+      model: {
+        outcome_coverage_providers: ["rsshub_x_timeline"],
+      },
+    } }),
+    /finite feeds are not exhaustive coverage/,
+  );
+});
+
+test("RSSHub provider identity and capabilities cannot be reconfigured", async () => {
+  await assert.rejects(
+    loadConfig({ overrides: {
+      providers: {
+        rsshub_x_timeline: {
+          provider_name: "x",
+        },
+      },
+    } }),
+    /fixed exact-evidence, non-coverage contract/,
+  );
+  await assert.rejects(
+    loadConfig({ overrides: {
+      providers: {
+        rsshub_x_timeline: {
+          capabilities: ["context_discovery"],
+        },
+      },
+    } }),
+    /fixed exact-evidence, non-coverage contract/,
+  );
+  await assert.rejects(
+    loadConfig({ overrides: {
+      providers: {
+        rsshub_x_timeline: {
+          include_replies: false,
+        },
+      },
+    } }),
+    /fixed exact-evidence, non-coverage contract/,
+  );
+});
+
+test("RSSHub timeline freshness is exact evidence without coverage authority", async (t) => {
+  const store = await temporaryStore(t);
+  const now = new Date("2026-07-26T10:00:00Z");
+  const config = await loadConfig({ overrides: {
+    providers: {
+      x: { enabled: false },
+      rsshub_x_timeline: { enabled: true },
+    },
+  } });
+  await store.writeState("rsshub-x-timeline-provider", {
+    last_success_at: now.toISOString(),
+    last_error: null,
+  });
+  const freshness = await getProviderFreshness(store, config, now);
+  assert.deepEqual(
+    freshness.providers.rsshub_x_timeline.roles,
+    ["exact", "context"],
+  );
+  assert.equal(freshness.providers.rsshub_x_timeline.status, "fresh");
+  assert.ok(freshness.groups.exact.providers.includes("rsshub_x_timeline"));
+  assert.ok(
+    !freshness.groups.required_outcome.providers.includes(
+      "rsshub_x_timeline",
+    ),
   );
 });
 

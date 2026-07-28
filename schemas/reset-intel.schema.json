@@ -345,7 +345,10 @@
                 "incident",
                 "release",
                 "development_activity",
-                "competitor_limit_change"
+                "competitor_limit_change",
+                "experience_issue",
+                "experience_recovery",
+                "competitor_model_release"
               ]
             },
             "phase": {
@@ -359,7 +362,113 @@
                 { "type": "null" }
               ]
             },
-            "author_certainty": { "enum": ["explicit", "probable", "possible", "unknown"] }
+            "author_certainty": { "enum": ["explicit", "probable", "possible", "unknown"] },
+            "impact": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "category",
+                    "severity",
+                    "lifecycle",
+                    "affected_scope",
+                    "affected_surfaces",
+                    "workaround",
+                    "evidence_basis"
+                  ],
+                  "properties": {
+                    "category": {
+                      "enum": [
+                        "availability",
+                        "performance",
+                        "correctness",
+                        "tool_execution",
+                        "session_state",
+                        "quota_accounting",
+                        "auth",
+                        "client_ux",
+                        "other"
+                      ]
+                    },
+                    "severity": {
+                      "enum": ["critical", "high", "medium", "low", "unknown"]
+                    },
+                    "lifecycle": {
+                      "enum": ["active", "investigating", "mitigating", "resolved", "unknown"]
+                    },
+                    "affected_scope": {
+                      "enum": ["individual", "multiple_users", "platform", "unknown"]
+                    },
+                    "affected_surfaces": {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items": {
+                        "enum": [
+                          "cli",
+                          "ide",
+                          "api",
+                          "web",
+                          "agent_loop",
+                          "tool_use",
+                          "mcp",
+                          "auth",
+                          "fast_mode",
+                          "unknown"
+                        ]
+                      }
+                    },
+                    "workaround": {
+                      "enum": ["none", "partial", "available", "unknown"]
+                    },
+                    "evidence_basis": {
+                      "enum": [
+                        "first_party_report",
+                        "independent_corroboration",
+                        "official_incident",
+                        "reproduction",
+                        "unknown"
+                      ]
+                    }
+                  }
+                },
+                { "type": "null" }
+              ]
+            },
+            "competitive_context": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "relevance", "stage"],
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "model_release",
+                        "coding_agent_release",
+                        "capability_release",
+                        "limit_change",
+                        "pricing_change"
+                      ]
+                    },
+                    "relevance": {
+                      "enum": ["direct", "adjacent", "weak", "unknown"]
+                    },
+                    "stage": {
+                      "enum": [
+                        "announced",
+                        "preview",
+                        "general_availability",
+                        "rolled_out",
+                        "rumor"
+                      ]
+                    }
+                  }
+                },
+                { "type": "null" }
+              ]
+            }
           }
         },
         "provenance": {
@@ -378,7 +487,7 @@
               "enum": ["official", "product_lead", "product_team_member", "employee", "community", "aggregator", "unknown"]
             },
             "root_evidence_id": { "type": "string", "minLength": 1 },
-            "derivation": { "enum": ["primary_statement", "independent_observation", "quotes", "repost", "summarizes", "unknown"] },
+            "derivation": { "enum": ["primary_statement", "independent_observation", "quotes", "repost", "reply", "summarizes", "unknown"] },
             "independence_group_id": { "type": "string", "minLength": 1 },
             "feature_eligible": { "type": "boolean" },
             "selection_bias": { "type": ["string", "null"] },
@@ -475,7 +584,7 @@
             "properties": {
               "signal_ref": { "$ref": "#/$defs/recordRef" },
               "relation": { "enum": ["supports", "contradicts", "context"] },
-              "provenance_relation": { "enum": ["independent", "quotes", "repost", "summarizes", "unknown"] },
+              "provenance_relation": { "enum": ["independent", "quotes", "repost", "reply", "summarizes", "unknown"] },
               "independence_group_id": { "type": "string" },
               "link_confidence": { "$ref": "#/$defs/probability" }
             }

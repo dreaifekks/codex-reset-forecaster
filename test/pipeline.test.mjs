@@ -36,11 +36,15 @@ test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product e
     eventType = "release",
     vendor = "openai",
     product = "codex",
+    impact = null,
+    competitiveContext = null,
   } = {}) => ({
     data: {
       claim: {
         event_type: eventType,
         scope: { vendor, product },
+        impact,
+        competitive_context: competitiveContext,
       },
       provenance: {
         source_identity_id: identity,
@@ -72,7 +76,7 @@ test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product e
   );
   assert.equal(
     evidenceTierForSignal(signal(), observation("OpenAI released a new Sora model."), config),
-    "community",
+    "other_context",
   );
   assert.equal(
     evidenceTierForSignal(
@@ -80,7 +84,7 @@ test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product e
       observation("Codex released a new coding model."),
       config,
     ),
-    "community",
+    "other_context",
   );
   assert.equal(
     evidenceTierForSignal(
@@ -88,7 +92,37 @@ test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product e
       observation("Claude released a new model."),
       config,
     ),
-    "community",
+    "other_context",
+  );
+  assert.equal(
+    evidenceTierForSignal(
+      signal({
+        role: "community",
+        eventType: "experience_issue",
+        impact: { severity: "medium" },
+      }),
+      observation("Codex CLI hangs during tool use."),
+      config,
+    ),
+    "experience",
+  );
+  assert.equal(
+    evidenceTierForSignal(
+      signal({
+        role: "official",
+        eventType: "competitor_model_release",
+        vendor: "other",
+        product: "competing_model",
+        competitiveContext: {
+          kind: "model_release",
+          relevance: "adjacent",
+          stage: "rolled_out",
+        },
+      }),
+      observation("Claude 5 was released."),
+      config,
+    ),
+    "competition",
   );
 });
 
@@ -327,6 +361,9 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   const evidence = await evidenceResponse.json();
   assert.ok(evidence.core.length > 0);
   assert.ok(evidence.community.length > 0);
+  assert.ok(Array.isArray(evidence.experience));
+  assert.ok(Array.isArray(evidence.competition));
+  assert.ok(Array.isArray(evidence.other_context));
   assert.ok(evidence.core.every((item) => item.source_identity_id === "person_tibo_sottiaux"));
   assert.ok(evidence.community.every((item) => item.source_identity_id !== "person_tibo_sottiaux"));
   assert.ok(evidence.items.every((item) => item.scope && "derivation" in item && "published_at" in item.source));

@@ -319,6 +319,7 @@ function canonicalProviderId(name, provider, state) {
 
 function providerRoles(name, provider, state, outcomeProviders) {
   const roles = new Set();
+  const capabilities = new Set(provider.capabilities ?? []);
   const upstream = state.upstream_provider ?? provider.upstream_provider ?? null;
   const providerId = canonicalProviderId(name, provider, state);
   const isExactGateway =
@@ -328,10 +329,12 @@ function providerRoles(name, provider, state, outcomeProviders) {
   if (
     (outcomeProviders.has(providerId) && name !== "x_search_gateway") ||
     name === "x" ||
+    capabilities.has("exact_evidence") ||
     name.includes("historical") ||
     isExactGateway
   ) roles.add("exact");
   if (
+    capabilities.has("context_discovery") ||
     name === "x_search_gateway" ||
     (provider.context_identities?.length ?? 0) > 0 ||
     (provider.context_queries?.length ?? 0) > 0 ||

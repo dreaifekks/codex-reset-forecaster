@@ -3,6 +3,22 @@ import { extractorContract } from "../core/extractor-contract.mjs";
 import { FEATURE_NAMES } from "./features.mjs";
 import { OUTCOME_LABEL_POLICY_VERSION } from "../core/outcome-contract.mjs";
 import { canonicalSourceIdentityPolicy } from "../core/sources.mjs";
+import {
+  COEFFICIENT_PRIOR_POLICY_VERSION,
+  FEATURE_TRANSFORM_VERSION,
+} from "./logistic-hazard.mjs";
+import {
+  RESET_TIMING_SIGNAL_LIFECYCLE_VERSION,
+} from "./signal-lifecycle.mjs";
+import {
+  MODEL_ARTIFACT_VERSION,
+  MODEL_VERSION_PREFIX,
+} from "./model-version.mjs";
+
+export {
+  MODEL_ARTIFACT_VERSION,
+  MODEL_VERSION_PREFIX,
+};
 
 const DEFAULT_CALIBRATOR_POLICY = Object.freeze({
   version: "identity-hourly-hazard/1",
@@ -19,6 +35,7 @@ export function calibratorPolicy(config) {
 
 export function modelContractHash(config) {
   return hashLabel({
+    model_artifact_version: MODEL_ARTIFACT_VERSION,
     target: config.target,
     outcome_definition: config.outcome_definition,
     taxonomy_version: config.taxonomy_version,
@@ -49,13 +66,21 @@ export function modelContractHash(config) {
     authority_timing: config.model.authority_timing,
     lambda: config.model.lambda,
     coefficient_priors: config.model.coefficient_priors,
+    coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
+    reset_timing_signal_lifecycle:
+      RESET_TIMING_SIGNAL_LIFECYCLE_VERSION,
     maximum_training_days: config.model.maximum_training_days,
     optimizer: {
-      implementation: "bfgs-backtracking/2",
+      implementation: "bfgs-backtracking/3",
       initial_step: config.model.learning_rate,
       gradient_tolerance: config.model.gradient_tolerance,
       objective_tolerance: config.model.objective_tolerance,
       hessian_step: config.model.hessian_step,
+      feature_transform: {
+        version: FEATURE_TRANSFORM_VERSION,
+        standardized_feature_clip:
+          config.model.standardized_feature_clip,
+      },
       max_iterations: config.model.max_iterations,
     },
     interval_likelihood: "exposure-weighted/1",
@@ -72,8 +97,8 @@ export function modelContractHash(config) {
 export function trainingAlgorithmSignature(config) {
   return hashLabel({
     model_contract_hash: modelContractHash(config),
-    trainer: "discrete-time-survival/0.3.0",
-    feature_builder: "dual-clock-as-of-purged-label-sources/2",
+    trainer: "discrete-time-survival/0.3.1",
+    feature_builder: "dual-clock-as-of-purged-label-sources/3",
   });
 }
 
@@ -124,13 +149,13 @@ export function modelVersionFor({
   algorithmSignature,
 }) {
   const policyHash = sha256({
-    artifact_version: "reset-model-artifact/0.3.0",
+    artifact_version: MODEL_ARTIFACT_VERSION,
     fit_artifact_hash: fitArtifactHash,
     model_contract_hash: contractHash,
     training_algorithm_signature: algorithmSignature,
   });
   return {
-    modelVersion: `reset-model/0.3.0-${policyHash.slice(0, 12)}`,
+    modelVersion: `${MODEL_VERSION_PREFIX}-${policyHash.slice(0, 12)}`,
     versionPolicyHash: policyHash,
   };
 }

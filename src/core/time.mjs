@@ -1,10 +1,22 @@
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
 
+export function timestampMillis(value) {
+  const millis = value instanceof Date
+    ? value.getTime()
+    : typeof value === "number"
+      ? value
+      : typeof value === "string" && value.length > 0
+        ? Date.parse(value)
+        : NaN;
+  if (!Number.isFinite(millis)) {
+    throw new TypeError(`Invalid timestamp: ${value}`);
+  }
+  return millis;
+}
+
 export function toUtcIso(value) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) throw new TypeError(`Invalid timestamp: ${value}`);
-  return date.toISOString();
+  return new Date(timestampMillis(value)).toISOString();
 }
 
 export function floorHour(value) {

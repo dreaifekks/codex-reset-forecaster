@@ -21,6 +21,8 @@ import {
   verifyIssuedEvaluationArtifact,
 } from "../src/model/issued-evaluation.mjs";
 import {
+  COEFFICIENT_PRIOR_POLICY_VERSION,
+  FEATURE_TRANSFORM_VERSION,
   assertModelCompatibility,
   predictHazard,
   trainLogisticHazard,
@@ -42,6 +44,8 @@ import {
 import {
   evaluationArtifactHash,
   evaluationContractHash,
+  MODEL_ARTIFACT_VERSION,
+  MODEL_VERSION_PREFIX,
   modelContractHash,
   modelVersionFor,
 } from "../src/model/contract.mjs";
@@ -49,7 +53,10 @@ import { settleIssuedPredictions } from "../src/model/settlement.mjs";
 import { assessPredictionIntegrity } from "../src/model/prediction-integrity.mjs";
 import { AS_OF_MODE } from "../src/model/as-of.mjs";
 import { COVERAGE_AS_OF_MODE } from "../src/model/coverage-as-of.mjs";
-import { adequateCoverageAssertionsAsOf } from "../src/model/coverage-as-of.mjs";
+import {
+  adequateCoverageAssertionsAsOf,
+  latestCoverageAssertionsAsOf,
+} from "../src/model/coverage-as-of.mjs";
 import { outcomeAdjudicationContract } from "../src/pipeline/outcomes.mjs";
 
 const frozenEvaluationBlobs = new Map();
@@ -241,6 +248,8 @@ function signal(id, source, {
   assertedRange = null,
   vendor = "openai",
   createdAt = availableAt,
+  competitiveContext = null,
+  derivation = role === "aggregator" ? "summarizes" : "primary_statement",
 } = {}) {
   return createRecord({
     recordType: "normalized_signal",
@@ -255,6 +264,7 @@ function signal(id, source, {
         phase,
         stance: "supports",
         asserted_time_range: assertedRange,
+        competitive_context: competitiveContext,
         scope: {
           vendor,
           product: "codex",
@@ -268,7 +278,7 @@ function signal(id, source, {
         source_identity_id: "person_tibo_sottiaux",
         source_role: role,
         independence_group_id: `ind_${id}`,
-        derivation: role === "aggregator" ? "summarizes" : "primary_statement",
+        derivation,
       },
       extraction: {
         model: "rule_claim_extractor",
@@ -346,6 +356,7 @@ function modelConfig(overrides = {}) {
       gradient_tolerance: 1e-5,
       objective_tolerance: 1e-10,
       hessian_step: 1e-4,
+      standardized_feature_clip: 8,
       max_iterations: 250,
       coefficient_priors: {},
       minimum_outcomes: 1,
@@ -970,7 +981,118 @@ test("aggregator recency comes from source publication time, never current first
     outcomes: [],
     observations: [oldSource, unknownTimeSource],
   }).features;
-  assert.equal(features.competitor_release_decay, 0);
+  assert.equal(features.competitor_model_release_decay, 0);
+});
+
+test("competition context uses actual releases and is not amplified by post volume", () => {
+  const firstSource = observation("competition-release-1", {
+    publishedAt: "2026-07-25T10:00:00.000Z",
+    firstSeenAt: "2026-07-25T10:05:00.000Z",
+  });
+  const secondSource = observation("competition-release-2", {
+    publishedAt: "2026-07-25T10:00:00.000Z",
+    firstSeenAt: "2026-07-25T10:06:00.000Z",
+  });
+  const context = {
+    kind: "model_release",
+    relevance: "adjacent",
+    stage: "rolled_out",
+  };
+  const first = signal("competition-release-1", firstSource, {
+    role: "official",
+    eventType: "competitor_model_release",
+    vendor: "other",
+    competitiveContext: context,
+  });
+  const second = signal("competition-release-2", secondSource, {
+    role: "community",
+    eventType: "competitor_model_release",
+    vendor: "other",
+    competitiveContext: context,
+  });
+  const args = {
+    targetTime: "2026-07-25T12:00:00.000Z",
+    knowledgeCutoff: "2026-07-25T12:00:00.000Z",
+    outcomes: [],
+    observations: [firstSource, secondSource],
+  };
+  const one = featureVectorAt({ ...args, signals: [first] }).features;
+  const repeated = featureVectorAt({
+    ...args,
+    signals: [first, second],
+  }).features;
+  assert.ok(one.competitor_model_release_decay > 0);
+  assert.equal(
+    repeated.competitor_model_release_decay,
+    one.competitor_model_release_decay,
+  );
+
+  const rumor = structuredClone(first);
+  rumor.data.claim.competitive_context.stage = "rumor";
+  assert.equal(
+    featureVectorAt({ ...args, signals: [rumor] }).features
+      .competitor_model_release_decay,
+    0,
+  );
+});
+
+test("reposts never inherit an authority source's reset or incident weight", () => {
+  const source = observation("authority-repost", {
+    publishedAt: "2026-07-25T10:00:00.000Z",
+    firstSeenAt: "2026-07-25T10:05:00.000Z",
+  });
+  const common = {
+    targetTime: "2026-07-25T12:00:00.000Z",
+    knowledgeCutoff: "2026-07-25T12:00:00.000Z",
+    outcomes: [],
+    observations: [source],
+    confirmationIdentityIds: new Set(["person_tibo_sottiaux"]),
+    expectedExtractor: extractorContract(modelConfig()),
+    targetScope: modelConfig().target,
+  };
+  const incidentPrimary = signal("incident-primary", source, {
+    eventType: "incident",
+  });
+  const incidentRepost = signal("incident-repost", source, {
+    eventType: "incident",
+    derivation: "repost",
+  });
+  const primaryIncidentFeatures = featureVectorAt({
+    ...common,
+    signals: [incidentPrimary],
+  }).features;
+  const repostIncidentFeatures = featureVectorAt({
+    ...common,
+    signals: [incidentRepost],
+  }).features;
+  assert.ok(primaryIncidentFeatures.official_incident_decay > 0);
+  assert.equal(repostIncidentFeatures.official_incident_decay, 0);
+
+  const assertedRange = {
+    start: "2026-07-25T12:00:00.000Z",
+    end: "2026-07-25T13:00:00.000Z",
+  };
+  const resetPrimary = signal("reset-primary", source, {
+    phase: "scheduled",
+    assertedRange,
+  });
+  const resetRepost = signal("reset-repost", source, {
+    phase: "scheduled",
+    assertedRange,
+    derivation: "repost",
+  });
+  const primaryResetFeatures = featureVectorAt({
+    ...common,
+    signals: [resetPrimary],
+  }).features;
+  const repostResetFeatures = featureVectorAt({
+    ...common,
+    signals: [resetRepost],
+  }).features;
+  assert.ok(primaryResetFeatures.official_reset_intent_decay > 0);
+  assert.equal(repostResetFeatures.official_reset_intent_decay, 0);
+  assert.equal(primaryResetFeatures.asserted_time_overlap, 1);
+  assert.equal(repostResetFeatures.asserted_time_overlap, 0.35);
 });
 
 test("coverage asserted in the future cannot alter an older feature cutoff", () => {
@@ -1083,7 +1205,7 @@ test("feature selection filters extractor rollback revisions before selecting th
     expectedExtractor,
   });
   assert.ok(vector.features.official_reset_intent_decay > 0);
-  assert.equal(vector.features.competitor_release_decay, 0);
+  assert.equal(vector.features.competitor_model_release_decay, 0);
 });
 
 test("settlement never backdates future coverage into an older live cutoff", async () => {
@@ -1262,6 +1384,20 @@ test("archive coverage replay requires an independently attested availability cl
       "2026-07-09T00:00:00.000Z",
       ["archive"],
       COVERAGE_AS_OF_MODE.ARCHIVE_REPLAY,
+    ).length,
+    1,
+  );
+  const millisecondAssertion = {
+    ...assertion,
+    assertion_id: "live-coverage-millisecond-cutoff",
+    asserted_at: "2026-07-25T00:00:00.293Z",
+  };
+  assert.equal(
+    latestCoverageAssertionsAsOf(
+      [millisecondAssertion],
+      new Date("2026-07-25T00:00:00.293Z"),
+      ["archive"],
+      COVERAGE_AS_OF_MODE.LIVE,
     ).length,
     1,
   );
@@ -1523,6 +1659,8 @@ test("the model design includes smoothed weekly and daily Fourier baselines", ()
     "provider_coverage",
     "provider_health",
     "source_delay_hours",
+    "community_momentum",
+    "community_disagreement",
   ]) {
     assert.equal(
       FEATURE_NAMES.includes(name),
@@ -1530,6 +1668,7 @@ test("the model design includes smoothed weekly and daily Fourier baselines", ()
       `${name} is data quality, not a probability feature`,
     );
   }
+  assert.ok(FEATURE_NAMES.includes("competitor_model_release_decay"));
   assert.notDeepEqual(monday, tuesdayEvening);
   const dimension = FEATURE_NAMES.length + 1;
   const model = {
@@ -1660,8 +1799,9 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
   const config = modelConfig();
   const dimension = FEATURE_NAMES.length + 1;
   const champion = {
+    artifact_version: MODEL_ARTIFACT_VERSION,
     family: config.model.family,
-    model_version: "reset-model/test",
+    model_version: `${MODEL_VERSION_PREFIX}-test`,
     training_cutoff: "2026-07-01T00:00:00.000Z",
     training_data_hash: "training-test",
     feature_schema_version: config.feature_schema_version,
@@ -1670,6 +1810,13 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
     means: FEATURE_NAMES.map(() => 0),
     scales: FEATURE_NAMES.map(() => 1),
     weights: Array(dimension).fill(0),
+    feature_transform: {
+      version: FEATURE_TRANSFORM_VERSION,
+      standardized_feature_clip: config.model.standardized_feature_clip,
+    },
+    coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
+    raw_coefficient_priors: Array(dimension).fill(0),
+    coefficient_priors: Array(dimension).fill(0),
     covariance: Array.from({ length: dimension }, () => Array(dimension).fill(0)),
     converged: true,
   };
@@ -1709,6 +1856,7 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
   assert.equal(appended.data.issued_at, "2026-07-25T13:05:00.000Z");
   assert.ok(Date.parse(appended.data.issued_at) <= Date.parse(appended.data.horizon.start));
   assert.equal(appended.data.slots.length, 168);
+  assert.equal(appendedSnapshots[0].producer.version, "0.3.1");
   const firstPrediction = appended;
   const integrity = assessPredictionIntegrity({
     prediction: firstPrediction,
@@ -1759,6 +1907,14 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
 });
 
 test("model compatibility and promotion reject mismatched contracts and artifacts", async () => {
+  assert.match(
+    modelVersionFor({
+      fitArtifactHash: "same-fit",
+      modelContractHash: "contract-a",
+      algorithmSignature: "algorithm",
+    }).modelVersion,
+    /^reset-model\/0\.3\.1-/,
+  );
   assert.notEqual(
     evaluationContractHash(modelConfig()),
     evaluationContractHash(modelConfig({
@@ -1796,6 +1952,56 @@ test("model compatibility and promotion reject mismatched contracts and artifact
       featureSchemaVersion: "expected",
     }),
     /schema version/,
+  );
+  const coefficientCount = FEATURE_NAMES.length + 1;
+  const currentContractHash = modelContractHash(modelConfig());
+  const contractedModel = {
+    artifact_version: MODEL_ARTIFACT_VERSION,
+    model_version: `${MODEL_VERSION_PREFIX}-compatibility-test`,
+    model_contract_hash: currentContractHash,
+    feature_names: FEATURE_NAMES,
+    weights: Array(coefficientCount).fill(0),
+    means: FEATURE_NAMES.map(() => 0),
+    scales: FEATURE_NAMES.map(() => 1),
+    covariance: null,
+    uncertainty: {
+      status: "unavailable",
+      reason: "test_fixture",
+    },
+    feature_transform: {
+      version: FEATURE_TRANSFORM_VERSION,
+      standardized_feature_clip: 8,
+    },
+    coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
+    raw_coefficient_priors: Array(coefficientCount).fill(0),
+    coefficient_priors: Array(coefficientCount).fill(0),
+  };
+  assert.equal(
+    assertModelCompatibility(contractedModel, {
+      featureNames: FEATURE_NAMES,
+      modelContractHash: currentContractHash,
+    }),
+    true,
+  );
+  assert.throws(
+    () => assertModelCompatibility({
+      ...contractedModel,
+      artifact_version: "reset-model-artifact/0.3.0",
+    }, {
+      featureNames: FEATURE_NAMES,
+      modelContractHash: currentContractHash,
+    }),
+    /artifact version/,
+  );
+  assert.throws(
+    () => assertModelCompatibility({
+      ...contractedModel,
+      model_version: "reset-model/0.3.0-compatibility-test",
+    }, {
+      featureNames: FEATURE_NAMES,
+      modelContractHash: currentContractHash,
+    }),
+    /Model version/,
   );
   const challenger = { artifact_hash: "challenger-a" };
   const mismatchedEvaluation = {
@@ -1966,8 +2172,8 @@ test("a same-policy second train and promote refreshes the champion without fake
 test("promotion verifies exact outcome and coverage snapshots but ignores unrelated new coverage", async () => {
   const dimension = FEATURE_NAMES.length + 1;
   const challenger = {
-    artifact_version: "reset-model-artifact/0.3.0",
-    model_version: "reset-model/0.3.0-test",
+    artifact_version: MODEL_ARTIFACT_VERSION,
+    model_version: "reset-model/0.3.1-test",
     training_data_hash: "training-data",
     model_contract_hash: "sha256:model-contract",
     evaluation_contract_hash: "sha256:evaluation-contract",

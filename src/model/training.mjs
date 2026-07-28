@@ -7,6 +7,7 @@ import { extractorContract } from "../core/extractor-contract.mjs";
 import {
   calibratorPolicy,
   evaluationContractHash,
+  MODEL_ARTIFACT_VERSION,
   modelContractHash,
   modelVersionFor,
   trainingAlgorithmSignature,
@@ -205,6 +206,7 @@ export async function buildTrainingExamples(store, config, {
       confirmationIdentityIds: confirmationIds,
       expectedExtractor: extractor,
       targetScope: config.target,
+      authorityTimingPolicy: config.model.authority_timing,
       outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
       asOfMode: resolvedAsOfMode,
       coverageAsOfMode: resolvedCoverageAsOfMode,
@@ -246,6 +248,7 @@ export async function buildTrainingExamples(store, config, {
         confirmationIdentityIds: confirmationIds,
         expectedExtractor: extractor,
         targetScope: config.target,
+        authorityTimingPolicy: config.model.authority_timing,
         outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
         excludedSourceRecordIds: exclusions.recordIds,
         excludedIndependenceGroupIds: exclusions.independenceGroupIds,
@@ -313,6 +316,7 @@ export async function trainChallenger(store, config, options = {}) {
     gradientTolerance: config.model.gradient_tolerance,
     objectiveTolerance: config.model.objective_tolerance,
     hessianStep: config.model.hessian_step,
+    standardizedFeatureClip: config.model.standardized_feature_clip,
     maxIterations: config.model.max_iterations,
     coefficientPriors: config.model.coefficient_priors,
   });
@@ -369,7 +373,7 @@ export async function trainChallenger(store, config, options = {}) {
     throw new Error("Training coverage lineage must contain unique exact revisions with hashes");
   }
   const artifact = {
-    artifact_version: "reset-model-artifact/0.3.0",
+    artifact_version: MODEL_ARTIFACT_VERSION,
     model_version: versionIdentity.modelVersion,
     version_policy_hash: versionIdentity.versionPolicyHash,
     trained_at: new Date().toISOString(),
@@ -393,7 +397,9 @@ export async function trainChallenger(store, config, options = {}) {
       gradient_tolerance: config.model.gradient_tolerance,
       objective_tolerance: config.model.objective_tolerance,
       hessian_step: config.model.hessian_step,
+      standardized_feature_clip: config.model.standardized_feature_clip,
       max_iterations: config.model.max_iterations,
+      coefficient_prior_policy: model.coefficient_prior_policy,
       coefficient_priors: structuredClone(config.model.coefficient_priors),
     },
     training_outcome_snapshot_refs: trainingOutcomeSnapshotRefs,

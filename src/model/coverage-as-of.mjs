@@ -2,6 +2,7 @@ import {
   normalizeCoverageIntervals,
   verifiedCoverageAssertionRevisions,
 } from "../pipeline/coverage.mjs";
+import { timestampMillis } from "../core/time.mjs";
 
 export const COVERAGE_AS_OF_MODE = Object.freeze({
   LIVE: "live",
@@ -59,15 +60,14 @@ export function latestCoverageAssertionsAsOf(
   if (!Object.values(COVERAGE_AS_OF_MODE).includes(mode)) {
     throw new TypeError(`Unsupported coverage as-of mode: ${mode}`);
   }
-  const cutoffMs = Date.parse(cutoff);
-  if (!Number.isFinite(cutoffMs)) throw new TypeError("Invalid coverage as-of cutoff");
+  const cutoffMs = timestampMillis(cutoff);
   const latest = new Map();
   for (const assertion of assertions) {
     if (
       !assertion?.assertion_id ||
       !providerSelected(assertion, providers) ||
       typeof assertionAvailableAt(assertion, mode) !== "string" ||
-      Date.parse(assertionAvailableAt(assertion, mode)) > cutoffMs
+      timestampMillis(assertionAvailableAt(assertion, mode)) > cutoffMs
     ) {
       continue;
     }

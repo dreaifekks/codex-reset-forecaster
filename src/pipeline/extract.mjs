@@ -37,8 +37,38 @@ const IMMEDIATE_RESET_COMPLETION_TERMS = new RegExp([
 ].join("|"), "i");
 const COMPETITOR_TERMS = /\b(anthropic|claude|google|gemini|xai|grok|deepseek|mistral)\b/i;
 const RELEASE_TERMS = /\b(launch(?:ed|ing)?|release(?:d|s|ing)?|new model|announce(?:d|ment)?|rollout)\b/i;
-const INCIDENT_TERMS = /\b(incident|outage|degrad(?:ed|ation)|capacity|unavailable|recovered|restore(?:d|ing)?|partial(?:ly)? down|system errors?|hanging|war\s*room|investigat(?:e|es|ed|ing|ion)|mitigat(?:e|es|ed|ing|ion)|usage (?:drain(?:s|ed|ing)?|consumption)|fleet (?:is )?melting)\b/i;
+const NON_RELEASE_LAUNCH_CONTEXT = new RegExp([
+  String.raw`\b(?:on|at|during|after|before)\s+(?:app\s+|client\s+)?launch\b`,
+  String.raw`\b(?:fail(?:s|ed|ing)?|unable|can(?:not|['’]t))\s+to\s+launch\b`,
+].join("|"), "i");
+const OFFICIAL_INCIDENT_TERMS = /\b(incident|outage|degrad(?:ed|ation)|capacity|service disruption|partial(?:ly)? down|war\s*room|investigat(?:e|es|ed|ing|ion)|mitigat(?:e|es|ed|ing|ion)|fleet (?:is )?melting)\b/i;
+const EXPERIENCE_ISSUE_TERMS = new RegExp([
+  String.raw`\bbugs?\b`,
+  String.raw`\bbroken\b`,
+  String.raw`\bcrash(?:es|ed|ing)?\b`,
+  String.raw`\bfail(?:s|ed|ing|ure)?\b`,
+  String.raw`\berrors?\b`,
+  String.raw`\bstuck\b`,
+  String.raw`\bhang(?:s|ing)?\b`,
+  String.raw`\bfreez(?:e|es|ing)\b`,
+  String.raw`\bunusable\b`,
+  String.raw`\b(?:not|isn['’]?t|aren['’]?t)\s+work(?:ing)?\b`,
+  String.raw`\bregress(?:ed|ion)?\b`,
+  String.raw`\btimeouts?\b`,
+  String.raw`\b(?:slow|slower|latency|laggy)\b`,
+  String.raw`\busage\b[^.!?\n]{0,16}\b(?:drain(?:s|ed|ing)?|consumption)\b`,
+  String.raw`\b(?:mcp|tool(?:\s+call|\s+use|\s+execution)?|login|auth(?:entication)?|session)\b[^.!?\n]{0,48}\b(?:broken|fail(?:s|ed|ing)?|error|stuck|hang(?:s|ing)?|timeout|unavailable)\b`,
+  String.raw`\b(?:lost|losing|corrupt(?:ed|ion)?)\b[^.!?\n]{0,36}\b(?:session|work|changes|context|state)\b`,
+].join("|"), "i");
+const EXPERIENCE_RECOVERY_TERMS = /\b(fix(?:ed|ing)?|resolved|working again|back (?:online|to normal|up)|recover(?:ed|ing|y)|restore(?:d|ing)?)\b/i;
+const QUOTA_ANOMALY_TERMS = new RegExp([
+  String.raw`\b(?:reset|refill)(?:s|ting|ted)?\b[^.!?\n]{0,72}\b(?:still|yet|immediately|instantly)\b[^.!?\n]{0,72}\b(?:429|quota|limit|exhausted)\b`,
+  String.raw`\b(?:429|quota|limit|exhausted)\b[^.!?\n]{0,72}\b(?:after|despite)\b[^.!?\n]{0,36}\b(?:reset|refill)\b`,
+  String.raw`\b(?:usage|quota|allowance)\b[^.!?\n]{0,48}\b(?:vanish(?:es|ed|ing)?|wrong|incorrect|miscount(?:ed|ing)?)\b`,
+  String.raw`\b(?:vanish(?:es|ed|ing)?|wrong|incorrect|miscount(?:ed|ing)?)\b[^.!?\n]{0,48}\b(?:usage|quota|allowance)\b`,
+].join("|"), "i");
 const CODEX_TERMS = /\bcodex(?:er|ers)?\b/i;
+const CODEX_MODE_ALIAS_TERMS = /(?:\/fast\b|\bultra\b)/i;
 const CHATGPT_WORK_TERMS = /\bchatgpt\s+work\b/i;
 const SIGNAL_MEDIA_TYPES = new Set([
   "text/plain",
@@ -124,20 +154,162 @@ function sourceRole(observation, config) {
 }
 
 function classifyEvent(text) {
+  const releaseClaim =
+    RELEASE_TERMS.test(text) && !NON_RELEASE_LAUNCH_CONTEXT.test(text);
+  if (CODEX_TERMS.test(text) && QUOTA_ANOMALY_TERMS.test(text)) {
+    return "experience_issue";
+  }
   if (RESET_TERMS.test(text) && (QUOTA_TERMS.test(text) || TARGET_RESET_TERMS.test(text))) {
     return /\brefill/i.test(text) ? "quota_refill" : "quota_reset";
   }
   if (COMPETITOR_TERMS.test(text) && QUOTA_TERMS.test(text)) return "competitor_limit_change";
-  if (RELEASE_TERMS.test(text)) return "release";
-  if (INCIDENT_TERMS.test(text)) return /\brestore/i.test(text) ? "capacity_restore" : "incident";
+  if (COMPETITOR_TERMS.test(text) && releaseClaim) {
+    return "competitor_model_release";
+  }
+  if (CODEX_TERMS.test(text) && EXPERIENCE_RECOVERY_TERMS.test(text)) {
+    return OFFICIAL_INCIDENT_TERMS.test(text)
+      ? "capacity_restore"
+      : "experience_recovery";
+  }
+  if (OFFICIAL_INCIDENT_TERMS.test(text)) {
+    return /\b(?:restore|recover|resolved|fixed)\b/i.test(text)
+      ? "capacity_restore"
+      : "incident";
+  }
+  if (CODEX_TERMS.test(text) && EXPERIENCE_ISSUE_TERMS.test(text)) {
+    return "experience_issue";
+  }
+  if (releaseClaim) return "release";
   if (/\b(commit|merge|deploy|ship(?:ped|ping)?|development|build)\b/i.test(text)) {
     return "development_activity";
   }
   return null;
 }
 
+function impactKind(text) {
+  if (/\b(?:outage|down|unavailable|service disruption)\b/i.test(text)) return "availability";
+  if (/\b(?:slow|slower|latency|laggy|timeout)\b/i.test(text)) return "performance";
+  if (/\b(?:mcp|tool(?:\s+call|\s+use|\s+execution)?)\b/i.test(text)) return "tool_execution";
+  if (/\b(?:session|context|state|lost|corrupt)\b/i.test(text)) return "session_state";
+  if (/\b(?:usage|quota|allowance|429|rate limit)\b/i.test(text)) return "quota_accounting";
+  if (/\b(?:login|auth|authentication)\b/i.test(text)) return "auth";
+  if (/\b(?:cli|ide|extension|desktop|web|ui|ux)\b/i.test(text)) return "client_ux";
+  if (/\b(?:wrong|incorrect|hallucinat|regress)\b/i.test(text)) return "correctness";
+  return "other";
+}
+
+function affectedSurfaces(text) {
+  const surfaces = [
+    [/\bcli\b/i, "cli"],
+    [/\b(?:ide|extension|vscode|jetbrains)\b/i, "ide"],
+    [/\bapi\b/i, "api"],
+    [/\bweb\b/i, "web"],
+    [/\b(?:agent loop|agent run|run)\b/i, "agent_loop"],
+    [/\btool(?:\s+call|\s+use|\s+execution)?\b/i, "tool_use"],
+    [/\bmcp\b/i, "mcp"],
+    [/\b(?:login|auth|authentication)\b/i, "auth"],
+    [/\b(?:\/fast|fast mode)\b/i, "fast_mode"],
+  ].filter(([pattern]) => pattern.test(text)).map(([, surface]) => surface);
+  return surfaces.length > 0 ? [...new Set(surfaces)] : ["unknown"];
+}
+
+function impactScope(text) {
+  if (
+    PLATFORM_SCOPE_TERMS.test(text) ||
+    /\b(?:platform[-\s]?wide|service[-\s]?wide|globally|widespread|almost global)\b/i.test(text)
+  ) return "platform";
+  if (/\b(?:many|multiple|several|some)\s+users\b|\bothers?\s+(?:are\s+)?seeing\b/i.test(text)) {
+    return "multiple_users";
+  }
+  if (/\b(?:i|my|me|for me)\b/i.test(text)) return "individual";
+  return "unknown";
+}
+
+function impactLifecycle(text, eventType) {
+  if (["capacity_restore", "experience_recovery"].includes(eventType)) return "resolved";
+  if (/\bmitigat(?:e|es|ed|ing|ion)\b/i.test(text)) return "mitigating";
+  if (/\binvestigat(?:e|es|ed|ing|ion)\b/i.test(text)) return "investigating";
+  if (["incident", "experience_issue"].includes(eventType)) return "active";
+  return "unknown";
+}
+
+function impactSeverity(text, scope, lifecycle) {
+  if (lifecycle === "resolved") return "unknown";
+  const hardBlock = /\b(?:outage|down|unavailable|unusable|cannot|can['’]?t|crash|stuck|hang(?:s|ing)?|login|auth)\b/i.test(text);
+  const destructive = /\b(?:lost|losing|corrupt(?:ed|ion)?|data loss)\b/i.test(text);
+  const degraded = /\b(?:degrad(?:ed|ation)|fail(?:s|ed|ing|ure)?|errors?|broken|usage drain)\b/i.test(text);
+  const performanceOnly = /\b(?:slow|slower|latency|laggy)\b/i.test(text) &&
+    !hardBlock && !destructive && !degraded;
+  if (scope === "platform" && (hardBlock || destructive)) return "critical";
+  if (
+    ["platform", "multiple_users"].includes(scope) &&
+    (hardBlock || destructive || degraded)
+  ) return "high";
+  if (hardBlock || destructive || degraded) return "medium";
+  if (performanceOnly || /\b(?:minor|cosmetic|annoying|friction)\b/i.test(text)) return "low";
+  return "unknown";
+}
+
+function classifyImpact(text, eventType, sourceRole) {
+  if (![
+    "incident",
+    "capacity_restore",
+    "experience_issue",
+    "experience_recovery",
+  ].includes(eventType)) return null;
+  const affectedScope = impactScope(text);
+  const lifecycle = impactLifecycle(text, eventType);
+  return {
+    category: impactKind(text),
+    severity: impactSeverity(text, affectedScope, lifecycle),
+    lifecycle,
+    affected_scope: affectedScope,
+    affected_surfaces: affectedSurfaces(text),
+    workaround: /\b(?:workaround|can still|use .+ instead|switch(?:ed)? to)\b/i.test(text)
+      ? "available"
+      : /\b(?:partial(?:ly)?|intermittent)\b/i.test(text)
+        ? "partial"
+        : "unknown",
+    evidence_basis: ["official", "product_lead", "product_team_member"].includes(sourceRole)
+      ? "official_incident"
+      : /\b(?:repro|reproduce|steps to reproduce)\b/i.test(text)
+        ? "reproduction"
+        : "first_party_report",
+  };
+}
+
+function competitiveStage(text) {
+  if (/\b(?:rumor|reportedly|unconfirmed)\b/i.test(text)) return "rumor";
+  if (/\b(?:general availability|generally available|\bga\b|available to (?:all|everyone))\b/i.test(text)) {
+    return "general_availability";
+  }
+  if (/\b(?:roll(?:ed|ing)? out|available now|launched|released)\b/i.test(text)) {
+    return "rolled_out";
+  }
+  if (/\b(?:preview|beta|early access)\b/i.test(text)) return "preview";
+  return "announced";
+}
+
+function classifyCompetitiveContext(text, eventType) {
+  if (!["competitor_model_release", "competitor_limit_change"].includes(eventType)) {
+    return null;
+  }
+  const coding = /\b(?:claude code|coding|code agent|developer agent|coding agent)\b/i.test(text);
+  return {
+    kind: eventType === "competitor_limit_change"
+      ? "limit_change"
+      : coding
+        ? "coding_agent_release"
+        : /\b(?:model|opus|sonnet|haiku|flash|pro|grok|deepseek|mistral)\b/i.test(text)
+          ? "model_release"
+          : "capability_release",
+    relevance: coding ? "direct" : "adjacent",
+    stage: competitiveStage(text),
+  };
+}
+
 function classifyProductScope(text, config) {
-  const codex = CODEX_TERMS.test(text);
+  const codex = CODEX_TERMS.test(text) || CODEX_MODE_ALIAS_TERMS.test(text);
   const chatgptWork = CHATGPT_WORK_TERMS.test(text);
   const competitor = COMPETITOR_TERMS.test(text);
   if (competitor && (codex || chatgptWork)) {
@@ -195,12 +367,29 @@ function classifyPhase(text, eventType) {
   if (/\bwe(?:\s+are|'re)\s+(?:now\s+)?(?:giving|applying)\b[^.!?\n]{0,64}\b(?:usage\s+)?reset\b/i.test(text)) return "started";
   if (RESET_TERMS.test(text) && /\b(?:propagating|lands?|should\s+land|should\s+be\s+showing|should\s+have\b[^.!?\n]{0,48}\bback)\b/i.test(text)) return "started";
   if (/\benjoy\b[\s\S]{0,40}\breset(?:ted)?\b/i.test(text)) return "completed";
+  if (
+    /\bfeeling\s+like\s+(?:a\s+)?(?:(?:usage|rate|limit)\s+)?reset\b/i.test(text) &&
+    /\bsee\s+you\s+in\s+(?:a\s+)?few\s+hours?\b/i.test(text)
+  ) return "scheduled";
   if (/\b(lands?|coming|incoming|arriv(?:e|es|ing)|will|going to|later|tomorrow|this evening|next hour|tonight|soon|in a bit)\b/i.test(text) ||
       /\bgive\s+us\s+\d{1,3}\s+hours?\b/i.test(text)) {
     return "scheduled";
   }
   if (/\b(expect|likely|probably|should|might|may)\b/i.test(text)) return "expected";
-  if (["release", "incident", "development_activity", "competitor_limit_change"].includes(eventType)) {
+  if (eventType === "experience_recovery") return "completed";
+  if (eventType === "experience_issue") {
+    if (/\b(?:investigat|mitigat)(?:e|es|ed|ing|ion)\b/i.test(text)) return "started";
+    return /\b(?:rumor|reportedly|unconfirmed)\b/i.test(text) ? "rumor" : "started";
+  }
+  if (eventType === "competitor_model_release") {
+    if (/\b(?:rumor|reportedly|unconfirmed)\b/i.test(text)) return "rumor";
+    if (/\b(?:preview|beta|early access|announc(?:e|es|ed|ing|ement)|coming|soon)\b/i.test(text) &&
+        !/\b(?:available now|general availability|generally available|launched|released|rolled out)\b/i.test(text)) {
+      return "expected";
+    }
+    return "completed";
+  }
+  if (["release", "incident", "capacity_restore", "development_activity", "competitor_limit_change"].includes(eventType)) {
     return /\b(rumor|reportedly|unconfirmed)\b/i.test(text) ? "rumor" : "completed";
   }
   return "rumor";
@@ -279,7 +468,7 @@ function assertedRange(text, publishedAt, phase) {
       return halfOpenRange(published, addHours(published, 1), "hour", "next hour");
     }
     if (/\b(?:in|over|within)?\s*(?:the\s+)?next\s+(?:few|couple of)\s+hours?\b/i.test(timingText) ||
-        /\bback\s+in\s+a\s+few\s+hours?\b/i.test(timingText)) {
+        /\b(?:back|see\s+you)\s+in\s+(?:a\s+)?few\s+hours?\b/i.test(timingText)) {
       return halfOpenRange(published, addHours(published, 3), "hour", "next few hours");
     }
     if (/\btomorrow morning\b/i.test(timingText)) {
@@ -309,6 +498,21 @@ function assertedRange(text, publishedAt, phase) {
     return halfOpenRange(start, addHours(start, 1), "hour", "notification-hour inference");
   }
   return null;
+}
+
+function primaryStatementEvidenceRoot(observation) {
+  const canonicalStatusId = xStatusIdentity(observation.data.canonical_url) ??
+    xStatusIdentity(observation.data.provider_item_id);
+  if (canonicalStatusId) {
+    return {
+      rootId: `x_post:${canonicalStatusId}`,
+      derivation: "primary_statement",
+    };
+  }
+  return {
+    rootId: `${observation.data.ingest_provider}:${observation.data.provider_item_id}`,
+    derivation: "primary_statement",
+  };
 }
 
 function evidenceRoot(observation, role) {
@@ -352,17 +556,21 @@ function evidenceRoot(observation, role) {
       derivation: "summarizes",
     };
   }
-  const canonicalStatusId = xStatusIdentity(observation.data.canonical_url) ??
-    xStatusIdentity(observation.data.provider_item_id);
-  if (canonicalStatusId) {
-    return {
-      rootId: `x_post:${canonicalStatusId}`,
-      derivation: "primary_statement",
-    };
-  }
+  return primaryStatementEvidenceRoot(observation);
+}
+
+function replyParentEvidenceRoot(observation) {
+  const relation = observation.data.native_relations.find((item) =>
+    item.type === "reply"
+  );
+  if (!relation?.provider_item_id && !relation?.url) return null;
+  const statusId = xStatusIdentity(relation.provider_item_id) ??
+    xStatusIdentity(relation.url);
   return {
-    rootId: `${observation.data.ingest_provider}:${observation.data.provider_item_id}`,
-    derivation: "primary_statement",
+    rootId: statusId
+      ? `x_post:${statusId}`
+      : `relation:${relation.provider_item_id ?? relation.url}`,
+    derivation: "reply",
   };
 }
 
@@ -487,23 +695,38 @@ export function extractSignal(observation, config, {
   if (!eventType) return null;
   const phase = classifyPhase(claimText, eventType);
   const productScope = classifyProductScope(claimText, config);
-  const root = evidenceRootOverride ?? evidenceRoot(observation, role);
+  const impact = classifyImpact(claimText, eventType, role);
+  const competitiveContext = classifyCompetitiveContext(claimText, eventType);
+  let root = evidenceRootOverride ?? evidenceRoot(observation, role);
+  if (relevance.basis === "reply_parent") {
+    root = replyParentEvidenceRoot(observation) ?? {
+      rootId: root.rootId,
+      derivation: "reply",
+    };
+  }
+  if (
+    relevance.basis === "self" &&
+    root.derivation === "quotes"
+  ) {
+    root = primaryStatementEvidenceRoot(observation);
+  }
   const narrowScope = hasNarrowScopeQualifier(claimText);
   const bankedResetOnly = isBankedResetOnly(claimText);
-  const platform = !bankedResetOnly && !narrowScope && (
-    hasExplicitPlatformScope(claimText) ||
-    policyAllowsAuthorityGenericScope({
-      observation,
-      config,
-      eventType,
-      phase,
-      productScope,
-      root,
-      role,
-      narrowScope,
-      bankedResetOnly,
-    })
-  );
+  const platform = impact?.affected_scope === "platform" ||
+    (!bankedResetOnly && !narrowScope && (
+      hasExplicitPlatformScope(claimText) ||
+      policyAllowsAuthorityGenericScope({
+        observation,
+        config,
+        eventType,
+        phase,
+        productScope,
+        root,
+        role,
+        narrowScope,
+        bankedResetOnly,
+      })
+    ));
   const explicit = phase !== "rumor" &&
     (platform || !["quota_reset", "quota_refill"].includes(eventType));
   const confidence = explicit ? 0.94 : eventType ? 0.72 : 0.5;
@@ -575,6 +798,8 @@ export function extractSignal(observation, config, {
           phase,
         ),
         author_certainty: explicit ? "explicit" : phase === "expected" ? "probable" : "possible",
+        impact,
+        competitive_context: competitiveContext,
       },
       provenance: {
         source_identity_id: observation.data.author.identity_id,
@@ -584,7 +809,13 @@ export function extractSignal(observation, config, {
         independence_group_id: makeRecordId("ind", root.rootId),
         feature_eligible:
           relevance.decision === "relevant" &&
-          observation.data.selection_context?.feature_eligible !== false,
+          observation.data.selection_context?.feature_eligible !== false &&
+          !(
+            relevance.basis === "reply_parent" &&
+            ["quota_reset", "quota_refill"].includes(eventType)
+          ) &&
+          !["experience_issue", "experience_recovery"].includes(eventType) &&
+          competitiveContext?.stage !== "rumor",
         selection_bias: observation.data.selection_context?.outcome_conditioned
           ? "outcome_conditioned_archive_link"
           : null,

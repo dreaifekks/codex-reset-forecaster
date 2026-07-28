@@ -156,7 +156,7 @@ export async function issueForecast(store, config, {
     recordType: "prediction",
     naturalKey: `${champion.model_version}:${champion.artifact_hash}:${validationStatus}:${cutoff.toISOString()}:${firstTarget.toISOString()}`,
     createdAt: issued,
-    producer: producer("reset-forecaster", "0.3.0", {
+    producer: producer("reset-forecaster", "0.3.1", {
       model_version: champion.model_version,
       feature_schema_version: config.feature_schema_version,
     }),

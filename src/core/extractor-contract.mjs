@@ -4,7 +4,7 @@ import { canonicalSourceIdentityPolicy } from "./sources.mjs";
 export const AUTHORITY_SCOPE_POLICY =
   "explicit-platform-or-authority-general-codex/1";
 export const DEFAULT_TOPIC_RELEVANCE_POLICY_VERSION =
-  "reset-topic-relevance/2";
+  "reset-topic-relevance/3";
 
 function normalizedTarget(target) {
   return {
@@ -30,7 +30,7 @@ function normalizedAuthorityScopePolicy(outcomeDefinition) {
 
 export function extractionSemanticPolicy(config) {
   return {
-    version: "extractor-semantic-policy/3",
+    version: "extractor-semantic-policy/4",
     target: normalizedTarget(config?.target),
     source_identity_policy: canonicalSourceIdentityPolicy(config),
     authority_scope_policy: normalizedAuthorityScopePolicy(config?.outcome_definition),

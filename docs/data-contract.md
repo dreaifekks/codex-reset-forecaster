@@ -46,6 +46,13 @@ material while `content.raw_payload_hash` identifies the saved provider payload.
 Selection/timing metadata records whether discovery was outcome-conditioned and
 separates source publication time from provider observation time.
 
+For an RSSHub X timeline observation, the canonical provider item is the exact
+wrapper X status ID. The adapter derives `published_at` from that wrapper
+snowflake, records the real poll as `first_seen_at`/`fetched_at`, and preserves
+native reply/quote/repost relations. The source is exact evidence for items it
+carries, not a completeness assertion: an empty or finite RSSHub feed never
+creates coverage, a negative label, or an outcome by itself.
+
 `availability_attestation` never replaces collection timestamps. It may establish
 an earlier model-usable time for an archive replay only when the adapter records all
 of the following: the attested UTC time, a constrained basis, the attestor URL, the
@@ -59,7 +66,9 @@ publication timestamp. Unattested imports use their real fetch time.
 A structured claim extracted from one or more observations. It carries the subject,
 event type, phase, stance, affected scope, asserted time range, author certainty,
 source role, evidence root, independence group, extraction version, and extraction
-confidence.
+confidence. Codex experience claims may additionally carry structured `impact`;
+competitor release claims may carry `competitive_context`. These semantic fields
+remain separate from extraction confidence and forecast probability.
 
 ### `event_candidate`
 
@@ -135,6 +144,9 @@ The following values must never be substituted for one another:
 | `knowledge_cutoff` | Latest information a forecast may use |
 
 All canonical times are RFC 3339 UTC. All ranges are half-open `[start, end)`.
+As-of comparisons preserve the timestamp's full millisecond precision whether a
+caller supplies an RFC 3339 string or a runtime `Date`; a same-run cutoff must not
+be silently rounded down to the whole second.
 Provider-local or author-inferred time zones are retained as interpretation metadata,
 not used as replacements for canonical UTC. The runtime resolves the `system`
 configuration sentinel to Node's concrete `tzdata-<version>` value before hashing
@@ -169,6 +181,9 @@ Initial event types:
 - `release`
 - `development_activity`
 - `competitor_limit_change`
+- `experience_issue`
+- `experience_recovery`
+- `competitor_model_release`
 
 Initial phases:
 
@@ -181,6 +196,32 @@ Initial phases:
 - `cancelled`
 
 Stance is one of `supports`, `contradicts`, `neutral`, or `unknown`.
+
+`impact` is present for a Codex experience issue/recovery or an official
+incident/recovery and otherwise null. It keeps the following dimensions separate:
+
+- `category`: availability, performance, correctness, tool execution, session
+  state, quota accounting, auth, client UX, or other;
+- `severity`: critical, high, medium, low, or unknown;
+- `lifecycle`: active, investigating, mitigating, resolved, or unknown;
+- `affected_scope`: individual, multiple users, platform, or unknown;
+- `affected_surfaces`: one or more of CLI, IDE, API, web, agent loop, tool use,
+  MCP, auth, fast mode, or unknown;
+- `workaround`: none, partial, available, or unknown;
+- `evidence_basis`: first-party report, independent corroboration, official
+  incident, reproduction, or unknown.
+
+Severity does not count posts. A platform-wide hard block or destructive failure
+may be critical; a single-user hard failure is capped at medium; a
+performance-only report is low. Experience records are initially audit/display
+evidence and are not prediction features.
+
+`competitive_context` is present for a competitor model/coding-agent release or
+limit change and otherwise null. It records `kind`, Codex relevance
+(`direct`, `adjacent`, `weak`, or `unknown`), and stage (`announced`, `preview`,
+`general_availability`, `rolled_out`, or `rumor`). Only direct or adjacent
+non-rumor context is eligible for the current competitor feature, and derivative
+post volume cannot amplify the event.
 
 Product scope is extracted from the text rather than inherited from the forecast
 target. OpenAI signals use `codex`, `chatgpt_work`, `unknown`, or
@@ -197,10 +238,27 @@ Deduplication has three different layers and none may replace another:
 2. semantic restatements or derived coverage;
 3. signals referring to the same candidate reset event.
 
-`independence_group_id` identifies the root information source. Reposts, quotes,
-articles, and summaries derived from that root do not create additional independent
-votes. Evidence relations include `independent`, `quotes`, `repost`, `summarizes`,
-and `unknown`.
+`independence_group_id` identifies the root information source. Context-only
+replies, reposts, quotes, articles, and summaries derived from that root do not
+create additional independent votes. Evidence relationships include `independent`,
+`reply`, `quotes`, `repost`, `summarizes`, and `unknown`; `reply_parent` is the
+relevance basis for a context-dependent reply, while normalized provenance records
+the corresponding non-primary `derivation: "reply"` and parent root. Event
+candidate evidence likewise permits `provenance_relation: "reply"`.
+
+A native quote relation alone does not force the wrapper into the quoted root. If
+the wrapper's own text makes a relevant operational claim, it is recorded as its
+own `primary_statement`. A wrapper that contributes no claim and receives its
+meaning only from the resolved quote context remains `quotes`-derived.
+
+Replies use the same self-versus-context boundary but retain their parent lineage.
+If the reply's own text makes an explicit relevant operational claim, it may keep
+its own status root as a `primary_statement`. If it becomes relevant only after
+resolving the exact parent, the signal records `reply_parent`, includes the exact
+parent reference, binds its `root_evidence_id`/`independence_group_id` to that
+parent root, and records `derivation: "reply"`. A context-only reply cannot confirm
+an outcome or activate exact-authority conditioning even when its author is a
+configured authority.
 
 The configured extractor contract binds `model`, `model_version`,
 `prompt_version`, topic-relevance policy version, and

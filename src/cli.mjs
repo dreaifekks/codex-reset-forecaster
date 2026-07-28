@@ -9,6 +9,7 @@ import { XProvider } from "./providers/x-provider.mjs";
 import { XSearchGatewayProvider } from "./providers/x-search-gateway-provider.mjs";
 import { HistoricalMonitorProvider } from "./providers/historical-monitor-provider.mjs";
 import { TimelineJsonlProvider } from "./providers/timeline-jsonl-provider.mjs";
+import { RsshubXProvider } from "./providers/rsshub-x-provider.mjs";
 import { DEMO_CONFIG_OVERRIDES } from "./demo/config.mjs";
 import { generateDemoHistory } from "./demo/history.mjs";
 import { processRecords, runPipeline, trainEvaluatePromote } from "./pipeline/run.mjs";
@@ -78,6 +79,10 @@ try {
     output(await new XSearchGatewayProvider({
       config: gatewayConfig,
     }).collect(store));
+  } else if (command === "ingest-rsshub") {
+    output(await new RsshubXProvider({
+      config: config.providers.rsshub_x_timeline,
+    }).collect(store));
   } else if (command === "ingest-archive") {
     output(await new HistoricalMonitorProvider({
       config: config.providers.historical_monitor,
@@ -117,7 +122,7 @@ try {
   } else if (command === "status") {
     output(await getReadiness(store, config));
   } else {
-    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-archive\n  ingest-timeline --file PATH\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
+    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
   }
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

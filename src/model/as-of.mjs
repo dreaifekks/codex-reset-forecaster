@@ -1,4 +1,5 @@
 import { latestRevisionsAsOf } from "../core/revisions.mjs";
+import { timestampMillis } from "../core/time.mjs";
 
 export const AS_OF_MODE = Object.freeze({
   LIVE: "live",
@@ -13,12 +14,11 @@ export function assertAsOfMode(mode) {
 }
 
 function latestByAvailability(records, cutoff, availableAt) {
-  const cutoffMs = Date.parse(cutoff);
-  if (!Number.isFinite(cutoffMs)) throw new TypeError("Invalid model as-of cutoff");
+  const cutoffMs = timestampMillis(cutoff);
   const selected = new Map();
   for (const record of records) {
     const available = availableAt(record);
-    if (!available || Date.parse(available) > cutoffMs) continue;
+    if (!available || timestampMillis(available) > cutoffMs) continue;
     const previous = selected.get(record.record_id);
     if (!previous || record.revision > previous.revision) {
       selected.set(record.record_id, record);

@@ -1,14 +1,14 @@
 {
-  "config_version": "provider-config/0.2.13",
-  "taxonomy_version": "reset-taxonomy/0.2.2",
-  "feature_schema_version": "reset-features/0.2.8",
-  "deduplication_version": "reset-dedup/0.2.2",
+  "config_version": "provider-config/0.3.1",
+  "taxonomy_version": "reset-taxonomy/0.3.0",
+  "feature_schema_version": "reset-features/0.3.0",
+  "deduplication_version": "reset-dedup/0.2.3",
   "timezone_database_version": "system",
   "extractor": {
     "model": "deterministic-rules",
-    "model_version": "0.2.9",
-    "prompt_version": "reset-extract/rules-0.2.9",
-    "topic_relevance_policy_version": "reset-topic-relevance/2"
+    "model_version": "0.3.1",
+    "prompt_version": "reset-extract/rules-0.3.1",
+    "topic_relevance_policy_version": "reset-topic-relevance/3"
   },
   "outcome_definition": {
     "version": "actual-platform-reset/1",
@@ -59,6 +59,7 @@
     "x_search_gateway": {
       "enabled": false,
       "freshness_max_age_hours": 2.5,
+      "refresh_interval_minutes": 60,
       "base_url": "http://127.0.0.1:8788",
       "upstream_provider": "grokbuild",
       "token_file": null,
@@ -86,11 +87,37 @@
           "handles": ["thsottiaux"]
         },
         {
-          "name": "ecosystem-context",
-          "query": "(Codex OR \"ChatGPT Work\" OR \"Claude Code\" OR Gemini OR Grok) (\"usage limits\" OR \"rate limits\" OR quota OR \"capacity incident\" OR outage OR launched OR released OR rollout)",
+          "name": "codex-experience",
+          "query": "(Codex OR \"ChatGPT Work\") (bug OR broken OR crash OR error OR failed OR failing OR stuck OR hanging OR unusable OR outage OR degraded OR latency OR \"usage drain\" OR \"quota wrong\" OR \"reset not working\")",
+          "handles": []
+        },
+        {
+          "name": "competitor-model-releases",
+          "query": "(\"Claude Code\" OR Claude OR Gemini OR Grok OR DeepSeek OR Mistral) (\"new model\" OR launched OR released OR \"general availability\" OR rollout OR preview)",
           "handles": []
         }
       ]
+    },
+    "rsshub_x_timeline": {
+      "enabled": false,
+      "provider_name": "rsshub_x_timeline",
+      "capabilities": ["exact_evidence", "context_discovery"],
+      "freshness_max_age_hours": 0.5,
+      "base_url": "https://rss.dreaife.tokyo",
+      "include_replies": true,
+      "count": 100,
+      "minimum_items": 1,
+      "max_response_bytes": 2097152,
+      "request_timeout_ms": 20000,
+      "refresh_interval_minutes": 5,
+      "confirmation_identities": [
+        {
+          "username": "thsottiaux",
+          "identity_id": "person_tibo_sottiaux",
+          "source_role": "product_lead"
+        }
+      ],
+      "context_identities": []
     },
     "historical_monitor": {
       "enabled": false,
@@ -124,10 +151,10 @@
     "gradient_tolerance": 0.00001,
     "objective_tolerance": 1e-10,
     "hessian_step": 0.0001,
+    "standardized_feature_clip": 8,
     "max_iterations": 2500,
     "coefficient_priors": {
       "asserted_time_overlap": 0.5,
-      "official_reset_intent_decay": 0.2,
       "official_incident_decay": 0.2
     },
     "authority_timing": {
@@ -169,6 +196,7 @@
     "scheduler_enabled": false,
     "run_on_start": true,
     "scheduler_delay_seconds": 5,
+    "scheduler_interval_minutes": 10,
     "retrain_interval_hours": 24,
     "provisional_bootstrap": {
       "enabled": false,

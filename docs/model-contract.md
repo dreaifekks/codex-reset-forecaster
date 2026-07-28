@@ -37,7 +37,7 @@ versioned profile. The `q_t` values plus the no-outcome probability sum to one. 
 recurrent outcomes are later supported, the record declares that event process
 explicitly and consumers must not apply the first-event identity.
 
-## Version 0.2 model
+## Version 0.3 model
 
 Use a strongly regularized Bayesian or ridge discrete-time hazard model:
 
@@ -49,13 +49,20 @@ logit(h_t) = intercept
 ```
 
 The checked-in MVP implements the ridge-logistic form above. Its penalty is centered
-on versioned coefficient priors. Most features use a zero prior; explicit source
-intent and the smoothed historical baseline use small non-zero priors so a rare but
-semantically direct statement such as “reset tomorrow morning” is not treated as
-meaningless before the first identical training example. The trained artifact
-stores the complete prior vector plus optimizer method, objective, gradient norm,
-iteration count, tolerance, and convergence status. Reaching `max_iterations` is a
-failed training attempt, not convergence, and such a challenger cannot be promoted.
+on versioned coefficient priors. Most features use a zero prior; asserted-time
+overlap and configured-author incident evidence use small non-zero priors. Exact
+configured-author reset intent is handled by the authority timing conditioner
+instead of a learned coefficient. Configured priors are logit changes per raw
+feature unit; `raw-feature-logit-per-unit/1` multiplies them by the stored training
+scale before applying ridge in standardized coordinates. The trained artifact
+stores both raw and effective prior vectors plus optimizer method, objective,
+gradient norm, iteration count, tolerance, and convergence status. Reaching
+`max_iterations` is a failed training attempt, not convergence, and such a
+challenger cannot be promoted.
+The current envelope is `reset-model-artifact/0.3.1`, with model versions under
+the `reset-model/0.3.1-*` prefix. Serving rejects an envelope or version prefix
+that does not match the model contract, even when its remaining fields are
+otherwise self-consistent.
 A complementary log-log link remains a compatible challenger family, but it must
 pass the same walk-forward and calibration gates before becoming validated or
 replacing a validated champion. A provisional bootstrap remains explicitly
@@ -77,14 +84,25 @@ attested `replay_available_at`; it never rewrites canonical `known_at`. The broa
 kernels are intentional: they express a smooth renewal and periodic baseline
 without memorizing individual dates or hours.
 
-The trained version `reset-features/0.2.8` remains small and interpretable:
+The trained version `reset-features/0.3.0` remains small and interpretable:
 
 - three weekly Fourier harmonics and two daily Fourier harmonics;
 - the renewal-periodic kernel above;
 - overlap between asserted event ranges and the target slot;
-- recency-decayed configured-author reset intent and incident evidence;
-- community growth and disagreement after source-dependency collapse;
-- competing-vendor release context.
+- recency-decayed configured-author incident evidence;
+- one maximum recency-decayed value for direct or adjacent non-rumor
+  competing-model, coding-agent, or limit context.
+
+These are fourteen model inputs. Community volume, momentum, resonance, and
+disagreement are deliberately absent. Codex experience issues and recoveries are
+retained as structured canonical evidence with severity and lifecycle, but are
+display/audit-only in this version. Promoting experience impact into the
+probability vector requires a separately versioned challenger and causal
+walk-forward evidence.
+
+The competitor value uses the maximum eligible decay rather than a sum. Quotes,
+reposts, repeated reports, and multiple descriptions of one release therefore
+cannot amplify the feature through attention volume.
 
 Provider coverage, delay, and health remain in the feature snapshot's data-quality
 metadata but are excluded from the probability vector. They describe whether the
@@ -92,6 +110,13 @@ forecast is trustworthy; they must not become a proxy label for whether a reset
 occurred. The renewal-periodic kernel is learned with a zero prior, so sparse
 training data cannot turn an unlearned live-only kernel value into a large
 probability shift.
+
+Version `winsorized-zscore/1` standardizes each feature with the training mean and
+scale, then clips the standardized value to `[-8, 8]` in both optimization and
+live inference. The transform version and clip are stored in the model artifact
+and included in the model contract. This bounds the influence of live feature
+values when a feature had near-zero variance in the training sample without
+changing the raw canonical feature snapshot.
 
 Other extracted evidence remains in canonical records and may be evaluated by a
 challenger, but it is not automatically added to the champion. This prevents a
@@ -119,10 +144,22 @@ that sums to one. A confirmed reset consumes the old statement and becomes the
 explicit recurrence anchor of the next first-reset forecast; model parameters do
 not need to be retrained for that re-anchoring.
 
-Only exact plain-text primary statements can activate this path. Aggregator/Grok
-summaries, quotes, reposts, outcome-conditioned discoveries, rumours, completed
-claims, and non-target scopes cannot. A later exact denial cancels an earlier
-active window. The default phase priors are `0.80` for scheduled, `0.55` for
+Only exact plain-text primary statements can activate this path. A post with a
+native quote or reply relation can still be primary when its own text makes the
+operational claim. A quote wrapper that only inherits quoted content remains
+derivative. Likewise, a reply that is relevant only through its resolved parent
+must bind the parent evidence root with `derivation: "reply"` even when the reply
+author is a configured authority. Aggregator/Grok summaries, derivative quotes,
+parent-context-only replies, reposts, outcome-conditioned discoveries, rumours,
+completed claims, and non-target scopes cannot activate the conditioner or confirm
+an outcome. Exact authority reset intent remains a diagnostic snapshot field but
+is excluded from the learned feature vector, and its asserted overlap is also
+excluded from the baseline, so the conditioner is the only probability path for
+that evidence. A later exact denial cancels an earlier active window. An asserted
+window expires at its half-open end, while a compatible confirmed outcome after
+the statement consumes it as soon as that outcome is visible. Baseline overlap
+uses the same lifecycle, so pre-reset evidence cannot keep probability elevated
+after the reset. The default phase priors are `0.80` for scheduled, `0.55` for
 expected, and `0.90` for started.
 
 These values are deliberately recorded as
@@ -133,11 +170,12 @@ unbiased failure denominator. Walk-forward evaluation applies the same
 conditioner; a future learned reliability artifact must first bind exhaustive
 statement coverage, exact evidence revisions, and out-of-sample evaluation.
 
-For the X-first MVP, the configured inputs are limited to Tibo posts available
-before the cutoff and a curated community/ecosystem source set. A Tibo post used to
-confirm an outcome cannot be exposed as a feature to an earlier historical
-forecast. Community activity is aggregated after evidence-dependency collapse;
-raw post count is never substituted for independent evidence.
+For the X-first MVP, the configured inputs are limited to exact Tibo posts,
+replies, and reposts available before the cutoff plus Codex-experience and
+competitor-release context. A Tibo statement used to confirm an outcome cannot be
+exposed as a feature to an earlier historical forecast. RSSHub may transport exact
+statements from configured accounts but its finite feed never supplies outcome
+completeness. Raw post count is never substituted for independent evidence.
 
 Availability and recency are different clocks. `available_at` determines whether a
 record is visible at a cutoff; a verified source publication or asserted event time
@@ -146,7 +184,7 @@ become newly visible today but it does not become a fresh product event. Signals
 selected by following links from a known outcome are feature-ineligible.
 
 Raw author identifiers, raw post counts, free text, and high-dimensional embeddings
-are not version 0.2 prediction features. Embeddings may assist event linking.
+are not version 0.3 prediction features. Embeddings may assist event linking.
 
 ## Cross-vendor data
 
@@ -189,8 +227,8 @@ cannot manufacture earlier as-of coverage.
 
 New information follows two paths:
 
-1. Provider signals immediately enter the next hourly as-of feature snapshot and
-   forecast without waiting for a parameter update.
+1. Provider signals enter the next 10-minute pipeline run's hourly-slot as-of
+   feature snapshots and forecast without waiting for a parameter update.
 2. Model parameters are batch-refit at most once every 24 hours, using mature
    confirmed positive intervals available by the frozen training cutoff, plus
    negative hours drawn only from negative-label-eligible coverage. Positive
