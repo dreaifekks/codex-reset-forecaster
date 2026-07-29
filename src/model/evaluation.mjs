@@ -47,6 +47,9 @@ import {
   coverageAssertionRevisions,
 } from "./coverage-as-of.mjs";
 import { conditionAuthorityTimingHazards } from "./authority-timing.mjs";
+import {
+  conditionPostOutcomeRefractoryHazards,
+} from "./post-outcome-refractory.mjs";
 
 export const EVALUATION_WAITING_SCHEMA_VERSION = "evaluation-waiting/1";
 
@@ -177,8 +180,19 @@ function rollingPrediction(model, featureRows, {
       interval80: null,
     };
   });
-  const conditioned = conditionAuthorityTimingHazards({
+  const refractory = conditionPostOutcomeRefractoryHazards({
     hazardEntries,
+    signals,
+    observations,
+    outcomes,
+    config,
+    knowledgeCutoff: anchor,
+    asOfMode,
+    excludedSourceRecordIds,
+    excludedIndependenceGroupIds,
+  });
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: refractory.hazardEntries,
     signals,
     observations,
     outcomes,
@@ -194,6 +208,7 @@ function rollingPrediction(model, featureRows, {
       1,
     ),
     conditioning: conditioned.metadata,
+    refractory: refractory.metadata,
   };
 }
 
@@ -278,6 +293,20 @@ function sourceExclusions(outcomes) {
   };
 }
 
+export function foldSourceExclusionsAtAnchor(
+  foldOutcomes,
+  anchor,
+  asOfMode = AS_OF_MODE.LIVE,
+) {
+  const anchorMs = Date.parse(anchor);
+  if (!Number.isFinite(anchorMs)) {
+    throw new TypeError("Fold exclusion anchor must be a valid timestamp");
+  }
+  return sourceExclusions(foldOutcomes.filter((outcome) =>
+    Date.parse(outcomeAvailableAt(outcome, asOfMode)) > anchorMs
+  ));
+}
+
 function compatibleFeatureContract(model, config) {
   return model?.feature_schema_version === config.feature_schema_version &&
     JSON.stringify(model.feature_names) === JSON.stringify(FEATURE_NAMES);
@@ -333,6 +362,9 @@ function trainingOptionsFromArtifact(model, config) {
       model.training_hyperparameters?.max_iterations ?? config.model.max_iterations,
     ),
     coefficientPriors: configuredPriors,
+    featureSupportPolicy:
+      model.training_hyperparameters?.feature_support ??
+      config.model.feature_support,
   };
 }
 
@@ -939,6 +971,7 @@ export async function evaluateWalkForward(store, config, {
         standardizedFeatureClip: config.model.standardized_feature_clip,
         maxIterations: config.model.max_iterations,
         coefficientPriors: config.model.coefficient_priors,
+        featureSupportPolicy: config.model.feature_support,
       });
     } catch (error) {
       evaluationFailures.push(error);
@@ -999,7 +1032,6 @@ export async function evaluateWalkForward(store, config, {
     const foldAmbiguousOutcomes = ambiguousOutcomes.filter((outcome) =>
       overlaps(origin, testEnd, outcome.data.occurred_time_range),
     );
-    const exclusions = sourceExclusions(foldEvents);
     for (const anchor of coveredFoldAnchors) {
       const windowEnd = addHours(anchor, 4);
       const label = causalWindowLabel(
@@ -1009,6 +1041,11 @@ export async function evaluateWalkForward(store, config, {
         ambiguousOutcomes,
       );
       if (label === null) continue;
+      const exclusions = foldSourceExclusionsAtAnchor(
+        foldEvents,
+        anchor,
+        asOfMode,
+      );
       for (const assertion of adequateCoverageAssertionsAsOf(
         assertions,
         anchor,
@@ -1034,6 +1071,7 @@ export async function evaluateWalkForward(store, config, {
           expectedExtractor: extractor,
           targetScope: config.target,
           authorityTimingPolicy: config.model.authority_timing,
+          evidenceCarryoverPolicy: config.model.evidence_carryover,
           outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
           excludedSourceRecordIds: exclusions.recordIds,
           excludedIndependenceGroupIds: exclusions.independenceGroupIds,
@@ -1073,6 +1111,21 @@ export async function evaluateWalkForward(store, config, {
         baseline_probability: baseline4h,
         features_hash: hashLabel({
           feature_rows: featureRows,
+          post_outcome_refractory: {
+            policy_version:
+              challengerPrediction.refractory.policy_version,
+            applied: challengerPrediction.refractory.applied,
+            status: challengerPrediction.refractory.status,
+            as_of_mode: challengerPrediction.refractory.as_of_mode,
+            outcome_ref: challengerPrediction.refractory.outcome_ref,
+            outcome_available_at:
+              challengerPrediction.refractory.outcome_available_at,
+            outcome_occurred_time_range:
+              challengerPrediction.refractory
+                .outcome_occurred_time_range,
+            first_slot_multiplier:
+              challengerPrediction.refractory.first_slot_multiplier,
+          },
           authority_conditioning: {
             policy_version:
               challengerPrediction.conditioning.policy_version,

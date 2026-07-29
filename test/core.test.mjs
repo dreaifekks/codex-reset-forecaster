@@ -64,9 +64,9 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
-  assert.equal(live.config_version, "provider-config/0.3.1");
+  assert.equal(live.config_version, "provider-config/0.3.2");
   assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.0");
-  assert.equal(live.feature_schema_version, "reset-features/0.3.0");
+  assert.equal(live.feature_schema_version, "reset-features/0.3.1");
   assert.equal(live.deduplication_version, "reset-dedup/0.2.3");
   assert.equal(live.extractor.model_version, "0.3.1");
   assert.equal(
@@ -231,6 +231,26 @@ test("canonical predictions bind their full horizon, feature snapshots, and trai
         epistemic_interval_80: [0.05, 0.2],
       }],
       no_reset_probability: 0.9,
+      post_outcome_refractory: {
+        policy_version:
+          "post-outcome-refractory-piecewise-hazard-multiplier/1",
+        applied: false,
+        status: "disabled",
+        outcome_selection_basis:
+          "latest_eligible_confirmed_outcome_available_at_cutoff",
+        time_basis: "occurred_time_range_end",
+        prior_basis:
+          "versioned_non_learned_minimum_inter_event_prior",
+        outcome_ref: null,
+        outcome_known_at: null,
+        outcome_available_at: null,
+        outcome_occurred_time_range: null,
+        as_of_mode: "live",
+        recovery_end_at: null,
+        first_slot_multiplier: null,
+        base_horizon_probability: 0.1,
+        conditioned_horizon_probability: 0.1,
+      },
       data_quality: {
         score: 0.8,
         provider_coverage: 0.7,
@@ -251,6 +271,31 @@ test("canonical predictions bind their full horizon, feature snapshots, and trai
     },
   });
   assert.doesNotThrow(() => assertCanonicalRecord(prediction));
+  const legacyPrediction = structuredClone(prediction);
+  legacyPrediction.producer = {
+    name: "reset-forecaster",
+    version: "0.3.1",
+    config_hash: null,
+  };
+  delete legacyPrediction.data.post_outcome_refractory;
+  assert.doesNotThrow(
+    () => assertCanonicalRecord(legacyPrediction),
+    "reset-intel/0.2 predictions issued before refractory metadata remain valid",
+  );
+  const currentPredictionWithoutRefractory =
+    structuredClone(legacyPrediction);
+  currentPredictionWithoutRefractory.producer.version = "0.3.2";
+  assert.throws(
+    () => assertCanonicalRecord(currentPredictionWithoutRefractory),
+    /requires post-outcome refractory metadata/,
+  );
+  const futurePredictionWithoutRefractory =
+    structuredClone(currentPredictionWithoutRefractory);
+  futurePredictionWithoutRefractory.producer.version = "0.3.3";
+  assert.throws(
+    () => assertCanonicalRecord(futurePredictionWithoutRefractory),
+    /requires post-outcome refractory metadata/,
+  );
   assert.throws(
     () => assertCanonicalRecord({
       ...prediction,
@@ -700,6 +745,12 @@ test("hourly scheduler records evaluation waiting and does not refit every hour"
     minimum_evaluation_windows: 1008,
     minimum_evaluation_events: 20,
   };
+  const promotionGuard = {
+    schema_version: "live-forecast-promotion-guard/1",
+    mode: "bootstrap_enforced",
+    passed: true,
+    blockers: [],
+  };
   const retrainValues = [];
   const scheduler = startScheduler({
     store,
@@ -717,6 +768,7 @@ test("hourly scheduler records evaluation waiting and does not refit every hour"
           succeeded: options.retrain,
           skipped: !options.retrain,
           evaluation: null,
+          promotion_guard: options.retrain ? promotionGuard : null,
         },
         forecast: null,
         collection: {},
@@ -733,10 +785,61 @@ test("hourly scheduler records evaluation waiting and does not refit every hour"
   const state = await store.readState("runtime");
   assert.equal(state.last_status, "waiting_for_evaluation");
   assert.deepEqual(state.last_evaluation_waiting, evaluationWaiting);
+  assert.deepEqual(state.last_promotion_guard, promotionGuard);
   assert.equal(state.last_training_at, "2026-07-25T20:30:00.000Z");
   assert.equal(
     state.last_retrain_requested_at,
     "2026-07-25T20:30:00.000Z",
+  );
+  assert.equal(state.last_prediction_id, null);
+  assert.equal(state.last_error, null);
+  assert.equal(state.last_failure_at, undefined);
+});
+
+test("scheduler preserves a reused-challenger guard rejection as a structured terminal state", async (t) => {
+  const store = await temporaryStore(t);
+  const promotionGuard = {
+    schema_version: "live-forecast-promotion-guard/1",
+    mode: "bootstrap_enforced",
+    passed: false,
+    blockers: [
+      "bootstrap_probability_saturation_with_positive_clip_bound_contribution",
+    ],
+  };
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-25T20:30:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async () => ({
+      status: "promotion_blocked",
+      promotion_guard: promotionGuard,
+      training: {
+        succeeded: false,
+        skipped: true,
+        reused_challenger: true,
+        promotion_guard: promotionGuard,
+        promotion: {
+          promoted: false,
+          reason: "live_forecast_promotion_guard_rejected",
+        },
+      },
+      forecast: null,
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-25T20:30:00.000Z" },
+    }),
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "promotion_blocked");
+  assert.deepEqual(state.last_promotion_guard, promotionGuard);
+  assert.equal(
+    state.last_promotion_status,
+    "live_forecast_promotion_guard_rejected",
   );
   assert.equal(state.last_prediction_id, null);
   assert.equal(state.last_error, null);

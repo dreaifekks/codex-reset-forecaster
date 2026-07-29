@@ -30,6 +30,7 @@ import {
 import {
   assessFoldCoverage,
   causalWindowLabel,
+  foldSourceExclusionsAtAnchor,
   fourHourAnchorsWithinFold,
   promoteChallenger,
   recomputeFrozenEvaluationArtifact,
@@ -219,6 +220,7 @@ function observation(id, {
   publishedAt = "2026-07-25T10:00:00.000Z",
   firstSeenAt = "2026-07-25T10:00:00.000Z",
   availabilityAttestation = null,
+  ingestProvider = "fixture",
 } = {}) {
   return createRecord({
     recordType: "raw_observation",
@@ -226,7 +228,7 @@ function observation(id, {
     createdAt: firstSeenAt,
     producer: producer("test", "1"),
     data: {
-      ingest_provider: "fixture",
+      ingest_provider: ingestProvider,
       provider_item_id: id,
       canonical_url: `https://example.test/${id}`,
       published_at: publishedAt,
@@ -250,6 +252,7 @@ function signal(id, source, {
   createdAt = availableAt,
   competitiveContext = null,
   derivation = role === "aggregator" ? "summarizes" : "primary_statement",
+  independenceGroupId = `ind_${id}`,
 } = {}) {
   return createRecord({
     recordType: "normalized_signal",
@@ -277,7 +280,7 @@ function signal(id, source, {
       provenance: {
         source_identity_id: "person_tibo_sottiaux",
         source_role: role,
-        independence_group_id: `ind_${id}`,
+        independence_group_id: independenceGroupId,
         derivation,
       },
       extraction: {
@@ -293,6 +296,7 @@ function signal(id, source, {
 function outcome(id, source, range, knownAt = range.end, {
   replayAvailableAt = null,
   config = modelConfig(),
+  independenceGroupId = `ind_${id}`,
 } = {}) {
   return createRecord({
     recordType: "reset_outcome",
@@ -322,7 +326,7 @@ function outcome(id, source, range, knownAt = range.end, {
       verification: [{
         kind: "official_confirmation",
         observation_ref: { record_id: source.record_id, revision: source.revision },
-        independence_group_id: `ind_${id}`,
+        independence_group_id: independenceGroupId,
       }],
       candidate_refs: [{ record_id: `candidate_${id}`, revision: 1 }],
     },
@@ -358,6 +362,23 @@ function modelConfig(overrides = {}) {
       hessian_step: 1e-4,
       standardized_feature_clip: 8,
       max_iterations: 250,
+      post_outcome_refractory: {
+        version:
+          "post-outcome-refractory-piecewise-hazard-multiplier/1",
+        enabled: false,
+        outcome_selection_basis:
+          "latest_eligible_confirmed_outcome_available_at_cutoff",
+        time_basis: "occurred_time_range_end",
+        prior_basis:
+          "versioned_non_learned_minimum_inter_event_prior",
+        recovery_curve: [
+          { elapsed_hours: 0, multiplier: 0.001 },
+          { elapsed_hours: 1, multiplier: 0.002 },
+          { elapsed_hours: 4, multiplier: 0.01 },
+          { elapsed_hours: 8, multiplier: 0.1 },
+          { elapsed_hours: 12, multiplier: 1 },
+        ],
+      },
       coefficient_priors: {},
       minimum_outcomes: 1,
       minimum_live_evaluation_windows: 2,
@@ -620,6 +641,45 @@ test("event-time risk sets censor anchors inside an outcome and fixed alerts spe
     selectFixedBudgetAlerts(rows, 2).map((row) => row.anchor),
     ["2026-07-25T01:00:00.000Z", "2026-07-25T00:00:00.000Z"],
   );
+});
+
+test("walk-forward exclusions release a fold outcome after its as-of availability boundary", () => {
+  const foldOutcome = {
+    record_id: "out_fold_event",
+    revision: 1,
+    supersedes: null,
+    data: {
+      known_at: "2026-07-10T11:00:00.000Z",
+      replay_available_at: "2026-07-10T10:00:00.000Z",
+      verification: [{
+        observation_ref: {
+          record_id: "obs_fold_event",
+          revision: 1,
+        },
+        independence_group_id: "ind_fold_event",
+      }],
+    },
+  };
+  const beforeLive = foldSourceExclusionsAtAnchor(
+    [foldOutcome],
+    "2026-07-10T10:30:00.000Z",
+    AS_OF_MODE.LIVE,
+  );
+  const afterLive = foldSourceExclusionsAtAnchor(
+    [foldOutcome],
+    "2026-07-10T11:00:00.000Z",
+    AS_OF_MODE.LIVE,
+  );
+  const afterArchiveReplay = foldSourceExclusionsAtAnchor(
+    [foldOutcome],
+    "2026-07-10T10:00:00.000Z",
+    AS_OF_MODE.ARCHIVE_REPLAY,
+  );
+
+  assert.equal(beforeLive.recordIds.has(foldOutcome.record_id), true);
+  assert.equal(beforeLive.independenceGroupIds.has("ind_fold_event"), true);
+  assert.equal(afterLive.recordIds.size, 0);
+  assert.equal(afterArchiveReplay.recordIds.size, 0);
 });
 
 test("as-issued metrics deduplicate a window to its latest pre-start issuance and bind exact rows", async () => {
@@ -1626,6 +1686,164 @@ test("confirmed outcomes without strict verification never enter reset-history f
   );
 });
 
+test("outcome eligibility retains a verification signal removed by feature evidence deduplication", () => {
+  const independenceGroupId = "ind_same_reset_across_providers";
+  const verifiedSource = observation("dedup-outcome-historical", {
+    publishedAt: "2026-01-01T10:00:00.000Z",
+    firstSeenAt: "2026-01-01T10:00:00.000Z",
+    ingestProvider: "historical_monitor",
+  });
+  const preferredFeatureSource = observation("dedup-outcome-rsshub", {
+    publishedAt: "2026-01-01T10:00:00.000Z",
+    firstSeenAt: "2026-01-01T10:05:00.000Z",
+    ingestProvider: "rsshub_x",
+  });
+  const verifiedSignal = signal("dedup-outcome-historical", verifiedSource, {
+    availableAt: "2026-01-01T10:00:00.000Z",
+    independenceGroupId,
+  });
+  const preferredFeatureSignal = signal(
+    "dedup-outcome-rsshub",
+    preferredFeatureSource,
+    {
+      availableAt: "2026-01-01T10:05:00.000Z",
+      independenceGroupId,
+    },
+  );
+  const verifiedOutcome = outcome(
+    "dedup-outcome",
+    verifiedSource,
+    {
+      start: "2026-01-01T10:00:00.000Z",
+      end: "2026-01-01T11:00:00.000Z",
+    },
+    "2026-01-01T11:00:00.000Z",
+    { independenceGroupId },
+  );
+
+  const vector = featureVectorAt({
+    targetTime: "2026-01-02T11:00:00.000Z",
+    knowledgeCutoff: "2026-01-02T11:00:00.000Z",
+    signals: [verifiedSignal, preferredFeatureSignal],
+    outcomes: [verifiedOutcome],
+    observations: [verifiedSource, preferredFeatureSource],
+    confirmationIdentityIds: new Set(["person_tibo_sottiaux"]),
+    expectedExtractor: extractorContract(modelConfig()),
+    targetScope: modelConfig().target,
+  });
+
+  assert.equal(vector.dataQuality.outcome_sample_count, 1);
+  assert.equal(
+    vector.sourceRecords.some((record) =>
+      record.record_id === verifiedOutcome.record_id
+    ),
+    true,
+  );
+  assert.deepEqual(
+    vector.sourceRecords
+      .filter((record) => record.record_type === "normalized_signal")
+      .map((record) => record.record_id),
+    [preferredFeatureSignal.record_id],
+  );
+});
+
+test("feature construction consumes completed lineage and discounts only older independent evidence", () => {
+  const config = modelConfig();
+  const completionSource = observation("epoch-completion", {
+    publishedAt: "2026-07-29T04:09:00.000Z",
+    firstSeenAt: "2026-07-29T04:10:00.000Z",
+  });
+  const completionSignal = signal("epoch-completion", completionSource, {
+    availableAt: "2026-07-29T04:10:00.000Z",
+  });
+  const completed = outcome(
+    "epoch-completion",
+    completionSource,
+    {
+      start: "2026-07-29T04:00:00.000Z",
+      end: "2026-07-29T05:00:00.000Z",
+    },
+    "2026-07-29T05:00:00.000Z",
+    { config },
+  );
+  const olderSource = observation("epoch-older-independent", {
+    publishedAt: "2026-07-29T03:00:00.000Z",
+    firstSeenAt: "2026-07-29T03:00:00.000Z",
+  });
+  const olderSignal = signal("epoch-older-independent", olderSource, {
+    eventType: "release",
+    phase: "completed",
+    role: "employee",
+    assertedRange: {
+      start: "2026-07-29T06:00:00.000Z",
+      end: "2026-07-29T07:00:00.000Z",
+    },
+  });
+  const newerSource = observation("epoch-newer-independent", {
+    publishedAt: "2026-07-29T05:30:00.000Z",
+    firstSeenAt: "2026-07-29T05:30:00.000Z",
+  });
+  const newerSignal = signal("epoch-newer-independent", newerSource, {
+    eventType: "release",
+    phase: "completed",
+    role: "employee",
+  });
+  const common = {
+    targetTime: "2026-07-29T06:00:00.000Z",
+    knowledgeCutoff: "2026-07-29T06:00:00.000Z",
+    confirmationIdentityIds: new Set(["person_tibo_sottiaux"]),
+    expectedExtractor: extractorContract(config),
+    targetScope: config.target,
+    evidenceCarryoverPolicy: {
+      version: "post-outcome-evidence-carryover/1",
+      consume_outcome_lineage: true,
+      pre_outcome_multiplier: 0.5,
+    },
+  };
+  const olderBaseline = featureVectorAt({
+    ...common,
+    signals: [olderSignal],
+    outcomes: [],
+    observations: [olderSource],
+  }).features;
+  const olderAfterOutcome = featureVectorAt({
+    ...common,
+    signals: [completionSignal, olderSignal],
+    outcomes: [completed],
+    observations: [completionSource, olderSource],
+  }).features;
+  const newerBaseline = featureVectorAt({
+    ...common,
+    signals: [newerSignal],
+    outcomes: [],
+    observations: [newerSource],
+  }).features;
+  const newerAfterOutcome = featureVectorAt({
+    ...common,
+    signals: [completionSignal, newerSignal],
+    outcomes: [completed],
+    observations: [completionSource, newerSource],
+  }).features;
+
+  assert.ok(olderBaseline.independent_support_decay > 0);
+  assert.ok(
+    Math.abs(
+      olderAfterOutcome.independent_support_decay -
+        olderBaseline.independent_support_decay * 0.5,
+    ) < 1e-12,
+  );
+  assert.equal(olderBaseline.asserted_time_overlap, 0.35);
+  assert.equal(olderAfterOutcome.asserted_time_overlap, 0.175);
+  assert.ok(newerBaseline.independent_support_decay > 0);
+  assert.ok(
+    Math.abs(
+      newerAfterOutcome.independent_support_decay -
+        newerBaseline.independent_support_decay,
+    ) < 1e-12,
+  );
+  assert.equal(olderAfterOutcome.official_reset_activity_decay, 0);
+});
+
 test("the model design includes smoothed weekly and daily Fourier baselines", () => {
   const common = {
     knowledgeCutoff: "2026-07-20T00:00:00.000Z",
@@ -1795,6 +2013,23 @@ test("published horizon has 168 slots and marks incomplete trailing four-hour wi
   assert.ok(Math.abs(result.noResetProbability - 0.9 ** 168) < 1e-15);
 });
 
+test("no-reset probability retains tiny survival mass without subtractive cancellation", () => {
+  const entries = Array.from({ length: 172 }, (_, index) => ({
+    start: new Date(Date.UTC(2026, 0, 1, index)).toISOString(),
+    end: new Date(Date.UTC(2026, 0, 1, index + 1)).toISOString(),
+    hazard: 0.5,
+    interval80: null,
+  }));
+  const result = deriveProbabilitySlots(entries, {
+    publishedSlotCount: 168,
+  });
+
+  assert.equal(result.slots.at(-1).reset_by_end_probability, 1);
+  assert.equal(result.noResetProbability, 2 ** -168);
+  assert.ok(result.noResetProbability > 0);
+  assert.notEqual(result.noResetProbability, 2 ** -172);
+});
+
 test("forecast preserves its cutoff and rolls a crossed horizon forward before publication", async () => {
   const config = modelConfig();
   const dimension = FEATURE_NAMES.length + 1;
@@ -1856,7 +2091,8 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
   assert.equal(appended.data.issued_at, "2026-07-25T13:05:00.000Z");
   assert.ok(Date.parse(appended.data.issued_at) <= Date.parse(appended.data.horizon.start));
   assert.equal(appended.data.slots.length, 168);
-  assert.equal(appendedSnapshots[0].producer.version, "0.3.1");
+  assert.equal(appended.data.post_outcome_refractory.status, "disabled");
+  assert.equal(appendedSnapshots[0].producer.version, "0.3.2");
   const firstPrediction = appended;
   const integrity = assessPredictionIntegrity({
     prediction: firstPrediction,
@@ -1865,6 +2101,20 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
     config,
   });
   assert.equal(integrity.valid, true);
+  const missingRefractory = structuredClone(firstPrediction);
+  delete missingRefractory.data.post_outcome_refractory;
+  const missingRefractoryIntegrity = assessPredictionIntegrity({
+    prediction: missingRefractory,
+    featureSnapshots: appendedSnapshots.slice(0, 168),
+    champion,
+    config,
+  });
+  assert.equal(missingRefractoryIntegrity.valid, false);
+  assert.ok(
+    missingRefractoryIntegrity.reasons.includes(
+      "prediction_post_outcome_refractory_missing",
+    ),
+  );
   const tamperedPrediction = structuredClone(firstPrediction);
   tamperedPrediction.data.slots[0].hazard += 0.01;
   tamperedPrediction.data.slots[0].first_reset_probability =
@@ -1913,7 +2163,7 @@ test("model compatibility and promotion reject mismatched contracts and artifact
       modelContractHash: "contract-a",
       algorithmSignature: "algorithm",
     }).modelVersion,
-    /^reset-model\/0\.3\.1-/,
+    /^reset-model\/0\.3\.2-/,
   );
   assert.notEqual(
     evaluationContractHash(modelConfig()),
@@ -2173,7 +2423,7 @@ test("promotion verifies exact outcome and coverage snapshots but ignores unrela
   const dimension = FEATURE_NAMES.length + 1;
   const challenger = {
     artifact_version: MODEL_ARTIFACT_VERSION,
-    model_version: "reset-model/0.3.1-test",
+    model_version: "reset-model/0.3.2-test",
     training_data_hash: "training-data",
     model_contract_hash: "sha256:model-contract",
     evaluation_contract_hash: "sha256:evaluation-contract",

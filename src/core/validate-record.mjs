@@ -2,6 +2,9 @@ import {
   OUTCOME_ADJUDICATOR_VERSION,
   OUTCOME_LABEL_POLICY_VERSION,
 } from "./outcome-contract.mjs";
+import {
+  predictionRequiresPostOutcomeRefractory,
+} from "./prediction-contract.mjs";
 
 const RECORD_TYPES = new Set([
   "raw_observation",
@@ -116,6 +119,110 @@ function validatePrediction(record) {
   }
   probability(data.no_reset_probability, "prediction no-reset probability");
   invariant(Math.abs(data.no_reset_probability - survival) <= 1e-8, "prediction no-reset identity mismatch");
+  const refractory = data.post_outcome_refractory;
+  invariant(
+    !predictionRequiresPostOutcomeRefractory(record) ||
+      refractory !== undefined,
+    "current reset-forecaster prediction requires post-outcome refractory metadata",
+  );
+  if (refractory !== undefined) {
+    invariant(
+      refractory?.policy_version ===
+        "post-outcome-refractory-piecewise-hazard-multiplier/1" &&
+      refractory.outcome_selection_basis ===
+        "latest_eligible_confirmed_outcome_available_at_cutoff" &&
+      refractory.time_basis === "occurred_time_range_end" &&
+      refractory.prior_basis ===
+        "versioned_non_learned_minimum_inter_event_prior" &&
+      ["live", "archive_replay", "synthetic_replay"].includes(
+        refractory.as_of_mode,
+      ) &&
+      typeof refractory.applied === "boolean",
+      "prediction post-outcome refractory policy mismatch",
+    );
+    probability(
+      refractory.base_horizon_probability,
+      "prediction refractory base horizon probability",
+    );
+    probability(
+      refractory.conditioned_horizon_probability,
+      "prediction refractory conditioned horizon probability",
+    );
+    if (refractory.status === "active") {
+      invariant(
+        refractory.applied === true,
+        "active prediction refractory must be applied",
+      );
+      recordReference(
+        refractory.outcome_ref,
+        "prediction refractory outcome ref",
+      );
+      invariant(
+        isUtc(refractory.outcome_known_at) &&
+        isUtc(refractory.outcome_available_at) &&
+        isUtc(refractory.recovery_end_at),
+        "prediction refractory timestamps invalid",
+      );
+      range(
+        refractory.outcome_occurred_time_range,
+        "prediction refractory outcome range",
+      );
+      probability(
+        refractory.first_slot_multiplier,
+        "prediction refractory first-slot multiplier",
+      );
+      invariant(
+        refractory.first_slot_multiplier < 1 &&
+        refractory.conditioned_horizon_probability <=
+          refractory.base_horizon_probability + 1e-8,
+        "active prediction refractory must suppress hazard",
+      );
+    } else if (refractory.status === "recovered") {
+      invariant(
+        refractory.applied === false,
+        "recovered prediction refractory cannot be applied",
+      );
+      recordReference(
+        refractory.outcome_ref,
+        "prediction recovered refractory outcome ref",
+      );
+      invariant(
+        isUtc(refractory.outcome_known_at) &&
+        isUtc(refractory.outcome_available_at) &&
+        isUtc(refractory.recovery_end_at),
+        "prediction recovered refractory timestamps invalid",
+      );
+      range(
+        refractory.outcome_occurred_time_range,
+        "prediction recovered refractory outcome range",
+      );
+      invariant(
+        refractory.first_slot_multiplier === 1,
+        "prediction recovered refractory multiplier must be one",
+      );
+    } else {
+      invariant(
+        ["disabled", "no_eligible_outcome"].includes(refractory.status) &&
+        refractory.applied === false &&
+        refractory.outcome_ref === null &&
+        refractory.outcome_known_at === null &&
+        refractory.outcome_available_at === null &&
+        refractory.outcome_occurred_time_range === null &&
+        refractory.recovery_end_at === null &&
+        refractory.first_slot_multiplier === null,
+        "inactive prediction refractory metadata invalid",
+      );
+    }
+    if (!refractory.applied) {
+      invariant(
+        Math.abs(
+          refractory.base_horizon_probability -
+          refractory.conditioned_horizon_probability
+        ) <= 1e-8,
+        "inactive prediction refractory changed probability",
+      );
+    }
+  }
   if (data.authority_conditioning !== undefined) {
     const conditioning = data.authority_conditioning;
     invariant(
@@ -140,6 +247,15 @@ function validatePrediction(record) {
       conditioning.conditioned_horizon_probability,
       "prediction conditioned horizon probability",
     );
+    if (refractory !== undefined) {
+      invariant(
+        Math.abs(
+          conditioning.base_horizon_probability -
+          refractory.conditioned_horizon_probability
+        ) <= 1e-8,
+        "prediction conditioning stages are not linked",
+      );
+    }
     invariant(
       Math.abs(
         conditioning.conditioned_horizon_probability -

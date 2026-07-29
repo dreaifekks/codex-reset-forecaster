@@ -133,6 +133,84 @@ test("exact Tibo timing contracts first-event mass into the asserted interval", 
   );
 });
 
+test("a later compatible completion consumes an old plan even outside its asserted window", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "2079609157934886974",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:47:15Z",
+    fetchedAt: "2026-07-21T16:48:00Z",
+  });
+  const signal = extractSignal(source, config);
+  const completion = {
+    data: {
+      status: "confirmed",
+      event_type: "quota_reset",
+      scope: structuredClone(signal.data.claim.scope),
+      occurred_time_range: {
+        start: "2026-07-21T20:00:00.000Z",
+        end: "2026-07-21T21:00:00.000Z",
+        boundary: "[start,end)",
+      },
+    },
+  };
+
+  assert.equal(
+    isResetTimingSignalConsumed(
+      signal,
+      [completion],
+      "2026-07-21T22:00:00.000Z",
+    ),
+    true,
+  );
+  assert.equal(
+    isResetTimingSignalActiveAt(signal, {
+      outcomes: [completion],
+      targetTime: "2026-07-21T22:00:00.000Z",
+    }),
+    false,
+  );
+});
+
+test("an earlier cycle completion does not consume a plan asserted for a later cycle", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "2079609157934886973",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:47:15Z",
+    fetchedAt: "2026-07-21T16:48:00Z",
+  });
+  const futurePlan = structuredClone(extractSignal(source, config));
+  futurePlan.data.claim.asserted_time_range = {
+    start: "2026-07-22T00:00:00.000Z",
+    end: "2026-07-22T02:00:00.000Z",
+    boundary: "[start,end)",
+  };
+  const earlierCompletion = {
+    data: {
+      status: "confirmed",
+      event_type: "quota_reset",
+      scope: structuredClone(futurePlan.data.claim.scope),
+      occurred_time_range: {
+        start: "2026-07-21T20:00:00.000Z",
+        end: "2026-07-21T21:00:00.000Z",
+        boundary: "[start,end)",
+      },
+    },
+  };
+
+  assert.equal(
+    isResetTimingSignalConsumed(
+      futurePlan,
+      [earlierCompletion],
+      "2026-07-21T22:00:00.000Z",
+    ),
+    false,
+  );
+});
+
 test("real Tibo mode aliases activate a three-hour scheduled authority window", async () => {
   const config = await loadConfig({
     configPath: "config/tibo-authority-live.json",
@@ -365,6 +443,17 @@ test("a confirmed reset consumes its announcement and anchors the next cycle", a
     config,
     knowledgeCutoff: cutoff,
   });
+  const heldOutOutcomeConditioned = conditionAuthorityTimingHazards({
+    hazardEntries: hazards("2026-07-21T18:00:00Z", 4),
+    signals,
+    observations,
+    outcomes,
+    config,
+    knowledgeCutoff: cutoff,
+    excludedSourceRecordIds: new Set([
+      outcomes.at(-1).record_id,
+    ]),
+  });
   const anchor = latestRecurrenceAnchorAsOf({
     signals,
     observations,
@@ -388,6 +477,11 @@ test("a confirmed reset consumes its announcement and anchors the next cycle", a
   });
 
   assert.equal(conditioned.metadata.applied, false);
+  assert.equal(
+    heldOutOutcomeConditioned.metadata.applied,
+    true,
+    "a held-out completion cannot consume the scheduled signal during walk-forward",
+  );
   assert.equal(vector.features.official_reset_intent_decay, 0);
   assert.equal(vector.features.asserted_time_overlap, 0);
   assert.ok(anchor);

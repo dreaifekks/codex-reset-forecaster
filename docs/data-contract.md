@@ -106,11 +106,17 @@ schema version, provider coverage, and exact source record references.
 
 A seven-day list of hourly hazard and derived probabilities, plus the no-reset
 probability, uncertainty, data quality, model version, training cutoff, calibrator,
-and feature snapshot references. New predictions also record
+and feature snapshot references. `post_outcome_refractory` records the exact
+eligible confirmed outcome revision and a versioned, non-learned hourly-hazard
+multiplier that consumes the completed cycle's near-term expectation, then
+recovers monotonically to one. It is a prediction conditioner, never a negative
+training label. New predictions also record
 `authority_conditioning`: the versioned policy, exact signal revision and asserted
 range when applied, its explicitly prior-only reliability basis, and baseline
 versus conditioned horizon probability. `recurrence_anchor` points to the exact
 latest confirmed outcome revision used to start the current next-reset cycle.
+Refractory conditioning runs before authority timing, so a genuinely new authority
+statement after completion can raise the forecast again.
 These fields provide lineage; neither turns an announcement into a confirmed
 outcome.
 

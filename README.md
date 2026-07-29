@@ -79,6 +79,13 @@ been validated.
   positive intervals can enter immediately; only negative hours require complete
   outcome coverage. Records that arrive while a fit is running enter the next
   batch instead of restarting the current fit.
+- A learnable feature must have non-zero support in at least three independent
+  positive event intervals and 24 covered negative hours. Unsupported,
+  zero-variance, or near-perfect duplicate columns are fixed to zero and audited
+  in the model artifact rather than extrapolated from one coincidence.
+- The live guard checks raw cumulative probability at 4, 24, and 72 hours and
+  combines same-snapshot clip-bound contributions. A rejected old provisional
+  model is not silently restored.
 - `provisional` means usable bootstrap, not measured 80% performance. `validated`
   remains reserved for the original causal/as-issued sample and quality gates.
 - Personal quota windows and expiring reset vouchers are a downstream optimization
@@ -208,7 +215,7 @@ and restart commands.
 
 ## Status
 
-Version `0.2.0` with canonical contract `reset-intel/0.2` implements the website
+Version `0.3.0` with canonical contract `reset-intel/0.2` implements the website
 prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,
@@ -220,10 +227,16 @@ follows from that fit. The `validated` status still requires at least 1,008
 evaluated hourly windows, 20 eligible events, and a compatible challenger that
 passes the fixed-policy walk-forward and calibration gates.
 
-The current checked-in configuration contract is `provider-config/0.3.1`, with
-`reset-taxonomy/0.3.0`, `reset-features/0.3.0`, `reset-dedup/0.2.3`, and extractor
+The current checked-in configuration contract is `provider-config/0.3.2`, with
+`reset-taxonomy/0.3.0`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
 rules `0.3.1` (`reset-extract/rules-0.3.1`). The model contract also binds the
 `winsorized-zscore/1` transform:
-standardized feature values are clipped to `[-8, 8]` during fitting and live
+standardized feature values are clipped to `[-3, 3]` during fitting and live
 inference. Coefficient priors use raw-feature logit units and are converted into
 the standardized training coordinates recorded in each artifact.
+
+Once a qualifying completion outcome is visible, the live profile immediately
+starts a new recurrence cycle. It consumes the completed evidence lineage, halves
+the carry-over of independent evidence published before the outcome boundary, and
+applies a versioned 12-hour refractory recovery to near-term hazards. A new exact
+authority statement after completion may still raise the next-cycle forecast.

@@ -211,16 +211,31 @@ only to saved out-of-sample predictions.
 
 Training and inference use the same versioned standardized-feature transform.
 After subtracting the stored mean and dividing by the stored scale, each feature
-is clipped to `[-8, 8]`. The clip and transform version are persisted in the model
+is clipped to `[-3, 3]`. The clip and transform version are persisted in the model
 artifact and bound into the model contract so a rare feature with a tiny training
 scale cannot create an unbounded live logit shift.
+
+The versioned feature-support gate runs before every full fit and walk-forward
+refit. It counts independent positive event intervals separately from covered
+negative hours, freezes unsupported or zero-variance columns at zero, and removes
+near-perfect duplicate columns deterministically. Those decisions and counts are
+stored in the model artifact, so live inference cannot reactivate a feature that
+was unavailable or supported by only one outcome at training time.
 
 Configured coefficient priors are expressed as logit change per one raw feature
 unit. Training converts each prior into standardized coordinates by multiplying it
 by the stored feature scale; the raw and effective vectors plus the versioned
 coordinate policy are persisted in the artifact.
 
-After the baseline hazards, a versioned exact-authority timing conditioner may
+After the baseline hazards, a qualifying confirmed outcome first applies a
+versioned refractory multiplier for the new recurrence cycle. The live curve
+starts at `0.001` at the outcome range end and recovers monotonically to one over
+12 hours. This is a next-event prior, not a negative label. The completed
+independence lineage is removed from feature carry-over; other evidence published
+before the outcome boundary keeps half weight, while later independent evidence
+keeps full weight.
+
+After that step, a versioned exact-authority timing conditioner may
 mix first-event mass into one active asserted interval, then invert that mass back
 to hourly hazards. It uses only as-of-visible primary evidence, never a summary or
 extraction confidence, and the walk-forward evaluator runs the same path. Until
@@ -238,6 +253,15 @@ wall-clock observations merely to begin. That artifact is useful for provisional
 forecasts, but its existence is not evidence that the 80% event-window-recall gate
 has passed. Causal walk-forward folds and immutable as-issued settlements continue
 to accumulate independently until the validated gate is satisfied.
+
+Before a refit may replace or bootstrap the live model,
+`live-forecast-promotion-guard/2` audits current live snapshots through 72 hours.
+A provisional challenger reused without a refit is rechecked as well. The guard
+rejects excessive same-snapshot combined clip contributions and raw-model
+cumulative saturation at 4, 24, or 72 hours. Generic data-quality OOD status alone
+remains an audit signal, but an OOD probability anomaly is blocking. A rejected
+provisional fallback must pass a second bootstrap check before it can continue
+serving.
 
 ### 7. Outcome adjudication and settlement
 

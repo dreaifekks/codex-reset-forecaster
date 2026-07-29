@@ -61,19 +61,10 @@ export function isResetTimingSignalConsumed(
   const assertedStart = asserted
     ? safeTimestampMillis(asserted.start)
     : null;
-  const assertedEnd = asserted
-    ? safeTimestampMillis(asserted.end)
-    : null;
   if (
     !Number.isFinite(publishedAt) ||
-    (targetTime !== null && !Number.isFinite(target))
-  ) return false;
-  if (
-    asserted &&
-    (
-      !Number.isFinite(assertedStart) ||
-      !Number.isFinite(assertedEnd)
-    )
+    (targetTime !== null && !Number.isFinite(target)) ||
+    (asserted && !Number.isFinite(assertedStart))
   ) return false;
   return outcomes.some((outcome) => {
     const occurred = outcome?.data?.occurred_time_range;
@@ -89,10 +80,8 @@ export function isResetTimingSignalConsumed(
       Number.isFinite(occurredEnd) &&
       occurredEnd > publishedAt &&
       occurredEnd <= target;
-    if (!happenedAfterSignal) return false;
-    return asserted
-      ? occurredStart < assertedEnd && occurredEnd > assertedStart
-      : true;
+    return happenedAfterSignal &&
+      (!asserted || occurredEnd > assertedStart);
   });
 }
 

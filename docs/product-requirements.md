@@ -110,6 +110,13 @@ not be included as an input to a forecast issued before the statement was
 available. Historical training and evaluation use only records with
 `available_at <= knowledge_cutoff`.
 
+Once that outcome is available, the same run must stop treating the completed
+plan as future evidence, re-anchor the next-event cycle, discount independent
+pre-outcome context, and suppress near-term next-reset hazard through the
+versioned refractory recovery. Completion remains a positive outcome, not a
+fabricated negative label. A later exact authority statement begins a new timing
+intent and may raise the next-cycle forecast.
+
 Bootstrap does not wait for new real time to pass when eligible historical data is
 already present. It freezes a training cutoff and fits one reproducible batch from
 the mature labels available by that cutoff. Data collected while the batch is

@@ -4,9 +4,13 @@ import {
   MODEL_ARTIFACT_VERSION,
   MODEL_VERSION_PREFIX,
 } from "./model-version.mjs";
+import {
+  DEFAULT_FEATURE_SUPPORT_POLICY,
+  assessFeatureSupport,
+} from "./feature-support.mjs";
 
 export const FEATURE_TRANSFORM_VERSION = "winsorized-zscore/1";
-export const DEFAULT_STANDARDIZED_FEATURE_CLIP = 8;
+export const DEFAULT_STANDARDIZED_FEATURE_CLIP = 3;
 export const COEFFICIENT_PRIOR_POLICY_VERSION =
   "raw-feature-logit-per-unit/1";
 
@@ -357,30 +361,56 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
   ) {
     throw new RangeError("Standardized feature clip must be positive");
   }
-  const { means, scales } = standardization(examples, featureNames.length);
   const configuredPriors = options.coefficientPriors ?? {};
-  const rawCoefficientPriors = [
+  const featureSupport = assessFeatureSupport(
+    examples,
+    featureNames,
+    options.featureSupportPolicy ?? DEFAULT_FEATURE_SUPPORT_POLICY,
+  );
+  const activeFeatureIndices = featureSupport.features
+    .filter((feature) => feature.status === "active")
+    .map((feature) => feature.feature_index);
+  const activeFeatureNames = activeFeatureIndices.map(
+    (index) => featureNames[index],
+  );
+  const projectRow = (row) => activeFeatureIndices.map((index) => row[index]);
+  const fittedExamples = examples.map((example) =>
+    example.type === "event_interval"
+      ? {
+        ...example,
+        rows: example.rows.map(projectRow),
+      }
+      : {
+        ...example,
+        row: projectRow(example.row),
+      }
+  );
+  const {
+    means: activeMeans,
+    scales: activeScales,
+  } = standardization(fittedExamples, activeFeatureNames.length);
+  const activeRawCoefficientPriors = [
     0,
-    ...featureNames.map((name) => Number(configuredPriors[name] ?? 0)),
+    ...activeFeatureNames.map((name) => Number(configuredPriors[name] ?? 0)),
   ];
-  const coefficientPriors = [
+  const activeCoefficientPriors = [
     0,
-    ...rawCoefficientPriors.slice(1).map((value, index) =>
-      value * scales[index]
+    ...activeRawCoefficientPriors.slice(1).map((value, index) =>
+      value * activeScales[index]
     ),
   ];
   const totalRows = examples.reduce((sum, example) => sum + (example.rows?.length ?? 1), 0);
   const prevalence = clamp(eventCount / totalRows, 1e-5, 1 - 1e-5);
-  const weights = [...coefficientPriors];
-  weights[0] = Math.log(prevalence / (1 - prevalence));
-  let inverseHessian = identity(weights.length);
+  const activeWeights = [...activeCoefficientPriors];
+  activeWeights[0] = Math.log(prevalence / (1 - prevalence));
+  let inverseHessian = identity(activeWeights.length);
   let state = objectiveAndGradient(
-    examples,
-    weights,
-    means,
-    scales,
+    fittedExamples,
+    activeWeights,
+    activeMeans,
+    activeScales,
     lambda,
-    coefficientPriors,
+    activeCoefficientPriors,
     standardizedFeatureClip,
   );
   let iterations = 0;
@@ -390,7 +420,7 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
   while (!converged && iterations < maxIterations) {
     let direction = matrixVector(inverseHessian, state.gradient).map((value) => -value);
     if (!direction.every(Number.isFinite) || dot(state.gradient, direction) >= 0) {
-      inverseHessian = identity(weights.length);
+      inverseHessian = identity(activeWeights.length);
       direction = state.gradient.map((value) => -value);
     }
     const directionalDerivative = dot(state.gradient, direction);
@@ -398,14 +428,16 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
     let candidate = null;
     let candidateState = null;
     while (stepSize >= 1e-12) {
-      candidate = weights.map((value, index) => value + stepSize * direction[index]);
+      candidate = activeWeights.map(
+        (value, index) => value + stepSize * direction[index],
+      );
       candidateState = objectiveAndGradient(
-        examples,
+        fittedExamples,
         candidate,
-        means,
-        scales,
+        activeMeans,
+        activeScales,
         lambda,
-        coefficientPriors,
+        activeCoefficientPriors,
         standardizedFeatureClip,
       );
       if (
@@ -420,13 +452,15 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
       stopReason = "line_search_failed";
       break;
     }
-    const parameterStep = candidate.map((value, index) => value - weights[index]);
+    const parameterStep = candidate.map(
+      (value, index) => value - activeWeights[index],
+    );
     const gradientChange = candidateState.gradient.map(
       (value, index) => value - state.gradient[index],
     );
     inverseHessian = bfgsInverseUpdate(inverseHessian, parameterStep, gradientChange);
     const objectiveChange = Math.abs(state.objective - candidateState.objective);
-    weights.splice(0, weights.length, ...candidate);
+    activeWeights.splice(0, activeWeights.length, ...candidate);
     state = candidateState;
     iterations += 1;
     const gradientNorm = norm(state.gradient);
@@ -443,17 +477,59 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
   }
 
   const hessian = numericalObservedHessian(
-    examples,
-    weights,
-    means,
-    scales,
+    fittedExamples,
+    activeWeights,
+    activeMeans,
+    activeScales,
     lambda,
-    coefficientPriors,
+    activeCoefficientPriors,
     hessianStep,
     standardizedFeatureClip,
   );
   const inverseResult = invertSymmetricPositiveDefinite(hessian);
-  const covariance = inverseResult?.inverse ?? null;
+  const means = featureNames.map((_, index) => {
+    const activeIndex = activeFeatureIndices.indexOf(index);
+    return activeIndex === -1 ? 0 : activeMeans[activeIndex];
+  });
+  const scales = featureNames.map((_, index) => {
+    const activeIndex = activeFeatureIndices.indexOf(index);
+    return activeIndex === -1 ? 1 : activeScales[activeIndex];
+  });
+  const rawCoefficientPriors = [
+    0,
+    ...featureNames.map((name, index) =>
+      activeFeatureIndices.includes(index)
+        ? Number(configuredPriors[name] ?? 0)
+        : 0
+    ),
+  ];
+  const coefficientPriors = rawCoefficientPriors.map(
+    (value, index) => index === 0 ? value : value * scales[index - 1],
+  );
+  const weights = [
+    activeWeights[0],
+    ...featureNames.map((_, index) => {
+      const activeIndex = activeFeatureIndices.indexOf(index);
+      return activeIndex === -1 ? 0 : activeWeights[activeIndex + 1];
+    }),
+  ];
+  const covariance = inverseResult
+    ? Array.from(
+      { length: featureNames.length + 1 },
+      (_, fullRow) =>
+        Array.from({ length: featureNames.length + 1 }, (_, fullColumn) => {
+          const activeRow = fullRow === 0
+            ? 0
+            : activeFeatureIndices.indexOf(fullRow - 1) + 1;
+          const activeColumn = fullColumn === 0
+            ? 0
+            : activeFeatureIndices.indexOf(fullColumn - 1) + 1;
+          if (activeRow === 0 && fullRow !== 0) return 0;
+          if (activeColumn === 0 && fullColumn !== 0) return 0;
+          return inverseResult.inverse[activeRow][activeColumn];
+        }),
+    )
+    : null;
   const uncertainty = inverseResult
     ? {
       status: "available",
@@ -479,6 +555,17 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
     coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
     raw_coefficient_priors: rawCoefficientPriors,
     coefficient_priors: coefficientPriors,
+    feature_support: {
+      ...featureSupport,
+      features: featureSupport.features.map((feature) => ({
+        ...feature,
+        configured_raw_prior: Number(
+          configuredPriors[feature.feature_name] ?? 0,
+        ),
+        applied_raw_prior:
+          rawCoefficientPriors[feature.feature_index + 1],
+      })),
+    },
     feature_transform: {
       version: FEATURE_TRANSFORM_VERSION,
       standardized_feature_clip: standardizedFeatureClip,
@@ -498,6 +585,7 @@ export function trainLogisticHazard(examples, featureNames, options = {}) {
     event_count: eventCount,
     example_count: examples.length,
     training_data_hash: sha256(stableStringify(examples)),
+    fitted_training_data_hash: sha256(stableStringify(fittedExamples)),
   };
   trained.artifact_hash = sha256(stableStringify(trained));
   return trained;

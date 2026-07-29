@@ -743,6 +743,8 @@ test("a fresh compatible challenger forecast is served provisionally without cla
     minimum_outcomes: 3,
     challenger_event_count: 3,
     minimum_outcomes_met: true,
+    live_guard_passed: true,
+    live_guard_source: "disabled",
   });
 
   const base = await serverFor(t, store, appConfig, now);

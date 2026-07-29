@@ -33,6 +33,10 @@ import {
   isAuthorityTimingSupportSignal,
   matchesAuthorityTimingTarget,
 } from "./authority-timing-eligibility.mjs";
+import {
+  DEFAULT_POST_OUTCOME_EVIDENCE_POLICY,
+  postOutcomeEvidenceWeight,
+} from "./evidence-epoch.mjs";
 
 export const FEATURE_NAMES = [
   "weekly_sin_1",
@@ -210,6 +214,7 @@ export function featureVectorAt({
   expectedExtractor = null,
   targetScope = null,
   authorityTimingPolicy = null,
+  evidenceCarryoverPolicy = DEFAULT_POST_OUTCOME_EVIDENCE_POLICY,
   outcomeCoverageProviders = null,
   excludedSourceRecordIds = new Set(),
   excludedIndependenceGroupIds = new Set(),
@@ -251,7 +256,7 @@ export function featureVectorAt({
   );
   const outcomeEligibility = buildOutcomeEligibilityContext({
     observations: observationRecords,
-    signals: knownSignals,
+    signals: signalRecords,
   });
   outcomeEligibility.expectedExtractor = expectedExtractor;
   outcomeEligibility.target = targetScope;
@@ -292,7 +297,18 @@ export function featureVectorAt({
     const eventTime = signalEventTime(signal, observationsByExactRef, observationsById);
     if (!eventTime) return [];
     const age = differenceInHours(target, eventTime);
-    return age >= 0 && age <= 24 * 14 ? [{ signal, age }] : [];
+    return age >= 0 && age <= 24 * 14
+      ? [{
+          signal,
+          age,
+          weight: postOutcomeEvidenceWeight({
+            signal,
+            eventTime,
+            latestOutcome,
+            policy: evidenceCarryoverPolicy,
+          }),
+        }]
+      : [];
   });
   const sourceRecords = observationRecords.filter((observation) =>
     !excludedSourceRecordIds.has(observation.record_id),
@@ -324,9 +340,13 @@ export function featureVectorAt({
   const contradicts = recent.filter(({ signal }) => signal.data.claim.stance === "contradicts");
   const developmentAges = recent
     .filter(({ signal }) => signal.data.claim.event_type === "development_activity")
-    .map(({ age }) => age);
-  const development4h = developmentAges.filter((age) => age <= 4).length;
-  const developmentPrior68h = developmentAges.filter((age) => age > 4 && age <= 72).length;
+    .map(({ age, weight }) => ({ age, weight }));
+  const development4h = developmentAges
+    .filter(({ age }) => age <= 4)
+    .reduce((sum, { weight }) => sum + weight, 0);
+  const developmentPrior68h = developmentAges
+    .filter(({ age }) => age > 4 && age <= 72)
+    .reduce((sum, { weight }) => sum + weight, 0);
   const inResetAgeRange = (minimum, maximum = Infinity) =>
     hoursSinceReset >= minimum && hoursSinceReset < maximum ? 1 : 0;
 
@@ -354,37 +374,40 @@ export function featureVectorAt({
       (sum, age) => sum + exponentialDecay(age, 72),
       0,
     ),
-    official_reset_intent_decay: supports.reduce((sum, { signal, age }) =>
+    official_reset_intent_decay: supports.reduce((sum, { signal, age, weight }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
         isPrimaryStatement(signal) &&
         ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type) &&
         ["scheduled", "expected"].includes(signal.data.claim.phase) &&
         activeResetTimingSignals.has(signal)
-        ? exponentialDecay(age, 24)
+        ? weight * exponentialDecay(age, 24)
         : 0), 0),
-    official_reset_activity_decay: supports.reduce((sum, { signal, age }) =>
+    official_reset_activity_decay: supports.reduce((sum, { signal, age, weight }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
         isPrimaryStatement(signal) &&
         ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type) &&
         ["started", "completed"].includes(signal.data.claim.phase)
-        ? exponentialDecay(age, 18)
+        ? weight * exponentialDecay(age, 18)
         : 0), 0),
-    official_incident_decay: supports.reduce((sum, { signal, age }) =>
+    official_incident_decay: supports.reduce((sum, { signal, age, weight }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
         isPrimaryStatement(signal) &&
         ["incident", "capacity_restore"].includes(signal.data.claim.event_type)
-        ? exponentialDecay(age, 24)
+        ? weight * exponentialDecay(age, 24)
         : 0), 0),
-    independent_support_decay: supports.reduce((sum, { signal, age }) => {
+    independent_support_decay: supports.reduce((sum, { signal, age, weight }) => {
       const isConfirmationReset = signal.data.provenance.source_role !== "aggregator" &&
         confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type);
-      return sum + (isConfirmationReset ? 0 : exponentialDecay(age, 18));
+      return sum + (isConfirmationReset ? 0 : weight * exponentialDecay(age, 18));
     }, 0),
-    independent_contradict_decay: contradicts.reduce((sum, { age }) => sum + exponentialDecay(age, 18), 0),
+    independent_contradict_decay: contradicts.reduce(
+      (sum, { age, weight }) => sum + weight * exponentialDecay(age, 18),
+      0,
+    ),
     asserted_time_overlap: knownSignals.reduce((sum, signal) => {
       if (signal.data.claim.stance !== "supports") return sum;
       if (!matchesTargetScope(signal, targetScope)) return sum;
@@ -408,13 +431,26 @@ export function featureVectorAt({
       const authority = ["official", "product_lead", "product_team_member"].includes(
         signal.data.provenance.source_role,
       ) && isPrimaryStatement(signal) ? 1 : 0.35;
-      return sum + authority;
+      const eventTime = signalEventTime(
+        signal,
+        observationsByExactRef,
+        observationsById,
+      );
+      const weight = eventTime
+        ? postOutcomeEvidenceWeight({
+            signal,
+            eventTime,
+            latestOutcome,
+            policy: evidenceCarryoverPolicy,
+          })
+        : 1;
+      return sum + authority * weight;
     }, 0),
-    openai_release_decay: recent.reduce((sum, { signal, age }) =>
+    openai_release_decay: recent.reduce((sum, { signal, age, weight }) =>
       sum + (signal.data.claim.event_type === "release" && signal.data.claim.scope.vendor === "openai"
-        ? exponentialDecay(age, 36)
+        ? weight * exponentialDecay(age, 36)
         : 0), 0),
-    competitor_model_release_decay: Math.max(0, ...recent.map(({ signal, age }) =>
+    competitor_model_release_decay: Math.max(0, ...recent.map(({ signal, age, weight }) =>
       ["competitor_model_release", "competitor_limit_change"].includes(
         signal.data.claim.event_type,
       ) &&
@@ -423,13 +459,13 @@ export function featureVectorAt({
       ) &&
       signal.data.claim.competitive_context?.stage !== "rumor" &&
       signal.data.claim.scope.vendor === "other"
-        ? exponentialDecay(age, 36)
+        ? weight * exponentialDecay(age, 36)
         : 0)),
     development_activity_anomaly:
       Math.log1p(development4h) - Math.log1p(developmentPrior68h / 17),
-    incident_decay: recent.reduce((sum, { signal, age }) =>
+    incident_decay: recent.reduce((sum, { signal, age, weight }) =>
       sum + (["incident", "capacity_restore"].includes(signal.data.claim.event_type)
-        ? exponentialDecay(age, 18)
+        ? weight * exponentialDecay(age, 18)
         : 0), 0),
     provider_coverage: coverage,
     provider_health: health,
@@ -513,13 +549,14 @@ export async function buildForecastFeatureSnapshots(store, config, {
       expectedExtractor: extractor,
       targetScope: config.target,
       authorityTimingPolicy: config.model.authority_timing,
+      evidenceCarryoverPolicy: config.model.evidence_carryover,
       outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
     });
     const candidate = createRecord({
       recordType: "feature_snapshot",
       naturalKey: `${config.config_hash}:${config.feature_schema_version}:${toUtcIso(cutoff)}:${toUtcIso(targetStart)}`,
       createdAt,
-      producer: producer("as-of-feature-builder", "0.3.1", {
+      producer: producer("as-of-feature-builder", "0.3.2", {
         config_hash: config.config_hash,
         feature_schema_version: config.feature_schema_version,
         taxonomy_version: config.taxonomy_version,

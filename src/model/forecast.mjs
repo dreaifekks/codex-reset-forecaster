@@ -1,4 +1,8 @@
 import { createRecord, producer, recordRef } from "../core/records.mjs";
+import {
+  FORECAST_PRODUCER_NAME,
+  FORECAST_PRODUCER_VERSION,
+} from "../core/prediction-contract.mjs";
 import { ceilHour, clamp, halfOpenRange } from "../core/time.mjs";
 import { FEATURE_NAMES, buildForecastFeatureSnapshots, dataQualityScore, featuresToArray } from "./features.mjs";
 import { assertModelCompatibility, predictHazard } from "./logistic-hazard.mjs";
@@ -7,6 +11,9 @@ import {
   conditionAuthorityTimingHazards,
   latestRecurrenceAnchorAsOf,
 } from "./authority-timing.mjs";
+import {
+  conditionPostOutcomeRefractoryHazards,
+} from "./post-outcome-refractory.mjs";
 
 const MODEL_VALIDATION_STATUSES = new Set(["provisional", "validated"]);
 
@@ -19,10 +26,12 @@ export function deriveProbabilitySlots(hazardEntries, {
     throw new RangeError("Published slot count must fit inside the hazard entries");
   }
   let survival = 1;
+  const survivalByEnd = [];
   const slots = hazardEntries.map((entry) => {
     const hazard = clamp(entry.hazard, 0, 1);
     const firstResetProbability = survival * hazard;
     survival *= 1 - hazard;
+    survivalByEnd.push(survival);
     return {
       start: entry.start,
       end: entry.end,
@@ -45,7 +54,7 @@ export function deriveProbabilitySlots(hazardEntries, {
   }
   return {
     slots: slots.slice(0, publishedSlotCount),
-    noResetProbability: 1 - slots[publishedSlotCount - 1].reset_by_end_probability,
+    noResetProbability: survivalByEnd[publishedSlotCount - 1],
   };
 }
 
@@ -123,8 +132,18 @@ export async function issueForecast(store, config, {
     store.all("raw_observation", { latestOnly: false }),
     store.all("reset_outcome", { latestOnly: false }),
   ]);
-  const conditioned = conditionAuthorityTimingHazards({
+  const refractory = conditionPostOutcomeRefractoryHazards({
     hazardEntries,
+    signals,
+    observations,
+    outcomes,
+    config,
+    knowledgeCutoff: cutoff,
+  });
+  // Refractory suppression settles the completed cycle first. A genuinely new
+  // authority timing statement is then allowed to raise the next-event forecast.
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: refractory.hazardEntries,
     signals,
     observations,
     outcomes,
@@ -156,10 +175,14 @@ export async function issueForecast(store, config, {
     recordType: "prediction",
     naturalKey: `${champion.model_version}:${champion.artifact_hash}:${validationStatus}:${cutoff.toISOString()}:${firstTarget.toISOString()}`,
     createdAt: issued,
-    producer: producer("reset-forecaster", "0.3.1", {
-      model_version: champion.model_version,
-      feature_schema_version: config.feature_schema_version,
-    }),
+    producer: producer(
+      FORECAST_PRODUCER_NAME,
+      FORECAST_PRODUCER_VERSION,
+      {
+        model_version: champion.model_version,
+        feature_schema_version: config.feature_schema_version,
+      },
+    ),
     data: {
       issued_at: issued.toISOString(),
       knowledge_cutoff: cutoff.toISOString(),
@@ -174,6 +197,7 @@ export async function issueForecast(store, config, {
       display_horizon: "PT4H",
       slots: probabilities.slots,
       no_reset_probability: probabilities.noResetProbability,
+      post_outcome_refractory: refractory.metadata,
       authority_conditioning: conditioned.metadata,
       recurrence_anchor: recurrenceAnchor,
       data_quality: {

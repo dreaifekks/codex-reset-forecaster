@@ -59,8 +59,8 @@ stores both raw and effective prior vectors plus optimizer method, objective,
 gradient norm, iteration count, tolerance, and convergence status. Reaching
 `max_iterations` is a failed training attempt, not convergence, and such a
 challenger cannot be promoted.
-The current envelope is `reset-model-artifact/0.3.1`, with model versions under
-the `reset-model/0.3.1-*` prefix. Serving rejects an envelope or version prefix
+The current envelope is `reset-model-artifact/0.3.2`, with model versions under
+the `reset-model/0.3.2-*` prefix. Serving rejects an envelope or version prefix
 that does not match the model contract, even when its remaining fields are
 otherwise self-consistent.
 A complementary log-log link remains a compatible challenger family, but it must
@@ -84,7 +84,7 @@ attested `replay_available_at`; it never rewrites canonical `known_at`. The broa
 kernels are intentional: they express a smooth renewal and periodic baseline
 without memorizing individual dates or hours.
 
-The trained version `reset-features/0.3.0` remains small and interpretable:
+The trained version `reset-features/0.3.1` remains small and interpretable:
 
 - three weekly Fourier harmonics and two daily Fourier harmonics;
 - the renewal-periodic kernel above;
@@ -104,15 +104,25 @@ The competitor value uses the maximum eligible decay rather than a sum. Quotes,
 reposts, repeated reports, and multiple descriptions of one release therefore
 cannot amplify the feature through attention volume.
 
+Before optimization, `feature-support-gate/1` checks every learnable input against
+the frozen training sample. A feature needs a non-zero value in at least three
+independent positive event intervals and 24 negative hours. Features that fail
+either class-support threshold, have zero variance, or duplicate another supported
+column at absolute correlation `0.995` or above are fixed to weight and applied
+prior zero. The artifact records every support count, reason, collinearity group,
+configured prior, and applied prior. This keeps a one-event context coincidence
+from becoming a learned rule while retaining the canonical feature for future
+refits after it has real counterfactual support.
+
 Provider coverage, delay, and health remain in the feature snapshot's data-quality
 metadata but are excluded from the probability vector. They describe whether the
 forecast is trustworthy; they must not become a proxy label for whether a reset
-occurred. The renewal-periodic kernel is learned with a zero prior, so sparse
-training data cannot turn an unlearned live-only kernel value into a large
-probability shift.
+occurred. The renewal-periodic kernel and competitor context start at a zero prior
+and remain fixed at zero until both positive and negative support thresholds are
+met.
 
 Version `winsorized-zscore/1` standardizes each feature with the training mean and
-scale, then clips the standardized value to `[-8, 8]` in both optimization and
+scale, then clips the standardized value to `[-3, 3]` in both optimization and
 live inference. The transform version and clip are stored in the model artifact
 and included in the model contract. This bounds the influence of live feature
 values when a feature had near-zero variance in the training sample without
@@ -169,6 +179,22 @@ timed statement was collected, so unmatched statements cannot yet provide an
 unbiased failure denominator. Walk-forward evaluation applies the same
 conditioner; a future learned reliability artifact must first bind exhaustive
 statement coverage, exact evidence revisions, and out-of-sample evaluation.
+
+### Completed-cycle carry-over and refractory recovery
+
+`post-outcome-evidence-carryover/1` treats the latest eligible confirmed outcome
+as an evidence epoch boundary. Signals in the outcome's independence lineage have
+zero carry-over. Independent signals published before the outcome range end keep
+weight `0.5`; signals published at or after that boundary keep weight `1`. The
+same policy is used by live snapshots, fitting, and walk-forward evaluation and
+is bound into both the feature schema and model contract.
+
+The live profile then applies
+`post-outcome-refractory-piecewise-hazard-multiplier/1` to the baseline hourly
+hazards: `0h=.001`, `1h=.002`, `4h=.01`, `8h=.10`, and `12h=1`, with linear
+interpolation. This changes the conditional probability of the next outcome; it
+does not create a negative training label. Refractory conditioning precedes exact
+authority timing so a genuinely new statement can raise the next-cycle forecast.
 
 For the X-first MVP, the configured inputs are limited to exact Tibo posts,
 replies, and reposts available before the cutoff plus Codex-experience and
@@ -326,6 +352,8 @@ A served weekly prediction, whether provisional or validated, contains:
 - hourly hazard, first-reset mass, cumulative probability, and rolling four-hour
   probability per slot;
 - no-reset probability for a first-event forecast;
+- the post-outcome refractory policy, exact outcome revision, recovery boundary,
+  first-slot multiplier, and baseline versus conditioned probability;
 - the exact authority-timing policy, whether it was applied, its evidence
   reference/range, prior basis, and baseline versus conditioned horizon
   probability;
@@ -340,6 +368,17 @@ forecast computation. It is never backdated to scheduler start. The knowledge
 cutoff records the latest usable information, while the horizon start is a separate
 time. A rolling four-hour value is either based on four full hourly hazards or is
 `null`; a tail value is never silently shortened.
+
+Daily refits and provisional challenger reuse are checked by
+`live-forecast-promotion-guard/2` against current live snapshots. The guard sums
+positive clip-bound logit contributions within each individual snapshot, so
+multiple individually sub-threshold columns cannot bypass the limit. It also
+applies hard raw-model cumulative ceilings at 4, 24, and 72 hours. An
+out-of-distribution flag alone remains audit information for a provisional sample,
+but it becomes blocking when accompanied by a probability anomaly. A rejected
+candidate cannot become the cold bootstrap, and an older provisional fallback must
+pass the same current-snapshot guard before it can continue serving. The policy and
+thresholds are part of the evaluation contract.
 
 The backend keeps this output as one ordered hourly slot list. The website derives
 the next-4-hour and next-24-hour views by slicing it and derives the seven-day

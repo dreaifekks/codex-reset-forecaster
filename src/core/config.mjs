@@ -7,6 +7,18 @@ import {
   AUTHORITY_TIMING_POLICY_VERSION,
   AUTHORITY_TIMING_RELIABILITY_BASIS,
 } from "../model/authority-timing.mjs";
+import {
+  assertPostOutcomeRefractoryPolicy,
+} from "../model/post-outcome-refractory.mjs";
+import {
+  assertPostOutcomeEvidencePolicy,
+} from "../model/evidence-epoch.mjs";
+import {
+  assertLiveForecastPromotionGuardPolicy,
+} from "../model/live-forecast-guard.mjs";
+import {
+  assertFeatureSupportPolicy,
+} from "../model/feature-support.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -175,6 +187,28 @@ function validateAuthorityTiming(config) {
   }
 }
 
+function validatePostOutcomeRefractory(config) {
+  assertPostOutcomeRefractoryPolicy(
+    config.model?.post_outcome_refractory,
+  );
+}
+
+function validatePostOutcomeEvidence(config) {
+  assertPostOutcomeEvidencePolicy(
+    config.model?.evidence_carryover,
+  );
+}
+
+function validateLiveForecastPromotionGuard(config) {
+  assertLiveForecastPromotionGuardPolicy(
+    config.model?.live_forecast_promotion_guard,
+  );
+}
+
+function validateFeatureSupport(config) {
+  assertFeatureSupportPolicy(config.model?.feature_support);
+}
+
 function semanticConfigHash(config) {
   const {
     runtime: _runtime,
@@ -234,6 +268,10 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateProvisionalBootstrap(config);
   validateOutcomeCoverageProviders(config);
   validateAuthorityTiming(config);
+  validatePostOutcomeRefractory(config);
+  validatePostOutcomeEvidence(config);
+  validateLiveForecastPromotionGuard(config);
+  validateFeatureSupport(config);
   validateSchedulerInterval(config);
   validateRsshubXProvider(config);
   config.config_hash = semanticConfigHash(config);

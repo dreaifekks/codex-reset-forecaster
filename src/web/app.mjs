@@ -409,6 +409,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           pipeline_status: readiness.pipeline_status,
           coverage_waiting: readiness.coverage_waiting,
           evaluation_waiting: readiness.evaluation_waiting,
+          promotion_guard: readiness.promotion_guard,
           evaluation_gate_passed: evaluationResult.evaluation?.gate?.passed ?? false,
           evaluation_invalidated: evaluationResult.invalidated,
           serving_ready: readiness.serving_ready,
@@ -449,6 +450,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
             "forecast_validation_status_invalid",
             "forecast_validation_status_missing",
             "provisional_model_ineligible",
+            "provisional_guard_rejected",
           ].includes(blocker)
         );
         const stale = ["stale", "invalid"].includes(freshness.status);

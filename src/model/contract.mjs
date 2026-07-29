@@ -64,6 +64,9 @@ export function modelContractHash(config) {
     signal_recency_basis: "source-published-or-asserted-time/1",
     family: config.model.family,
     authority_timing: config.model.authority_timing,
+    post_outcome_refractory: config.model.post_outcome_refractory,
+    evidence_carryover: config.model.evidence_carryover,
+    feature_support: config.model.feature_support,
     lambda: config.model.lambda,
     coefficient_priors: config.model.coefficient_priors,
     coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
@@ -97,7 +100,7 @@ export function modelContractHash(config) {
 export function trainingAlgorithmSignature(config) {
   return hashLabel({
     model_contract_hash: modelContractHash(config),
-    trainer: "discrete-time-survival/0.3.1",
+    trainer: "discrete-time-survival/0.3.2",
     feature_builder: "dual-clock-as-of-purged-label-sources/3",
   });
 }
@@ -135,6 +138,8 @@ export function evaluationContractHash(config) {
       same_policy_refit: "paired_non_regression_with_1e-12_tolerance",
       incompatible_policy: "explicit_migration_required_without_bridge_evidence",
     },
+    live_forecast_promotion_guard:
+      config.model.live_forecast_promotion_guard,
   });
 }
 

@@ -16,9 +16,15 @@ import { issueForecast } from "../model/forecast.mjs";
 import { ceilHour, floorHour } from "../core/time.mjs";
 import { evaluateIssuedForecasts } from "../model/issued-evaluation.mjs";
 import { settleIssuedPredictions } from "../model/settlement.mjs";
-import { FEATURE_NAMES } from "../model/features.mjs";
+import {
+  FEATURE_NAMES,
+  buildForecastFeatureSnapshots,
+} from "../model/features.mjs";
 import { assertModelCompatibility } from "../model/logistic-hazard.mjs";
 import { modelContractHash } from "../model/contract.mjs";
+import {
+  assessLiveForecastPromotionGuard,
+} from "../model/live-forecast-guard.mjs";
 import { adequateCoverageIntervals } from "./coverage.mjs";
 import {
   aggregateCoverageWaiting,
@@ -118,25 +124,71 @@ export async function trainEvaluatePromote(store, config, {
   now = new Date(),
   train = true,
   onTrained = null,
+  promotionGuard = null,
 } = {}) {
   const trainingCutoff = new Date(now);
   if (Number.isNaN(trainingCutoff.getTime())) {
     throw new TypeError("Invalid training cutoff");
   }
+  if (
+    config.model.live_forecast_promotion_guard?.enabled === true &&
+    typeof promotionGuard !== "function"
+  ) {
+    throw new Error(
+      "Enabled live forecast promotion guard requires an evaluated live snapshot set",
+    );
+  }
   const evaluationCutoff = floorHour(trainingCutoff);
   const training = train
-    ? await trainChallenger(store, config, { trainingCutoff })
+    ? await trainChallenger(store, config, {
+        trainingCutoff,
+        persist: typeof promotionGuard !== "function",
+      })
     : null;
-  if (training && onTrained) await onTrained(training);
+  let existingChallenger = null;
   if (!training) {
-    const challenger = await store.readModel("challenger", {
+    existingChallenger = await store.readModel("challenger", {
       invalidAsNull: true,
     });
-    if (!challenger) {
+    if (!existingChallenger) {
       throw new Error("No compatible challenger exists for evaluation");
     }
-    assertCompatibleModel(challenger, config);
+    assertCompatibleModel(existingChallenger, config);
   }
+  const guardSubject = training ?? {
+    model: existingChallenger,
+    reused_challenger: true,
+  };
+  const promotionGuardResult = guardSubject && promotionGuard
+    ? await promotionGuard(guardSubject)
+    : null;
+  if (promotionGuardResult?.passed === false) {
+    return {
+      status: "promotion_blocked",
+      training,
+      evaluation: null,
+      promotion: {
+        promoted: false,
+        reason: "live_forecast_promotion_guard_rejected",
+        model: guardSubject.model,
+      },
+      promotion_guard: promotionGuardResult,
+      evaluation_waiting: null,
+    };
+  }
+  if (
+    training &&
+    config.model.live_forecast_promotion_guard?.enabled === true &&
+    typeof promotionGuardResult?.passed !== "boolean"
+  ) {
+    throw new Error(
+      "Enabled live forecast promotion guard returned no auditable decision",
+    );
+  }
+  if (training && typeof promotionGuard === "function") {
+    await store.writeModel("challenger", training.model);
+  }
+  if (training && onTrained) await onTrained(training);
   let evaluation;
   try {
     evaluation = await evaluateWalkForward(store, config, {
@@ -150,6 +202,7 @@ export async function trainEvaluatePromote(store, config, {
       training,
       evaluation: null,
       promotion: null,
+      promotion_guard: promotionGuardResult,
       evaluation_waiting: evaluationWaiting,
     };
   }
@@ -160,6 +213,7 @@ export async function trainEvaluatePromote(store, config, {
     training,
     evaluation,
     promotion,
+    promotion_guard: promotionGuardResult,
     evaluation_waiting: evaluationWaiting,
   };
 }
@@ -257,6 +311,7 @@ export async function runPipeline(store, config, {
   collect = true,
   retrain = false,
   providerInstances = {},
+  assessPromotionGuard = assessLiveForecastPromotionGuard,
 } = {}) {
   const fixedNow = now === null || now === undefined ? null : new Date(now);
   if (fixedNow && Number.isNaN(fixedNow.getTime())) {
@@ -272,6 +327,7 @@ export async function runPipeline(store, config, {
     collection: null,
     processing: null,
     training: null,
+    promotion_guard: null,
     forecast: null,
     coverage_waiting: null,
     evaluation_waiting: null,
@@ -323,14 +379,41 @@ export async function runPipeline(store, config, {
   }
   let champion = await compatibleStoredModel(store, "champion", config);
   const challenger = await compatibleStoredModel(store, "challenger", config);
+  const previousServingModel = champion ?? challenger;
   let provisionalModel = null;
+  let guardedRestoredProvisional = null;
   if (retrain || !champion) {
     const train = retrain || !challenger;
+    const challengerRestoreModel = train
+      ? challenger ?? champion
+      : champion;
     let attempt;
     try {
       attempt = await trainEvaluatePromote(store, config, {
         now: knowledgeCutoff,
         train,
+        promotionGuard:
+          train ||
+          config.model.live_forecast_promotion_guard?.enabled === true
+          ? async (training) => {
+              const { snapshots } = await buildForecastFeatureSnapshots(
+                store,
+                config,
+                {
+                  knowledgeCutoff,
+                  horizonStart,
+                  horizonHours: 168,
+                  createdAt: currentTime(),
+                },
+              );
+              return assessPromotionGuard({
+                candidate: training.model,
+                previous: train ? previousServingModel : champion,
+                snapshots,
+                policy: config.model.live_forecast_promotion_guard,
+              });
+            }
+          : null,
         onTrained: async (training) => {
           if (
             !champion &&
@@ -361,16 +444,75 @@ export async function runPipeline(store, config, {
       };
     }
     if (attempt) {
+      if (attempt.status === "promotion_blocked" && challengerRestoreModel) {
+        let restorationGuard = null;
+        const restoringProvisional =
+          !champion &&
+          challengerRestoreModel === challenger;
+        if (restoringProvisional) {
+          const { snapshots } = await buildForecastFeatureSnapshots(
+            store,
+            config,
+            {
+              knowledgeCutoff,
+              horizonStart,
+              horizonHours: 168,
+              createdAt: currentTime(),
+            },
+          );
+          restorationGuard = await assessPromotionGuard({
+            candidate: challengerRestoreModel,
+            previous: null,
+            snapshots,
+            policy: config.model.live_forecast_promotion_guard,
+          });
+          if (restorationGuard.passed) {
+            guardedRestoredProvisional = challengerRestoreModel;
+          }
+        } else {
+          await store.writeModel("challenger", challengerRestoreModel);
+        }
+        attempt.promotion_guard = {
+          ...attempt.promotion_guard,
+          challenger_restoration: {
+            attempted: true,
+            restored:
+              !restoringProvisional || restorationGuard?.passed === true,
+            restored_model_version: challengerRestoreModel.model_version,
+            restored_artifact_hash: challengerRestoreModel.artifact_hash,
+            source: challenger ? "previous_challenger" : "champion_fallback",
+            guard: restorationGuard,
+          },
+        };
+      }
       result.training = {
         succeeded: Boolean(attempt.training),
         skipped: !attempt.training,
         reused_challenger: !attempt.training,
         ...attempt,
       };
+      result.promotion_guard = attempt.promotion_guard ?? null;
       result.evaluation_waiting = attempt.evaluation_waiting;
     }
     champion = await compatibleStoredModel(store, "champion", config);
-    if (attempt?.status === "waiting_for_evaluation") {
+    if (attempt?.status === "promotion_blocked" && !champion) {
+      result.status = "promotion_blocked";
+      if (!guardedRestoredProvisional) {
+        result.timing.completed_at = currentTime().toISOString();
+        return result;
+      }
+      if (
+        eligibleProvisionalBootstrapModel(
+          guardedRestoredProvisional,
+          config,
+        )
+      ) {
+        provisionalModel = guardedRestoredProvisional;
+      } else {
+        result.timing.completed_at = currentTime().toISOString();
+        return result;
+      }
+    } else if (attempt?.status === "waiting_for_evaluation") {
       result.status = "waiting_for_evaluation";
       if (!champion) {
         const latestChallenger = await compatibleStoredModel(
@@ -407,7 +549,9 @@ export async function runPipeline(store, config, {
   result.issuedEvaluation = await evaluateIssuedForecasts(store, config, {
     evaluationCutoff,
   });
-  result.status = result.training?.status === "failed"
+  result.status = result.training?.status === "promotion_blocked"
+    ? "promotion_blocked"
+    : result.training?.status === "failed"
     ? "completed_with_training_error"
     : result.evaluation_waiting
       ? "waiting_for_evaluation"

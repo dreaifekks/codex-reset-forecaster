@@ -1,5 +1,8 @@
 import { extractorContract } from "../core/extractor-contract.mjs";
 import { hashLabel } from "../core/hash.mjs";
+import {
+  predictionRequiresPostOutcomeRefractory,
+} from "../core/prediction-contract.mjs";
 import { modelContractHash } from "./contract.mjs";
 import { deriveProbabilitySlots } from "./forecast.mjs";
 import {
@@ -15,6 +18,9 @@ import {
   conditionAuthorityTimingHazards,
   latestRecurrenceAnchorAsOf,
 } from "./authority-timing.mjs";
+import {
+  conditionPostOutcomeRefractoryHazards,
+} from "./post-outcome-refractory.mjs";
 
 function exactRefKey(record) {
   return `${record.record_id}@${record.revision}`;
@@ -53,6 +59,12 @@ export function assessPredictionIntegrity({
   const reasons = [];
   if (!prediction?.data) {
     return { valid: false, reasons: ["prediction_missing"] };
+  }
+  if (
+    predictionRequiresPostOutcomeRefractory(prediction) &&
+    prediction.data.post_outcome_refractory === undefined
+  ) {
+    reasons.push("prediction_post_outcome_refractory_missing");
   }
   const modelArtifact = suppliedModel ?? champion;
   if (!modelArtifact) {
@@ -206,9 +218,26 @@ export function assessPredictionIntegrity({
       };
     });
     let recomputedHazards = baseHazards;
+    if (prediction.data.post_outcome_refractory !== undefined) {
+      const refractory = conditionPostOutcomeRefractoryHazards({
+        hazardEntries: baseHazards,
+        signals,
+        observations,
+        outcomes,
+        config,
+        knowledgeCutoff: prediction.data.knowledge_cutoff,
+      });
+      recomputedHazards = refractory.hazardEntries;
+      if (
+        hashLabel(refractory.metadata) !==
+          hashLabel(prediction.data.post_outcome_refractory)
+      ) {
+        reasons.push("prediction_post_outcome_refractory_mismatch");
+      }
+    }
     if (prediction.data.authority_conditioning !== undefined) {
       const conditioned = conditionAuthorityTimingHazards({
-        hazardEntries: baseHazards,
+        hazardEntries: recomputedHazards,
         signals,
         observations,
         outcomes,

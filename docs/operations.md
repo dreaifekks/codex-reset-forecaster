@@ -382,6 +382,14 @@ sample fails the quality gate, a validated champion remains active. With no
 validated champion, new forecasts fail closed until a later batch using newly
 mature data passes or the operator explicitly changes the training contract.
 
+Every fit also applies `feature-support-gate/1`: a learned input needs non-zero
+support in at least three independent positive intervals and 24 covered negative
+hours, and near-perfect duplicate columns are reduced to one representative.
+`live-forecast-promotion-guard/2` then checks current 4-, 24-, and 72-hour raw
+probabilities plus same-snapshot combined clip contributions. If an old provisional
+model does not pass that current guard, `/api/forecast/current` returns 503 instead
+of continuing to expose its saved prediction.
+
 ```bash
 RESET_SCHEDULER_ENABLED=true npm start
 ```
@@ -449,6 +457,19 @@ If the provisional minimum is not met, `forecast` remains null. The scheduler
 records the successful fit time and reuses the compatible challenger between daily
 retraining intervals. If a compatible validated champion already exists, it
 continues issuing validated forecasts while the challenger waits.
+
+The live profile also runs `live-forecast-promotion-guard/1` before a newly fitted
+or reused challenger can issue a provisional prediction or enter evaluation.
+Reused artifacts are checked again against the current live snapshots, so enabling
+or tightening the guard cannot inherit an unattested provisional alias. Readiness
+and health expose the last guard decision, compared model refs, probability
+deltas, clip-bound feature diagnostics, blockers, and restoration result. A
+rejected new candidate restores the prior challenger pointer; the serving champion
+remains in service. A rejected bootstrap or reused challenger without a serving
+fallback is recorded as `pipeline_status: "promotion_blocked"` together with its
+guard decision. On a feature-contract migration with no compatible baseline,
+bootstrap uses the configured absolute four-hour saturation ceiling rather than
+silently falling back to audit-only mode.
 
 Training freezes the exact post-processing knowledge cutoff, so coverage that
 becomes verifiably available a few minutes after an hour boundary can be used in

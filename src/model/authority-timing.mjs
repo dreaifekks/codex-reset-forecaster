@@ -34,6 +34,18 @@ function exactRefKey(reference) {
   return `${reference.record_id}@${reference.revision}`;
 }
 
+function outcomeIsExcluded(
+  outcome,
+  excludedSourceRecordIds,
+  excludedIndependenceGroupIds,
+) {
+  return excludedSourceRecordIds.has(outcome.record_id) ||
+    (outcome.data.verification ?? []).some((entry) =>
+      excludedSourceRecordIds.has(entry.observation_ref.record_id) ||
+      excludedIndependenceGroupIds.has(entry.independence_group_id)
+    );
+}
+
 function visibleEvidence({
   signals,
   observations,
@@ -87,6 +99,8 @@ export function latestRecurrenceAnchorAsOf({
   config,
   knowledgeCutoff,
   asOfMode = AS_OF_MODE.LIVE,
+  excludedSourceRecordIds = new Set(),
+  excludedIndependenceGroupIds = new Set(),
 }) {
   const visible = visibleEvidence({
     signals,
@@ -96,7 +110,13 @@ export function latestRecurrenceAnchorAsOf({
     knowledgeCutoff,
     asOfMode,
   });
-  const outcome = visible.outcomes.at(-1) ?? null;
+  const outcome = visible.outcomes.filter((candidate) =>
+    !outcomeIsExcluded(
+      candidate,
+      excludedSourceRecordIds,
+      excludedIndependenceGroupIds,
+    )
+  ).at(-1) ?? null;
   return outcome
     ? {
         outcome_ref: recordRef(outcome),
@@ -139,6 +159,13 @@ function authorityTimingCandidates({
     .map((signal) => Date.parse(signal.data.available_at))
     .sort((left, right) => left - right)
     .at(-1) ?? -Infinity;
+  const lifecycleOutcomes = visible.outcomes.filter((outcome) =>
+    !outcomeIsExcluded(
+      outcome,
+      excludedSourceRecordIds,
+      excludedIndependenceGroupIds,
+    )
+  );
   return authoritySignals
     .filter((signal) => {
       const observation = observationsByRef.get(
@@ -155,7 +182,7 @@ function authorityTimingCandidates({
       }) &&
         Date.parse(signal.data.available_at) > latestContradictionAt &&
         isResetTimingSignalActiveAt(signal, {
-          outcomes: visible.outcomes,
+          outcomes: lifecycleOutcomes,
           targetTime: horizonStart,
         });
     })

@@ -50,6 +50,39 @@
           }
         }
       ]
+    },
+    {
+      "if": {
+        "required": ["record_type", "producer"],
+        "properties": {
+          "record_type": { "const": "prediction" },
+          "producer": {
+            "required": ["name", "version"],
+            "properties": {
+              "name": { "const": "reset-forecaster" },
+              "version": {
+                "anyOf": [
+                  {
+                    "pattern": "^(?:[1-9][0-9]*\\.[0-9]+\\.[0-9]+|0\\.(?:[4-9]|[1-9][0-9]+)\\.[0-9]+|0\\.3\\.(?:[2-9]|[1-9][0-9]+))$"
+                  },
+                  {
+                    "not": {
+                      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "required": ["post_outcome_refractory"]
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -795,6 +828,95 @@
             { "$ref": "#/$defs/probability" },
             { "type": "null" }
           ]
+        },
+        "post_outcome_refractory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policy_version",
+            "applied",
+            "status",
+            "outcome_selection_basis",
+            "time_basis",
+            "prior_basis",
+            "as_of_mode",
+            "outcome_ref",
+            "outcome_known_at",
+            "outcome_available_at",
+            "outcome_occurred_time_range",
+            "recovery_end_at",
+            "first_slot_multiplier",
+            "base_horizon_probability",
+            "conditioned_horizon_probability"
+          ],
+          "properties": {
+            "policy_version": {
+              "const": "post-outcome-refractory-piecewise-hazard-multiplier/1"
+            },
+            "applied": { "type": "boolean" },
+            "status": {
+              "enum": [
+                "active",
+                "disabled",
+                "no_eligible_outcome",
+                "recovered"
+              ]
+            },
+            "outcome_selection_basis": {
+              "const": "latest_eligible_confirmed_outcome_available_at_cutoff"
+            },
+            "time_basis": {
+              "const": "occurred_time_range_end"
+            },
+            "prior_basis": {
+              "const": "versioned_non_learned_minimum_inter_event_prior"
+            },
+            "as_of_mode": {
+              "enum": ["live", "archive_replay", "synthetic_replay"]
+            },
+            "outcome_ref": {
+              "oneOf": [
+                { "$ref": "#/$defs/recordRef" },
+                { "type": "null" }
+              ]
+            },
+            "outcome_known_at": {
+              "oneOf": [
+                { "$ref": "#/$defs/utcTimestamp" },
+                { "type": "null" }
+              ]
+            },
+            "outcome_available_at": {
+              "oneOf": [
+                { "$ref": "#/$defs/utcTimestamp" },
+                { "type": "null" }
+              ]
+            },
+            "outcome_occurred_time_range": {
+              "oneOf": [
+                { "$ref": "#/$defs/timeRange" },
+                { "type": "null" }
+              ]
+            },
+            "recovery_end_at": {
+              "oneOf": [
+                { "$ref": "#/$defs/utcTimestamp" },
+                { "type": "null" }
+              ]
+            },
+            "first_slot_multiplier": {
+              "oneOf": [
+                { "$ref": "#/$defs/probability" },
+                { "type": "null" }
+              ]
+            },
+            "base_horizon_probability": {
+              "$ref": "#/$defs/probability"
+            },
+            "conditioned_horizon_probability": {
+              "$ref": "#/$defs/probability"
+            }
+          }
         },
         "authority_conditioning": {
           "type": "object",

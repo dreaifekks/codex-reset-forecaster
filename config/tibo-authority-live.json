@@ -39,7 +39,13 @@
     }
   },
   "model": {
-    "outcome_coverage_providers": ["historical_monitor"]
+    "outcome_coverage_providers": ["historical_monitor"],
+    "post_outcome_refractory": {
+      "enabled": true
+    },
+    "live_forecast_promotion_guard": {
+      "enabled": true
+    }
   },
   "runtime": {
     "scheduler_enabled": true,

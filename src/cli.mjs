@@ -12,7 +12,11 @@ import { TimelineJsonlProvider } from "./providers/timeline-jsonl-provider.mjs";
 import { RsshubXProvider } from "./providers/rsshub-x-provider.mjs";
 import { DEMO_CONFIG_OVERRIDES } from "./demo/config.mjs";
 import { generateDemoHistory } from "./demo/history.mjs";
-import { processRecords, runPipeline, trainEvaluatePromote } from "./pipeline/run.mjs";
+import {
+  processRecords,
+  runPipeline,
+  trainEvaluatePromote,
+} from "./pipeline/run.mjs";
 import { evaluateWalkForward } from "./model/evaluation.mjs";
 import { issueForecast } from "./model/forecast.mjs";
 import { evaluateIssuedForecasts } from "./model/issued-evaluation.mjs";
@@ -99,8 +103,16 @@ try {
   } else if (command === "process") {
     output(await processRecords(store, config, { now }));
   } else if (command === "train") {
-    const result = await trainEvaluatePromote(store, config, { now });
-    output({ evaluation: result.evaluation, promotion: result.promotion });
+    const result = await runPipeline(store, config, {
+      now,
+      collect: false,
+      retrain: true,
+    });
+    output({
+      evaluation: result.training?.evaluation ?? null,
+      promotion: result.training?.promotion ?? null,
+      promotion_guard: result.promotion_guard,
+    });
   } else if (command === "evaluate") {
     await settleIssuedPredictions(store, config, { settlementCutoff: floorHour(now) });
     output({

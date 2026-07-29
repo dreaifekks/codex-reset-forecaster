@@ -207,6 +207,7 @@ export async function buildTrainingExamples(store, config, {
       expectedExtractor: extractor,
       targetScope: config.target,
       authorityTimingPolicy: config.model.authority_timing,
+      evidenceCarryoverPolicy: config.model.evidence_carryover,
       outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
       asOfMode: resolvedAsOfMode,
       coverageAsOfMode: resolvedCoverageAsOfMode,
@@ -249,6 +250,7 @@ export async function buildTrainingExamples(store, config, {
         expectedExtractor: extractor,
         targetScope: config.target,
         authorityTimingPolicy: config.model.authority_timing,
+        evidenceCarryoverPolicy: config.model.evidence_carryover,
         outcomeCoverageProviders: new Set(config.model.outcome_coverage_providers),
         excludedSourceRecordIds: exclusions.recordIds,
         excludedIndependenceGroupIds: exclusions.independenceGroupIds,
@@ -304,7 +306,11 @@ export async function buildTrainingExamples(store, config, {
 }
 
 export async function trainChallenger(store, config, options = {}) {
-  const dataset = await buildTrainingExamples(store, config, options);
+  const {
+    persist = true,
+    ...datasetOptions
+  } = options;
+  const dataset = await buildTrainingExamples(store, config, datasetOptions);
   if (dataset.eventCount < config.model.minimum_outcomes) {
     throw new Error(
       `Need at least ${config.model.minimum_outcomes} confirmed covered outcomes; found ${dataset.eventCount}`,
@@ -319,6 +325,7 @@ export async function trainChallenger(store, config, options = {}) {
     standardizedFeatureClip: config.model.standardized_feature_clip,
     maxIterations: config.model.max_iterations,
     coefficientPriors: config.model.coefficient_priors,
+    featureSupportPolicy: config.model.feature_support,
   });
   if (!model.converged) {
     throw new Error(
@@ -401,6 +408,7 @@ export async function trainChallenger(store, config, options = {}) {
       max_iterations: config.model.max_iterations,
       coefficient_prior_policy: model.coefficient_prior_policy,
       coefficient_priors: structuredClone(config.model.coefficient_priors),
+      feature_support: structuredClone(config.model.feature_support),
     },
     training_outcome_snapshot_refs: trainingOutcomeSnapshotRefs,
     training_outcome_snapshot_hash: hashLabel(trainingOutcomeSnapshotRefs),
@@ -425,6 +433,6 @@ export async function trainChallenger(store, config, options = {}) {
     modelContractHash: modelContractHash(config),
     requireConverged: true,
   });
-  await store.writeModel("challenger", artifact);
+  if (persist) await store.writeModel("challenger", artifact);
   return { model: artifact, dataset };
 }

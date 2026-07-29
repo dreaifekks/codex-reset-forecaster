@@ -7,7 +7,7 @@
   "created_at": "2026-07-23T07:00:04Z",
   "producer": {
     "name": "reset-forecaster",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "config_hash": "sha256:example"
   },
   "data": {
@@ -71,6 +71,23 @@
       }
     ],
     "no_reset_probability": 0.6561,
+    "post_outcome_refractory": {
+      "policy_version": "post-outcome-refractory-piecewise-hazard-multiplier/1",
+      "applied": false,
+      "status": "disabled",
+      "outcome_selection_basis": "latest_eligible_confirmed_outcome_available_at_cutoff",
+      "time_basis": "occurred_time_range_end",
+      "prior_basis": "versioned_non_learned_minimum_inter_event_prior",
+      "outcome_ref": null,
+      "outcome_known_at": null,
+      "outcome_available_at": null,
+      "outcome_occurred_time_range": null,
+      "as_of_mode": "live",
+      "recovery_end_at": null,
+      "first_slot_multiplier": null,
+      "base_horizon_probability": 0.3439,
+      "conditioned_horizon_probability": 0.3439
+    },
     "authority_conditioning": {
       "policy_version": "authority-timing-first-event-mixture/1",
       "applied": false,
@@ -98,7 +115,7 @@
     ],
     "model": {
       "family": "ridge_logistic_discrete_time_hazard",
-      "version": "reset-model/0.3.1-aaaaaaaaaaaa",
+      "version": "reset-model/0.3.2-aaaaaaaaaaaa",
       "artifact_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "model_contract_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "validation_status": "validated",

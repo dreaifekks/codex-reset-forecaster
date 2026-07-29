@@ -13,6 +13,10 @@ import { FEATURE_NAMES } from "../src/model/features.mjs";
 import {
   MODEL_VERSION_PREFIX,
 } from "../src/model/model-version.mjs";
+import {
+  FORECAST_PRODUCER_NAME,
+  FORECAST_PRODUCER_VERSION,
+} from "../src/core/prediction-contract.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = path.join(root, "schemas", "reset-intel.schema.json");
@@ -77,8 +81,8 @@ function closeEnough(left, right, tolerance = 1e-9) {
 function validatePrediction(record, fileName) {
   const data = record.data;
   if (
-    record.producer.name !== "reset-forecaster" ||
-    record.producer.version !== "0.3.1" ||
+    record.producer.name !== FORECAST_PRODUCER_NAME ||
+    record.producer.version !== FORECAST_PRODUCER_VERSION ||
     data.model?.family !== "ridge_logistic_discrete_time_hazard" ||
     typeof data.model?.version !== "string" ||
     !data.model.version.startsWith(`${MODEL_VERSION_PREFIX}-`)
@@ -209,20 +213,36 @@ if (
   !schema.$defs.normalizedSignal.properties.claim.properties.event_type.enum
     .includes("experience_recovery") ||
   !schema.$defs.normalizedSignal.properties.claim.properties.event_type.enum
-    .includes("competitor_model_release")
+    .includes("competitor_model_release") ||
+  providerSchema.$defs?.postOutcomeRefractoryPolicy?.properties?.version
+    ?.const !==
+      "post-outcome-refractory-piecewise-hazard-multiplier/1" ||
+  providerSchema.$defs?.evidenceCarryoverPolicy?.properties?.version?.const !==
+    "post-outcome-evidence-carryover/1" ||
+  providerSchema.$defs?.featureSupportPolicy?.properties?.version?.const !==
+    "feature-support-gate/1" ||
+  providerSchema.$defs?.liveForecastPromotionGuardPolicy?.properties?.version
+    ?.const !== "live-forecast-promotion-guard/2"
 ) {
   fail("schemas are missing the RSSHub or experience/competition contracts");
 }
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
 const defaultExtractor = extractorContract(defaultConfig);
 if (
-  defaultConfig.config_version !== "provider-config/0.3.1" ||
+  defaultConfig.config_version !== "provider-config/0.3.2" ||
   defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.0" ||
-  defaultConfig.feature_schema_version !== "reset-features/0.3.0" ||
+  defaultConfig.feature_schema_version !== "reset-features/0.3.1" ||
   defaultConfig.deduplication_version !== "reset-dedup/0.2.3" ||
   defaultExtractor.model_version !== "0.3.1" ||
   defaultExtractor.prompt_version !== "reset-extract/rules-0.3.1" ||
-  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/3"
+  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/3" ||
+  defaultConfig.model?.standardized_feature_clip !== 3 ||
+  defaultConfig.model?.evidence_carryover?.version !==
+    "post-outcome-evidence-carryover/1" ||
+  defaultConfig.model?.feature_support?.version !==
+    "feature-support-gate/1" ||
+  defaultConfig.model?.live_forecast_promotion_guard?.version !==
+    "live-forecast-promotion-guard/2"
 ) {
   fail("config/default.json version contracts are stale");
 }
@@ -367,7 +387,7 @@ for (const fileName of exampleFiles) {
     if (!isUtc(record.data.knowledge_cutoff)) fail(`${fileName}: feature cutoff must be UTC`);
     if (
       record.producer.name !== "as-of-feature-builder" ||
-      record.producer.version !== "0.3.1" ||
+      record.producer.version !== "0.3.2" ||
       record.data.feature_schema_version !== defaultConfig.feature_schema_version ||
       record.data.taxonomy_version !== defaultConfig.taxonomy_version ||
       record.data.deduplication_version !== defaultConfig.deduplication_version ||

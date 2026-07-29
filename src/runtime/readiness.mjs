@@ -15,6 +15,9 @@ import { FEATURE_NAMES } from "../model/features.mjs";
 import { assertModelCompatibility } from "../model/logistic-hazard.mjs";
 import { assessPredictionIntegrity } from "../model/prediction-integrity.mjs";
 import {
+  LIVE_FORECAST_PROMOTION_GUARD_VERSION,
+} from "../model/live-forecast-guard.mjs";
+import {
   assessEvaluationSampleGate,
   normalizeEvaluationWaiting,
   verifyEvaluationArtifact,
@@ -619,6 +622,51 @@ function predictionMatchesModel(prediction, model) {
   );
 }
 
+function guardDecisionMatchesModel(decision, model) {
+  const candidate = decision?.candidate;
+  return Boolean(
+    decision?.schema_version === LIVE_FORECAST_PROMOTION_GUARD_VERSION &&
+    decision.passed === true &&
+    candidate &&
+    model &&
+    candidate.model_version === model.model_version &&
+    candidate.artifact_hash === model.artifact_hash &&
+    candidate.model_contract_hash === model.model_contract_hash &&
+    candidate.training_cutoff === model.training_cutoff
+  );
+}
+
+function provisionalGuardDecision(runtime, challenger, enabled) {
+  if (!enabled) {
+    return {
+      passed: true,
+      decision: null,
+      source: "disabled",
+    };
+  }
+  const latest = runtime?.last_promotion_guard ?? null;
+  if (guardDecisionMatchesModel(latest, challenger)) {
+    return {
+      passed: true,
+      decision: latest,
+      source: "latest_candidate",
+    };
+  }
+  const restoration = latest?.challenger_restoration?.guard ?? null;
+  if (guardDecisionMatchesModel(restoration, challenger)) {
+    return {
+      passed: true,
+      decision: restoration,
+      source: "guarded_restoration",
+    };
+  }
+  return {
+    passed: false,
+    decision: null,
+    source: "missing_or_mismatched",
+  };
+}
+
 function provisionalIneligibilityReason({
   enabled,
   championCompatible,
@@ -628,6 +676,7 @@ function provisionalIneligibilityReason({
   challengerCompatible,
   predictionMatchesChallenger,
   minimumOutcomesMet,
+  promotionGuardPassed,
 }) {
   if (!enabled) return "provisional_bootstrap_disabled";
   if (championCompatible) return "compatible_champion_available";
@@ -639,6 +688,7 @@ function provisionalIneligibilityReason({
   if (!challenger) return "challenger_missing";
   if (!challengerCompatible) return "challenger_incompatible";
   if (!minimumOutcomesMet) return "challenger_outcome_sample_insufficient";
+  if (!promotionGuardPassed) return "challenger_live_guard_not_passed";
   if (!predictionMatchesChallenger) return "forecast_challenger_mismatch";
   return null;
 }
@@ -910,6 +960,11 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     challengerEventCount !== null &&
     challengerEventCount >= provisionalMinimumOutcomes,
   );
+  const provisionalGuard = provisionalGuardDecision(
+    runtime,
+    challenger,
+    config.model?.live_forecast_promotion_guard?.enabled === true,
+  );
   const provisionalReason = provisionalIneligibilityReason({
     enabled: provisionalBootstrapEnabled,
     championCompatible: championCompatibility.compatible,
@@ -919,6 +974,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     challengerCompatible: challengerCompatibility.compatible,
     predictionMatchesChallenger,
     minimumOutcomesMet: provisionalMinimumOutcomesMet,
+    promotionGuardPassed: provisionalGuard.passed,
   });
   const provisionalEligible = provisionalReason === null;
   const legacyValidatedPrediction = Boolean(
@@ -989,9 +1045,11 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
         ? "waiting_for_coverage"
         : evaluationWaiting
           ? "waiting_for_evaluation"
-          : runtime.last_success_at
-            ? "completed"
-            : "idle";
+          : runtime.last_status === "promotion_blocked"
+            ? "promotion_blocked"
+            : runtime.last_success_at
+              ? "completed"
+              : "idle";
   const forecastAvailable = Boolean(
     latestPrediction &&
     activeModel &&
@@ -1016,7 +1074,11 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       predictionValidationStatus === "provisional" &&
       !provisionalEligible
     ) {
-      servingBlockers.push("provisional_model_ineligible");
+      servingBlockers.push(
+        provisionalReason === "challenger_live_guard_not_passed"
+          ? "provisional_guard_rejected"
+          : "provisional_model_ineligible",
+      );
     } else {
       servingBlockers.push("active_model_unavailable");
     }
@@ -1222,6 +1284,8 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
           minimum_outcomes: provisionalMinimumOutcomes,
           challenger_event_count: challengerEventCount,
           minimum_outcomes_met: provisionalMinimumOutcomesMet,
+          live_guard_passed: provisionalGuard.passed,
+          live_guard_source: provisionalGuard.source,
         },
       },
     },
@@ -1231,6 +1295,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     pipeline_status: pipelineStatus,
     coverage_waiting: coverageWaiting,
     evaluation_waiting: evaluationWaiting,
+    promotion_guard: runtime.last_promotion_guard ?? null,
     synthetic_only: syntheticOnly,
     last_pipeline_success_at: runtime.last_success_at ?? null,
     last_pipeline_failure_at: runtime.last_failure_at ?? null,

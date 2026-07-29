@@ -109,9 +109,185 @@
           }
         }
       }
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "post_outcome_refractory": {
+          "$ref": "#/$defs/postOutcomeRefractoryPolicy"
+        },
+        "evidence_carryover": {
+          "$ref": "#/$defs/evidenceCarryoverPolicy"
+        },
+        "feature_support": {
+          "$ref": "#/$defs/featureSupportPolicy"
+        },
+        "live_forecast_promotion_guard": {
+          "$ref": "#/$defs/liveForecastPromotionGuardPolicy"
+        }
+      }
     }
   },
   "$defs": {
+    "postOutcomeRefractoryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "outcome_selection_basis",
+        "time_basis",
+        "prior_basis",
+        "recovery_curve"
+      ],
+      "properties": {
+        "version": {
+          "const": "post-outcome-refractory-piecewise-hazard-multiplier/1"
+        },
+        "enabled": { "type": "boolean" },
+        "outcome_selection_basis": {
+          "const": "latest_eligible_confirmed_outcome_available_at_cutoff"
+        },
+        "time_basis": { "const": "occurred_time_range_end" },
+        "prior_basis": {
+          "const": "versioned_non_learned_minimum_inter_event_prior"
+        },
+        "recovery_curve": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["elapsed_hours", "multiplier"],
+            "properties": {
+              "elapsed_hours": { "type": "number", "minimum": 0 },
+              "multiplier": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "evidenceCarryoverPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "consume_outcome_lineage",
+        "pre_outcome_multiplier"
+      ],
+      "properties": {
+        "version": { "const": "post-outcome-evidence-carryover/1" },
+        "consume_outcome_lineage": { "type": "boolean" },
+        "pre_outcome_multiplier": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "featureSupportPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "minimum_nonzero_positive_events",
+        "minimum_nonzero_negative_hours",
+        "maximum_absolute_pairwise_correlation",
+        "nonzero_epsilon"
+      ],
+      "properties": {
+        "version": { "const": "feature-support-gate/1" },
+        "enabled": { "type": "boolean" },
+        "minimum_nonzero_positive_events": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_nonzero_negative_hours": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maximum_absolute_pairwise_correlation": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "nonzero_epsilon": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "liveForecastPromotionGuardPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "comparison_hours",
+        "probability_ratio",
+        "probability_ratio_denominator_floor",
+        "minimum_candidate_probability",
+        "minimum_absolute_probability_increase",
+        "minimum_combined_positive_clip_logit_contribution",
+        "maximum_cumulative_probability_by_horizon",
+        "block_on_out_of_distribution_probability_anomaly"
+      ],
+      "properties": {
+        "version": { "const": "live-forecast-promotion-guard/2" },
+        "enabled": { "type": "boolean" },
+        "comparison_hours": { "type": "integer", "minimum": 1 },
+        "probability_ratio": { "type": "number", "exclusiveMinimum": 1 },
+        "probability_ratio_denominator_floor": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "minimum_candidate_probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_absolute_probability_increase": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_combined_positive_clip_logit_contribution": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maximum_cumulative_probability_by_horizon": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["4", "24", "72"],
+          "properties": {
+            "4": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "24": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "72": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            }
+          }
+        },
+        "block_on_out_of_distribution_probability_anomaly": {
+          "type": "boolean"
+        }
+      }
+    },
     "sourceIdentity": {
       "type": "object",
       "additionalProperties": false,

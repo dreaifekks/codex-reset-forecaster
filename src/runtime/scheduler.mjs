@@ -101,6 +101,9 @@ export function startScheduler({
       const evaluationWaiting = result.status === "waiting_for_evaluation"
         ? normalizeEvaluationWaiting(result.evaluation_waiting)
         : null;
+      const promotionBlocked = result.status === "promotion_blocked"
+        ? result.promotion_guard ?? result.training?.promotion_guard ?? null
+        : null;
       const waitingStatus = coverageWaiting
         ? "waiting_for_coverage"
         : evaluationWaiting
@@ -124,7 +127,15 @@ export function startScheduler({
           "Pipeline returned completed_with_training_error without error details",
         );
       }
-      if (!waitingStatus && !result.forecast?.prediction) {
+      if (
+        result.status === "promotion_blocked" &&
+        promotionBlocked?.passed !== false
+      ) {
+        throw new Error(
+          "Pipeline returned promotion_blocked without a rejected guard decision",
+        );
+      }
+      if (!waitingStatus && !promotionBlocked && !result.forecast?.prediction) {
         throw new Error("Pipeline completed without issuing a forecast");
       }
       await store.writeState("runtime", {
@@ -133,7 +144,11 @@ export function startScheduler({
         last_run_started_at: startedAt.toISOString(),
         last_success_at: finishedAt.toISOString(),
         last_run_duration_ms: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
-        last_status: trainingError ? "degraded" : waitingStatus ?? "completed",
+        last_status: trainingError
+          ? "degraded"
+          : promotionBlocked
+            ? "promotion_blocked"
+            : waitingStatus ?? "completed",
         last_waiting: coverageWaiting,
         last_evaluation_waiting: evaluationWaiting,
         ...(trainingError
@@ -152,6 +167,11 @@ export function startScheduler({
           result.training?.promotion?.reason ??
           (result.training?.promotion?.promoted ? "promoted" : null) ??
           state.last_promotion_status ??
+          null,
+        last_promotion_guard:
+          promotionBlocked ??
+          result.training?.promotion_guard ??
+          state.last_promotion_guard ??
           null,
         last_prediction_id:
           result.forecast?.prediction?.record_id ??
@@ -176,6 +196,11 @@ export function startScheduler({
         logger.error?.(
           `forecast pipeline reused the stable champion after training failure: ` +
           trainingError,
+        );
+      } else if (promotionBlocked) {
+        logger.info?.(
+          `forecast pipeline blocked candidate promotion: ` +
+          `${promotionBlocked.blockers?.join(", ") || "guard rejected"}`,
         );
       } else {
         logger.info?.(`forecast pipeline completed: ${result.forecast.prediction.record_id}`);

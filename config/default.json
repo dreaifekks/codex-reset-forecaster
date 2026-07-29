@@ -1,7 +1,7 @@
 {
-  "config_version": "provider-config/0.3.1",
+  "config_version": "provider-config/0.3.2",
   "taxonomy_version": "reset-taxonomy/0.3.0",
-  "feature_schema_version": "reset-features/0.3.0",
+  "feature_schema_version": "reset-features/0.3.1",
   "deduplication_version": "reset-dedup/0.2.3",
   "timezone_database_version": "system",
   "extractor": {
@@ -151,11 +151,19 @@
     "gradient_tolerance": 0.00001,
     "objective_tolerance": 1e-10,
     "hessian_step": 0.0001,
-    "standardized_feature_clip": 8,
+    "standardized_feature_clip": 3,
     "max_iterations": 2500,
     "coefficient_priors": {
       "asserted_time_overlap": 0.5,
       "official_incident_decay": 0.2
+    },
+    "feature_support": {
+      "version": "feature-support-gate/1",
+      "enabled": true,
+      "minimum_nonzero_positive_events": 3,
+      "minimum_nonzero_negative_hours": 24,
+      "maximum_absolute_pairwise_correlation": 0.995,
+      "nonzero_epsilon": 1e-12
     },
     "authority_timing": {
       "version": "authority-timing-first-event-mixture/1",
@@ -172,6 +180,41 @@
         "product_team_member"
       ],
       "maximum_asserted_duration_hours": 48
+    },
+    "post_outcome_refractory": {
+      "version": "post-outcome-refractory-piecewise-hazard-multiplier/1",
+      "enabled": false,
+      "outcome_selection_basis": "latest_eligible_confirmed_outcome_available_at_cutoff",
+      "time_basis": "occurred_time_range_end",
+      "prior_basis": "versioned_non_learned_minimum_inter_event_prior",
+      "recovery_curve": [
+        { "elapsed_hours": 0, "multiplier": 0.001 },
+        { "elapsed_hours": 1, "multiplier": 0.002 },
+        { "elapsed_hours": 4, "multiplier": 0.01 },
+        { "elapsed_hours": 8, "multiplier": 0.10 },
+        { "elapsed_hours": 12, "multiplier": 1.00 }
+      ]
+    },
+    "evidence_carryover": {
+      "version": "post-outcome-evidence-carryover/1",
+      "consume_outcome_lineage": true,
+      "pre_outcome_multiplier": 0.5
+    },
+    "live_forecast_promotion_guard": {
+      "version": "live-forecast-promotion-guard/2",
+      "enabled": false,
+      "comparison_hours": 4,
+      "probability_ratio": 10,
+      "probability_ratio_denominator_floor": 0.000001,
+      "minimum_candidate_probability": 0.5,
+      "minimum_absolute_probability_increase": 0.25,
+      "minimum_combined_positive_clip_logit_contribution": 3,
+      "maximum_cumulative_probability_by_horizon": {
+        "4": 0.8,
+        "24": 0.98,
+        "72": 0.995
+      },
+      "block_on_out_of_distribution_probability_anomaly": true
     },
     "minimum_outcomes": 3,
     "minimum_live_evaluation_windows": 1008,
