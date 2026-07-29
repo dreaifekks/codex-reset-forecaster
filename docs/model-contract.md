@@ -96,9 +96,11 @@ The trained version `reset-features/0.3.1` remains small and interpretable:
 These are fourteen model inputs. Community volume, momentum, resonance, and
 disagreement are deliberately absent. Codex experience issues and recoveries are
 retained as structured canonical evidence with severity and lifecycle, but are
-display/audit-only in this version. Promoting experience impact into the
-probability vector requires a separately versioned challenger and causal
-walk-forward evidence.
+display/audit-only in this version. Their append-only impact episodes may compute
+a bounded, freshness-decayed pressure for persistence and follow-up display, but
+that pressure is not a fifteenth feature and cannot alter champion inference.
+Promoting any experience-impact measure into the probability vector requires a
+separately versioned challenger and causal walk-forward evidence.
 
 The competitor value uses the maximum eligible decay rather than a sum. Quotes,
 reposts, repeated reports, and multiple descriptions of one release therefore

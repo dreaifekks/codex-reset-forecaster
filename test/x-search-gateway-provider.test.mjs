@@ -32,7 +32,21 @@ function gatewayResponse(provider) {
   });
 }
 
-async function setup(t, upstreamProvider) {
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function setup(t, upstreamProvider, queries = [{
+  name: "tibo",
+  query: "from:thsottiaux Codex reset",
+  handles: ["thsottiaux"],
+}]) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), `reset-gateway-${upstreamProvider}-`));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const config = await loadConfig({ overrides: {
@@ -40,11 +54,7 @@ async function setup(t, upstreamProvider) {
     providers: { x_search_gateway: {
       enabled: true,
       upstream_provider: upstreamProvider,
-      queries: [{
-        name: "tibo",
-        query: "from:thsottiaux Codex reset",
-        handles: ["thsottiaux"],
-      }],
+      queries,
     } },
   } });
   return { directory, config, store: await new JsonlStore(directory).init() };
@@ -100,6 +110,158 @@ for (const upstreamProvider of ["grokbuild", "hermes"]) {
     assert.equal((await store.all("raw_observation")).length, 2, "event plus idempotent health record");
   });
 }
+
+test("gateway starts configured queries concurrently and preserves payload order", async (t) => {
+  const queries = [
+    { name: "slow_first", query: "Codex first" },
+    { name: "second", query: "Codex second" },
+    { name: "fast_last", query: "Codex last" },
+  ];
+  const ids = [
+    "2081450000000000101",
+    "2081450000000000102",
+    "2081450000000000103",
+  ];
+  const { config, store } = await setup(t, "grokbuild", queries);
+  const gates = new Map(queries.map((query) => [query.name, deferred()]));
+  const started = [];
+  let markFirstStarted;
+  const firstStarted = new Promise((resolve) => {
+    markFirstStarted = resolve;
+  });
+  const provider = new XSearchGatewayProvider({
+    config: config.providers.x_search_gateway,
+    token: "test-gateway-token",
+    now: () => new Date("2026-07-29T10:00:00.000Z"),
+  });
+  provider.search = async (query) => {
+    started.push(query.name);
+    if (started.length === 1) markFirstStarted();
+    return gates.get(query.name).promise;
+  };
+
+  const collecting = provider.collect(store);
+  await firstStarted;
+  const startedBeforeAnyResponse = [...started];
+  for (let index = queries.length - 1; index >= 0; index -= 1) {
+    gates.get(queries[index].name).resolve({
+      ok: true,
+      provider: "grokbuild",
+      events: [],
+      all_events: [{
+        id: ids[index],
+        handle: "example",
+        text: queries[index].name,
+        url: `https://x.com/example/status/${ids[index]}`,
+      }],
+    });
+  }
+
+  const result = await collecting;
+  assert.deepEqual(
+    startedBeforeAnyResponse,
+    queries.map((query) => query.name),
+    "every query should start before the slowest query completes",
+  );
+  assert.equal(result.queries, queries.length);
+  assert.deepEqual(result.query_errors, []);
+  assert.deepEqual(
+    (await store.all("raw_observation"))
+      .filter((record) =>
+        record.data.content.media_type !==
+        "application/vnd.reset-provider-health+json"
+      )
+      .map((record) => record.data.provider_item_id),
+    ids,
+    "out-of-order query completion must not reorder configured results",
+  );
+});
+
+test("gateway preserves configured error order while collecting partial successes", async (t) => {
+  const queries = [
+    { name: "first_failure", query: "Codex first failure" },
+    { name: "success", query: "Codex success" },
+    { name: "last_failure", query: "Codex last failure" },
+  ];
+  const { config, store } = await setup(t, "grokbuild", queries);
+  const gates = new Map(queries.map((query) => [query.name, deferred()]));
+  let collectedAt = new Date("2026-07-29T10:00:00.000Z");
+  let started = 0;
+  let markAllStarted;
+  const allStarted = new Promise((resolve) => {
+    markAllStarted = resolve;
+  });
+  const provider = new XSearchGatewayProvider({
+    config: config.providers.x_search_gateway,
+    token: "test-gateway-token",
+    now: () => collectedAt,
+  });
+  provider.search = async (query) => {
+    started += 1;
+    if (started === queries.length) markAllStarted();
+    return gates.get(query.name).promise;
+  };
+
+  const collecting = provider.collect(store);
+  await allStarted;
+  gates.get("last_failure").reject(new Error("last failed first"));
+  gates.get("success").resolve({
+    ok: true,
+    provider: "grokbuild",
+    events: [],
+    all_events: [{
+      id: "2081450000000000200",
+      handle: "example",
+      text: "A successful query result.",
+      url: "https://x.com/example/status/2081450000000000200",
+    }],
+  });
+  gates.get("first_failure").reject(new Error("first failed last"));
+
+  const result = await collecting;
+  assert.equal(result.collected, 1);
+  assert.equal(result.queries, 1);
+  assert.deepEqual(result.query_errors, [
+    { query: "first_failure", error: "first failed last" },
+    { query: "last_failure", error: "last failed first" },
+  ]);
+  assert.deepEqual(result.health, {
+    ok: false,
+    delay_seconds: 0,
+    error: "2 gateway query(s) failed",
+  });
+  const partialState = await store.readState("x-search-gateway-provider", {});
+  assert.deepEqual(partialState.query_errors, result.query_errors);
+  assert.equal(
+    partialState.last_success_at,
+    null,
+    "a partial query set must not advance the full-success refresh gate",
+  );
+
+  collectedAt = new Date("2026-07-29T10:10:00.000Z");
+  let retryCount = 0;
+  provider.search = async (query) => {
+    retryCount += 1;
+    return {
+      ok: true,
+      provider: "grokbuild",
+      events: [],
+      all_events: [{
+        id: `20814500000000003${retryCount}`,
+        handle: "example",
+        text: `Recovered ${query.name}`,
+        url: `https://x.com/example/status/20814500000000003${retryCount}`,
+      }],
+    };
+  };
+  const retry = await provider.collect(store);
+  assert.equal(retryCount, queries.length);
+  assert.equal(retry.health.ok, true);
+  assert.equal(
+    (await store.readState("x-search-gateway-provider", {})).last_success_at,
+    collectedAt.toISOString(),
+  );
+});
 
 test("gateway topic screening preserves raw false positives but excludes them from current signals", async (t) => {
   const { config, store } = await setup(t, "grokbuild");
@@ -274,6 +436,13 @@ test("gateway failure diagnostics never become reset signals", async (t) => {
   assert.equal(
     observations[0].data.content.media_type,
     "application/vnd.reset-provider-health+json",
+  );
+  assert.deepEqual(
+    (await store.readState("x-search-gateway-provider", {})).query_errors,
+    [{
+      query: "tibo",
+      error: "X Search Gateway 502: usage limit reset search is temporarily unavailable",
+    }],
   );
   const processing = await processRecords(store, config, { now });
   assert.equal(processing.normalized.normalized, 0);

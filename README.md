@@ -68,12 +68,21 @@ been validated.
 - The optional X Search Gateway currently defaults to `grokbuild`. Both Grokbuild
   and the `hermes` rollback path are summary/context-only inputs: they may adjust
   features but cannot confirm an outcome or establish negative-label coverage.
+  Its independent context queries run concurrently behind a 30-minute provider
+  gate; the exact RSSHub Tibo timeline has a five-minute provider gate. The
+  current shared scheduler checks both on 10-minute boundaries, so these gates do
+  not imply independent five-minute polling.
 - Context collection targets Codex experience issues and recoveries, classified by
-  impact and severity, plus non-rumor competitor model or coding-agent releases.
+  impact and severity, including security/privacy, data-integrity, and
+  compatibility failures, plus non-rumor competitor model or coding-agent releases.
+  Independent issue evidence is also grouped into append-only impact episodes whose
+  bounded, freshness-decayed pressure shows whether a problem is persisting,
+  spreading, mitigating, or resolved over time.
   Community post volume, momentum, resonance, and disagreement are not prediction
   features. Experience reports are initially display/audit evidence; a competitor
   event contributes at most one recency-decayed value after dependency collapse,
-  so repost volume cannot amplify it.
+  so repost volume cannot amplify it. Impact-episode pressure is likewise an
+  intelligence-layer measurement, not the current reset probability.
 - Model parameters are batch-refit at most once every 24 hours and only from
   labels that are mature and available at the frozen training cutoff. Confirmed
   positive intervals can enter immediately; only negative hours require complete
@@ -120,6 +129,7 @@ providers
   -> append-only raw observations
   -> topic/context relevance decisions
   -> normalized claims
+  -> append-only impact episodes for issue/recovery follow-up
   -> event candidates and evidence-dependency graph
   -> 10-minute as-of refreshes of hourly-slot feature snapshots
   -> hourly hazard and rolling four-hour forecast
@@ -215,7 +225,7 @@ and restart commands.
 
 ## Status
 
-Version `0.3.0` with canonical contract `reset-intel/0.2` implements the website
+Version `0.4.0` with canonical contract `reset-intel/0.2` implements the website
 prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,
@@ -227,9 +237,9 @@ follows from that fit. The `validated` status still requires at least 1,008
 evaluated hourly windows, 20 eligible events, and a compatible challenger that
 passes the fixed-policy walk-forward and calibration gates.
 
-The current checked-in configuration contract is `provider-config/0.3.2`, with
-`reset-taxonomy/0.3.0`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
-rules `0.3.1` (`reset-extract/rules-0.3.1`). The model contract also binds the
+The current checked-in configuration contract is `provider-config/0.3.3`, with
+`reset-taxonomy/0.3.1`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
+rules `0.3.2` (`reset-extract/rules-0.3.2`). The model contract also binds the
 `winsorized-zscore/1` transform:
 standardized feature values are clipped to `[-3, 3]` during fitting and live
 inference. Coefficient priors use raw-feature logit units and are converted into

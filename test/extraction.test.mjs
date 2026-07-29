@@ -205,6 +205,128 @@ test("experience severity and competitive releases are semantic categories, not 
   assert.equal(launchCrash.data.claim.impact.category, "auth");
   assert.equal(launchCrash.data.claim.impact.severity, "high");
 
+  const securityIssue = signalForConfig(
+    "Codex has a security vulnerability that exposes authentication tokens for multiple users.",
+    "2082000000000000005",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(securityIssue.data.claim.event_type, "experience_issue");
+  assert.equal(securityIssue.data.claim.impact.category, "security_privacy");
+  assert.equal(securityIssue.data.claim.impact.severity, "high");
+
+  const reverseSecurityIssue = signalForConfig(
+    "Codex leaked authentication tokens for multiple users.",
+    "2082000000000000008",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(reverseSecurityIssue.data.claim.event_type, "experience_issue");
+  assert.equal(reverseSecurityIssue.data.claim.impact.category, "security_privacy");
+  assert.equal(reverseSecurityIssue.data.claim.impact.severity, "high");
+
+  const forwardSecurityVariants = [
+    "Codex authentication tokens were exposed.",
+    "Codex credentials were leaked.",
+    "Codex API keys were compromised.",
+    "Codex private customer data was exposed.",
+  ].map((text, index) =>
+    signalForConfig(
+      text,
+      `20820000000000001${index + 4}`,
+      config,
+      { identityId: "community_reporter", handle: "reporter" },
+    )
+  );
+  for (const signal of forwardSecurityVariants) {
+    assert.equal(signal.data.claim.event_type, "experience_issue");
+    assert.equal(signal.data.claim.impact.category, "security_privacy");
+    assert.notEqual(signal.data.claim.impact.severity, "unknown");
+  }
+
+  const dataIntegrityIssue = signalForConfig(
+    "Codex lost local changes because session data was corrupted for multiple users.",
+    "2082000000000000006",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(dataIntegrityIssue.data.claim.event_type, "experience_issue");
+  assert.equal(dataIntegrityIssue.data.claim.impact.category, "data_integrity");
+
+  const destructivePlatformIssue = signalForConfig(
+    "Codex data was truncated across the platform.",
+    "2082000000000000009",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(destructivePlatformIssue.data.claim.event_type, "experience_issue");
+  assert.equal(destructivePlatformIssue.data.claim.impact.category, "data_integrity");
+  assert.equal(destructivePlatformIssue.data.claim.impact.affected_scope, "platform");
+  assert.equal(destructivePlatformIssue.data.claim.impact.severity, "critical");
+
+  const compatibilityIssue = signalForConfig(
+    "Codex has a compatibility regression after the latest IDE update.",
+    "2082000000000000007",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(compatibilityIssue.data.claim.event_type, "experience_issue");
+  assert.equal(compatibilityIssue.data.claim.impact.category, "compatibility");
+
+  const continuingWithWorkaround = signalForConfig(
+    "Codex is still broken for multiple users, but a workaround is available.",
+    "2082000000000000010",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(
+    continuingWithWorkaround.data.claim.event_type,
+    "experience_issue",
+  );
+  assert.equal(
+    continuingWithWorkaround.data.claim.impact.lifecycle,
+    "mitigating",
+  );
+  assert.equal(
+    continuingWithWorkaround.data.claim.impact.workaround,
+    "available",
+  );
+  assert.equal(continuingWithWorkaround.data.claim.impact.severity, "high");
+
+  const failedFix = signalForConfig(
+    "Codex is still broken for multiple users after it was fixed.",
+    "2082000000000000012",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(failedFix.data.claim.event_type, "experience_issue");
+  assert.equal(failedFix.data.claim.impact.lifecycle, "active");
+  assert.equal(failedFix.data.claim.impact.severity, "high");
+
+  const failedSecurityPatch = signalForConfig(
+    "Codex continues leaking authentication tokens after being patched.",
+    "2082000000000000013",
+    config,
+    { identityId: "community_reporter", handle: "reporter" },
+  );
+  assert.equal(failedSecurityPatch.data.claim.event_type, "experience_issue");
+  assert.equal(
+    failedSecurityPatch.data.claim.impact.category,
+    "security_privacy",
+  );
+  assert.equal(failedSecurityPatch.data.claim.impact.lifecycle, "active");
+  assert.notEqual(failedSecurityPatch.data.claim.impact.severity, "unknown");
+
+  const resolvedMcpIssue = signalForConfig(
+    "The Codex MCP issue is fixed and working again.",
+    "2082000000000000011",
+    config,
+    { identityId: "org_openai", handle: "OpenAI" },
+  );
+  assert.equal(resolvedMcpIssue.data.claim.event_type, "experience_recovery");
+  assert.equal(resolvedMcpIssue.data.claim.impact.category, "tool_execution");
+  assert.equal(resolvedMcpIssue.data.claim.impact.lifecycle, "resolved");
+
   const officialOutage = signalForConfig(
     "Codex is unavailable platform-wide while we investigate an outage.",
     "2082000000000000002",

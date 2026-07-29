@@ -4,7 +4,7 @@ import { canonicalSourceIdentityPolicy } from "./sources.mjs";
 export const AUTHORITY_SCOPE_POLICY =
   "explicit-platform-or-authority-general-codex/1";
 export const DEFAULT_TOPIC_RELEVANCE_POLICY_VERSION =
-  "reset-topic-relevance/3";
+  "reset-topic-relevance/4";
 
 function normalizedTarget(target) {
   return {

@@ -201,11 +201,13 @@ export class XSearchGatewayProvider {
       previousState.provider_config_hash !== providerConfigHash ||
       !previousState.last_success_at;
     const refreshIntervalMs = Number(
-      this.config.refresh_interval_minutes ?? 60,
+      this.config.refresh_interval_minutes ?? 30,
     ) * 60_000;
     const lastSuccessMs = Date.parse(previousState.last_success_at);
+    let currentQueryErrors = [];
     if (
       !bootstrapReplay &&
+      !previousState.last_error &&
       Number.isFinite(lastSuccessMs) &&
       Number.isFinite(refreshIntervalMs) &&
       refreshIntervalMs > 0 &&
@@ -222,15 +224,23 @@ export class XSearchGatewayProvider {
       };
     }
     try {
+      const queries = this.config.queries ?? [];
+      const queryResults = await Promise.allSettled(
+        queries.map((query) => this.search(query)),
+      );
       const payloads = [];
       const queryErrors = [];
-      for (const query of this.config.queries ?? []) {
-        try {
-          payloads.push(await this.search(query));
-        } catch (error) {
-          queryErrors.push({ query: query.name, error: error.message });
+      for (const [index, result] of queryResults.entries()) {
+        if (result.status === "fulfilled") {
+          payloads.push(result.value);
+        } else {
+          queryErrors.push({
+            query: queries[index].name,
+            error: result.reason?.message ?? String(result.reason),
+          });
         }
       }
+      currentQueryErrors = queryErrors;
       if (payloads.length === 0 && queryErrors.length > 0) {
         throw new Error(
           `All X Search Gateway queries failed: ${queryErrors.map((entry) =>
@@ -272,9 +282,12 @@ export class XSearchGatewayProvider {
         error: partialError,
       }));
       await store.writeState(stateKey, {
+        ...previousState,
         upstream_provider: this.upstreamProvider,
         provider_config_hash: providerConfigHash,
-        last_success_at: fetchedAt.toISOString(),
+        last_success_at: queryErrors.length === 0
+          ? fetchedAt.toISOString()
+          : previousState.last_success_at ?? null,
         last_partial_at: queryErrors.length > 0 ? fetchedAt.toISOString() : null,
         last_failure_at: queryErrors.length > 0 ? fetchedAt.toISOString() : null,
         last_error: partialError,
@@ -310,6 +323,7 @@ export class XSearchGatewayProvider {
         provider_config_hash: providerConfigHash,
         last_failure_at: failedAt.toISOString(),
         last_error: error.message,
+        query_errors: currentQueryErrors,
       });
       throw error;
     }

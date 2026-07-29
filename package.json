@@ -1,6 +1,6 @@
 {
   "name": "codex-reset-forecaster",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Provider-neutral Codex reset timing intelligence and hourly hazard forecasts",

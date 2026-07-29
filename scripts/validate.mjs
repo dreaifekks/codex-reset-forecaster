@@ -17,6 +17,7 @@ import {
   FORECAST_PRODUCER_NAME,
   FORECAST_PRODUCER_VERSION,
 } from "../src/core/prediction-contract.mjs";
+import { assertCanonicalRecord } from "../src/core/validate-record.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = path.join(root, "schemas", "reset-intel.schema.json");
@@ -26,6 +27,7 @@ const allowedTypes = new Set([
   "raw_observation",
   "normalized_signal",
   "event_candidate",
+  "impact_episode",
   "reset_outcome",
   "feature_snapshot",
   "prediction",
@@ -187,7 +189,12 @@ const schema = readJson(schemaPath);
 if (schema.$schema !== "https://json-schema.org/draft/2020-12/schema") {
   fail("schemas/reset-intel.schema.json must declare JSON Schema draft 2020-12");
 }
-if (!schema.$defs?.envelope || !schema.$defs?.prediction) {
+if (
+  !schema.$defs?.envelope ||
+  !schema.$defs?.prediction ||
+  !schema.$defs?.impactEpisode ||
+  !schema.$defs?.impactClassification
+) {
   fail("schemas/reset-intel.schema.json is missing core definitions");
 }
 const providerSchema = readJson(providerSchemaPath);
@@ -196,7 +203,8 @@ if (
   !providerSchema.$defs?.xOutcomeExhaustivenessContract ||
   !providerSchema.$defs?.xOutcomeExhaustivenessAttestation ||
   !providerSchema.$defs?.historicalDailyLedgerAttestation ||
-  !providerSchema.$defs?.outcomeDefinition
+  !providerSchema.$defs?.outcomeDefinition ||
+  !providerSchema.$defs?.impactTrackingPolicy
 ) {
   fail("schemas/provider-config.schema.json is missing an outcome coverage contract");
 }
@@ -214,6 +222,16 @@ if (
     .includes("experience_recovery") ||
   !schema.$defs.normalizedSignal.properties.claim.properties.event_type.enum
     .includes("competitor_model_release") ||
+  !schema.$defs.impactClassification.properties.category.enum
+    .includes("security_privacy") ||
+  !schema.$defs.impactClassification.properties.category.enum
+    .includes("data_integrity") ||
+  !schema.$defs.impactClassification.properties.category.enum
+    .includes("compatibility") ||
+  schema.$defs.impactEpisode.properties.policy_version?.const !==
+    "impact-episode-policy/1" ||
+  providerSchema.$defs?.impactTrackingPolicy?.properties?.version?.const !==
+    "impact-episode-policy/1" ||
   providerSchema.$defs?.postOutcomeRefractoryPolicy?.properties?.version
     ?.const !==
       "post-outcome-refractory-piecewise-hazard-multiplier/1" ||
@@ -229,13 +247,13 @@ if (
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
 const defaultExtractor = extractorContract(defaultConfig);
 if (
-  defaultConfig.config_version !== "provider-config/0.3.2" ||
-  defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.0" ||
+  defaultConfig.config_version !== "provider-config/0.3.3" ||
+  defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.1" ||
   defaultConfig.feature_schema_version !== "reset-features/0.3.1" ||
   defaultConfig.deduplication_version !== "reset-dedup/0.2.3" ||
-  defaultExtractor.model_version !== "0.3.1" ||
-  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.1" ||
-  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/3" ||
+  defaultExtractor.model_version !== "0.3.2" ||
+  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.2" ||
+  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/4" ||
   defaultConfig.model?.standardized_feature_clip !== 3 ||
   defaultConfig.model?.evidence_carryover?.version !==
     "post-outcome-evidence-carryover/1" ||
@@ -245,6 +263,21 @@ if (
     "live-forecast-promotion-guard/2"
 ) {
   fail("config/default.json version contracts are stale");
+}
+if (
+  defaultConfig.impact_tracking?.version !==
+    "impact-episode-policy/1" ||
+  defaultConfig.impact_tracking?.enabled !== true ||
+  typeof defaultConfig.impact_tracking?.cluster_gap_hours !== "number" ||
+  defaultConfig.impact_tracking.cluster_gap_hours <= 0 ||
+  typeof defaultConfig.impact_tracking?.active_evidence_ttl_hours !==
+    "number" ||
+  defaultConfig.impact_tracking.active_evidence_ttl_hours <= 0 ||
+  typeof defaultConfig.impact_tracking?.freshness_half_life_hours !==
+    "number" ||
+  defaultConfig.impact_tracking.freshness_half_life_hours <= 0
+) {
+  fail("config/default.json impact tracking contract is stale");
 }
 if (!Object.hasOwn(defaultConfig.providers?.x ?? {}, "outcome_exhaustiveness_contract")) {
   fail("config/default.json must fail closed with an explicit X exhaustiveness contract field");
@@ -299,6 +332,11 @@ if (exampleFiles.length === 0) fail("No JSON examples found");
 for (const fileName of exampleFiles) {
   const record = readJson(path.join(examplesDir, fileName));
   validateEnvelope(record, fileName);
+  try {
+    assertCanonicalRecord(record);
+  } catch (error) {
+    fail(`${fileName}: ${error.message}`);
+  }
   if (record.record_type === "raw_observation") {
     if (record.data.published_at !== null && !isUtc(record.data.published_at)) {
       fail(`${fileName}: published_at must be UTC or null`);
@@ -382,6 +420,24 @@ for (const fileName of exampleFiles) {
     for (const [index, evidence] of (record.data.evidence ?? []).entries()) {
       assertProbability(evidence.link_confidence, `${fileName}: evidence ${index} link confidence`);
     }
+  }
+  if (record.record_type === "impact_episode") {
+    if (
+      record.producer.name !== "impact-episode-builder" ||
+      record.producer.version !== "0.1.0" ||
+      record.data.policy_version !== "impact-episode-policy/1" ||
+      record.data.policy_config_hash !== record.producer.config_hash
+    ) {
+      fail(`${fileName}: impact episode policy binding is stale`);
+    }
+    assertProbability(
+      record.data.current_pressure,
+      `${fileName}: current pressure`,
+    );
+    assertProbability(
+      record.data.peak_pressure,
+      `${fileName}: peak pressure`,
+    );
   }
   if (record.record_type === "feature_snapshot") {
     if (!isUtc(record.data.knowledge_cutoff)) fail(`${fileName}: feature cutoff must be UTC`);

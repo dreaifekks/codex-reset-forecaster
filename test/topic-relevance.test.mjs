@@ -17,7 +17,7 @@ const relevantParent = {
 test("topic relevance policy exposes a stable version", () => {
   assert.equal(
     TOPIC_RELEVANCE_POLICY_VERSION,
-    "reset-topic-relevance/3",
+    "reset-topic-relevance/4",
   );
 });
 
@@ -141,6 +141,21 @@ test("Codex experience impact is relevant without using community resonance", ()
     "Codex still returns HTTP 429 after the usage limits were reset.",
     "Codex CLI hangs on every run, please fix Codex.",
     "Codex CLI is stuck on every run. Please fix this Codex bug.",
+    "Codex has a security vulnerability that exposes authentication tokens.",
+    "Codex authentication tokens were exposed for multiple users.",
+    "Codex credentials were leaked in agent logs.",
+    "Codex API keys were compromised.",
+    "Codex private customer data was exposed.",
+    "Codex leaked authentication tokens for multiple users.",
+    "Codex exposed private customer data in an agent log.",
+    "Codex lost local changes because its session data was corrupted.",
+    "Codex corrupted my workspace files during a tool run.",
+    "Codex data was truncated across the platform.",
+    "Codex has a compatibility regression after the latest IDE update.",
+    "Codex is still broken for multiple users while the team investigates.",
+    "Codex is still broken, but a workaround is available.",
+    "Codex is fixed now and working again.",
+    "Codex was rolled back and is working again after the compatibility issue.",
   ];
   for (const text of cases) {
     const assessed = assessTopicRelevance({

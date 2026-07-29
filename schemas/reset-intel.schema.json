@@ -27,6 +27,12 @@
         },
         {
           "properties": {
+            "record_type": { "const": "impact_episode" },
+            "data": { "$ref": "#/$defs/impactEpisode" }
+          }
+        },
+        {
+          "properties": {
             "record_type": { "const": "reset_outcome" },
             "data": { "$ref": "#/$defs/resetOutcome" }
           }
@@ -212,6 +218,7 @@
             "raw_observation",
             "normalized_signal",
             "event_candidate",
+            "impact_episode",
             "reset_outcome",
             "feature_snapshot",
             "prediction",
@@ -345,6 +352,77 @@
         }
       }
     },
+    "impactClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "severity",
+        "lifecycle",
+        "affected_scope",
+        "affected_surfaces",
+        "workaround",
+        "evidence_basis"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "availability",
+            "performance",
+            "correctness",
+            "tool_execution",
+            "session_state",
+            "quota_accounting",
+            "auth",
+            "client_ux",
+            "security_privacy",
+            "data_integrity",
+            "compatibility",
+            "other"
+          ]
+        },
+        "severity": {
+          "enum": ["critical", "high", "medium", "low", "unknown"]
+        },
+        "lifecycle": {
+          "enum": ["active", "investigating", "mitigating", "resolved", "unknown"]
+        },
+        "affected_scope": {
+          "enum": ["individual", "multiple_users", "platform", "unknown"]
+        },
+        "affected_surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "cli",
+              "ide",
+              "api",
+              "web",
+              "agent_loop",
+              "tool_use",
+              "mcp",
+              "auth",
+              "fast_mode",
+              "unknown"
+            ]
+          }
+        },
+        "workaround": {
+          "enum": ["none", "partial", "available", "unknown"]
+        },
+        "evidence_basis": {
+          "enum": [
+            "first_party_report",
+            "independent_corroboration",
+            "official_incident",
+            "reproduction",
+            "unknown"
+          ]
+        }
+      }
+    },
     "normalizedSignal": {
       "type": "object",
       "additionalProperties": false,
@@ -398,74 +476,7 @@
             "author_certainty": { "enum": ["explicit", "probable", "possible", "unknown"] },
             "impact": {
               "oneOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "category",
-                    "severity",
-                    "lifecycle",
-                    "affected_scope",
-                    "affected_surfaces",
-                    "workaround",
-                    "evidence_basis"
-                  ],
-                  "properties": {
-                    "category": {
-                      "enum": [
-                        "availability",
-                        "performance",
-                        "correctness",
-                        "tool_execution",
-                        "session_state",
-                        "quota_accounting",
-                        "auth",
-                        "client_ux",
-                        "other"
-                      ]
-                    },
-                    "severity": {
-                      "enum": ["critical", "high", "medium", "low", "unknown"]
-                    },
-                    "lifecycle": {
-                      "enum": ["active", "investigating", "mitigating", "resolved", "unknown"]
-                    },
-                    "affected_scope": {
-                      "enum": ["individual", "multiple_users", "platform", "unknown"]
-                    },
-                    "affected_surfaces": {
-                      "type": "array",
-                      "minItems": 1,
-                      "uniqueItems": true,
-                      "items": {
-                        "enum": [
-                          "cli",
-                          "ide",
-                          "api",
-                          "web",
-                          "agent_loop",
-                          "tool_use",
-                          "mcp",
-                          "auth",
-                          "fast_mode",
-                          "unknown"
-                        ]
-                      }
-                    },
-                    "workaround": {
-                      "enum": ["none", "partial", "available", "unknown"]
-                    },
-                    "evidence_basis": {
-                      "enum": [
-                        "first_party_report",
-                        "independent_corroboration",
-                        "official_incident",
-                        "reproduction",
-                        "unknown"
-                      ]
-                    }
-                  }
-                },
+                { "$ref": "#/$defs/impactClassification" },
                 { "type": "null" }
               ]
             },
@@ -620,6 +631,223 @@
               "provenance_relation": { "enum": ["independent", "quotes", "repost", "reply", "summarizes", "unknown"] },
               "independence_group_id": { "type": "string" },
               "link_confidence": { "$ref": "#/$defs/probability" }
+            }
+          }
+        }
+      }
+    },
+    "impactEpisode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "as_of",
+        "episode_id",
+        "topic_key",
+        "category",
+        "episode_interval",
+        "policy_version",
+        "policy_config_hash",
+        "policy_parameters",
+        "taxonomy_version",
+        "deduplication_version",
+        "extractor_contract",
+        "scope",
+        "state",
+        "trend",
+        "first_observed_at",
+        "last_independent_update_at",
+        "current_impact",
+        "peak_impact",
+        "current_pressure",
+        "peak_pressure",
+        "pressure_components",
+        "update_kind",
+        "official_acknowledged_at",
+        "mitigated_at",
+        "resolved_at",
+        "evidence"
+      ],
+      "properties": {
+        "as_of": { "$ref": "#/$defs/utcTimestamp" },
+        "episode_id": { "type": "string", "minLength": 1 },
+        "topic_key": { "type": "string", "minLength": 1 },
+        "category": {
+          "enum": [
+            "availability",
+            "performance",
+            "correctness",
+            "tool_execution",
+            "session_state",
+            "quota_accounting",
+            "auth",
+            "client_ux",
+            "security_privacy",
+            "data_integrity",
+            "compatibility",
+            "other"
+          ]
+        },
+        "episode_interval": { "$ref": "#/$defs/timeRange" },
+        "policy_version": { "const": "impact-episode-policy/1" },
+        "policy_config_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "policy_parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cluster_gap_hours",
+            "active_evidence_ttl_hours",
+            "freshness_half_life_hours"
+          ],
+          "properties": {
+            "cluster_gap_hours": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "active_evidence_ttl_hours": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "freshness_half_life_hours": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "taxonomy_version": { "type": ["string", "null"] },
+        "deduplication_version": { "type": ["string", "null"] },
+        "extractor_contract": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "model_version",
+                "prompt_version",
+                "topic_relevance_policy_version",
+                "semantic_policy_hash"
+              ],
+              "properties": {
+                "model": { "type": "string", "minLength": 1 },
+                "model_version": { "type": "string", "minLength": 1 },
+                "prompt_version": { "type": "string", "minLength": 1 },
+                "topic_relevance_policy_version": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "semantic_policy_hash": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "scope": { "$ref": "#/$defs/scope" },
+        "state": {
+          "enum": [
+            "active",
+            "investigating",
+            "mitigating",
+            "resolved",
+            "reopened",
+            "unknown"
+          ]
+        },
+        "trend": {
+          "enum": ["rising", "stable", "falling", "resolved", "unknown"]
+        },
+        "first_observed_at": { "$ref": "#/$defs/utcTimestamp" },
+        "last_independent_update_at": { "$ref": "#/$defs/utcTimestamp" },
+        "current_impact": { "$ref": "#/$defs/impactClassification" },
+        "peak_impact": { "$ref": "#/$defs/impactClassification" },
+        "current_pressure": { "$ref": "#/$defs/probability" },
+        "peak_pressure": { "$ref": "#/$defs/probability" },
+        "pressure_components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "severity",
+            "affected_scope",
+            "lifecycle",
+            "persistence",
+            "corroboration",
+            "freshness",
+            "workaround",
+            "independent_evidence_count",
+            "active_duration_hours",
+            "hours_since_last_independent_update"
+          ],
+          "properties": {
+            "severity": { "$ref": "#/$defs/probability" },
+            "affected_scope": { "$ref": "#/$defs/probability" },
+            "lifecycle": { "$ref": "#/$defs/probability" },
+            "persistence": { "$ref": "#/$defs/probability" },
+            "corroboration": { "$ref": "#/$defs/probability" },
+            "freshness": { "$ref": "#/$defs/probability" },
+            "workaround": { "$ref": "#/$defs/probability" },
+            "independent_evidence_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "active_duration_hours": {
+              "type": "number",
+              "minimum": 0
+            },
+            "hours_since_last_independent_update": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "update_kind": {
+          "enum": [
+            "opened",
+            "evidence_added",
+            "evidence_updated",
+            "escalated",
+            "mitigated",
+            "resolved",
+            "reopened",
+            "recomputed"
+          ]
+        },
+        "official_acknowledged_at": {
+          "$ref": "#/$defs/nullableUtcTimestamp"
+        },
+        "mitigated_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+        "resolved_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "signal_ref",
+              "independence_group_id",
+              "relation"
+            ],
+            "properties": {
+              "signal_ref": { "$ref": "#/$defs/recordRef" },
+              "independence_group_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "relation": {
+                "enum": [
+                  "reports",
+                  "corroborates",
+                  "investigates",
+                  "mitigates",
+                  "resolves",
+                  "reopens"
+                ]
+              }
             }
           }
         }

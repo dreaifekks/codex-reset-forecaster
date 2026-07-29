@@ -4,6 +4,7 @@ import { HistoricalMonitorProvider } from "../providers/historical-monitor-provi
 import { RsshubXProvider } from "../providers/rsshub-x-provider.mjs";
 import { normalizeNewObservations } from "./extract.mjs";
 import { linkEventCandidates } from "./link.mjs";
+import { buildImpactEpisodes } from "./impact-episodes.mjs";
 import { adjudicateOutcomes } from "./outcomes.mjs";
 import { trainChallenger } from "../model/training.mjs";
 import {
@@ -66,9 +67,12 @@ async function configuredCoverageWaiting(store, config, collection, now) {
 
 export async function processRecords(store, config, { now = new Date() } = {}) {
   const normalized = await normalizeNewObservations(store, config, { now });
+  const impactEpisodes = await buildImpactEpisodes(store, config, {
+    asOf: now,
+  });
   const linked = await linkEventCandidates(store, config, { asOf: now });
   const outcomes = await adjudicateOutcomes(store, config, { now });
-  return { normalized, linked, outcomes };
+  return { normalized, impactEpisodes, linked, outcomes };
 }
 
 function assertCompatibleModel(model, config) {

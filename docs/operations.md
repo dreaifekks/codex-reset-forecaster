@@ -137,10 +137,11 @@ runtime rejects `rsshub_x_timeline` in `model.outcome_coverage_providers`; it ne
 creates negative labels.
 
 The default scheduler runs every 10 minutes and the RSSHub source contract uses a
-five-minute refresh interval. Once the source exposes a new item, it is available
-to the next collection/recalculation run without waiting for daily training. This
-cadence is an acquisition target, not a guarantee about X or RSSHub upstream
-availability.
+five-minute eligibility gate. Because it shares the scheduler, effective polls are
+currently no more frequent than the next 10-minute run. Once the source exposes a
+new item, it is available to that collection/recalculation run without waiting for
+daily training. This cadence is an acquisition target, not a guarantee about X or
+RSSHub upstream availability.
 
 ### Manual author timeline JSONL import
 
@@ -348,6 +349,12 @@ provider state; later polls consume the gateway's incremental `events` result so
 wording changes in already-seen summaries do not masquerade as newly discovered
 posts. For X status URLs, `published_at` is derived deterministically from the
 status snowflake when the search response omits or varies `created_at`.
+The default context provider gate is 30 minutes. The shared scheduler checks that
+gate on its 10-minute boundaries; it is not a separate 30-minute timer.
+Independent configured queries are requested concurrently and then merged in
+configuration order. One failed query is reported without discarding successful
+query results and is retried at the next scheduler boundary without advancing the
+full-success gate, while an all-query failure still fails the provider run.
 If the Grokbuild path is unavailable, set `X_SEARCH_GATEWAY_PROVIDER=hermes` as a
 rollback; Hermes receives the same summary/context-only treatment. The SocialData
 upstream can return exact text but may bill a full upstream page even for a small
@@ -407,15 +414,25 @@ The service exposes:
   calibration, and event history
 
 `GET /api/evidence/recent` returns semantic arrays `core`, `experience`,
-`competition`, and `other_context`, plus a combined `items` view. Experience items
-include `impact`; competition items include `competitive_context`; every item
+`competition`, and `other_context`, plus a combined `items` view. It also returns
+up to 12 exact-source `timeline` entries for the configured Tibo confirmation
+identity, including posts that did not match a normalized signal, and up to eight
+current `impact_episodes` ranked by pressure and recency. Experience items include
+`impact`; competition items include `competitive_context`; every evidence item
 states whether it was known at the forecast cutoff, whether it was actually
 feature-eligible, and its exact source/collection provenance. Thus a displayed
 experience report can have `known_at_forecast_cutoff=true` while
-`included_in_forecast=false`. For one compatibility version the endpoint also
-returns deprecated `community`, equal to the aggregate of the three non-core
-groups. New clients must use the semantic arrays; the website no longer treats
-community resonance as a signal.
+`included_in_forecast=false`. Impact pressure is a bounded follow-up measurement,
+not reset probability. Each episode exposes its pressure `as_of` and policy
+binding; `impact_tracking.enabled=false` returns no historical episodes rather
+than presenting stale append-only state as current. For one compatibility version
+the endpoint also returns
+deprecated `community`, equal to the aggregate of the three non-core groups. New
+clients must use the semantic arrays; the website no longer treats community
+resonance as a signal. The browser refreshes this evidence endpoint independently
+about every two minutes while visible and online, without rerunning the heavier
+forecast/health rendering. This reduces post-collection display latency but does
+not make the underlying 10-minute collection scheduler run faster.
 
 `/api/health` reports every configured provider separately, including its role,
 last success, latest unresolved error, age threshold, and effective stale state.

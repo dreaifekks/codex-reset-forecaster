@@ -64,14 +64,14 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
-  assert.equal(live.config_version, "provider-config/0.3.2");
-  assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.0");
+  assert.equal(live.config_version, "provider-config/0.3.3");
+  assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.1");
   assert.equal(live.feature_schema_version, "reset-features/0.3.1");
   assert.equal(live.deduplication_version, "reset-dedup/0.2.3");
-  assert.equal(live.extractor.model_version, "0.3.1");
+  assert.equal(live.extractor.model_version, "0.3.2");
   assert.equal(
     live.extractor.prompt_version,
-    "reset-extract/rules-0.3.1",
+    "reset-extract/rules-0.3.2",
   );
   assert.equal(
     live.model.coefficient_priors.renewal_periodic_kernel ?? 0,
@@ -1095,6 +1095,70 @@ test("RSSHub exact timelines cannot be configured as outcome coverage", async ()
       },
     } }),
     /finite feeds are not exhaustive coverage/,
+  );
+});
+
+test("impact episode policy is versioned and bounded", async () => {
+  const config = await loadConfig();
+  assert.deepEqual(config.impact_tracking, {
+    version: "impact-episode-policy/1",
+    enabled: true,
+    cluster_gap_hours: 72,
+    active_evidence_ttl_hours: 24,
+    freshness_half_life_hours: 36,
+  });
+  await assert.rejects(
+    loadConfig({ overrides: {
+      impact_tracking: {
+        active_evidence_ttl_hours: 0,
+      },
+    } }),
+    /supported bounded impact-episode-policy/,
+  );
+});
+
+test("gateway impact discovery mirrors high-impact and recovery vocabulary", async () => {
+  const config = await loadConfig();
+  const query = config.providers.x_search_gateway.queries.find((entry) =>
+    entry.name === "codex-impact-lifecycle"
+  )?.query ?? "";
+  for (const term of [
+    "vulnerability",
+    "compromised",
+    "credential",
+    "truncated",
+    "incompatible",
+    "\"version mismatch\"",
+    "\"working again\"",
+    "recovered",
+    "restored",
+    "workaround",
+  ]) {
+    assert.ok(query.includes(term), `gateway impact query should include ${term}`);
+  }
+  assert.equal(config.providers.x_search_gateway.refresh_interval_minutes, 30);
+  await assert.rejects(
+    loadConfig({ overrides: {
+      providers: {
+        x_search_gateway: {
+          queries: [],
+        },
+      },
+    } }),
+    /non-empty uniquely named queries/,
+  );
+  await assert.rejects(
+    loadConfig({ overrides: {
+      providers: {
+        x_search_gateway: {
+          queries: [
+            { name: "duplicate", query: "Codex broken" },
+            { name: "duplicate", query: "Codex fixed" },
+          ],
+        },
+      },
+    } }),
+    /non-empty uniquely named queries/,
   );
 });
 

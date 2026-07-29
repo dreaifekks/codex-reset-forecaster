@@ -59,8 +59,26 @@ const EXPERIENCE_ISSUE_TERMS = new RegExp([
   String.raw`\busage\b[^.!?\n]{0,16}\b(?:drain(?:s|ed|ing)?|consumption)\b`,
   String.raw`\b(?:mcp|tool(?:\s+call|\s+use|\s+execution)?|login|auth(?:entication)?|session)\b[^.!?\n]{0,48}\b(?:broken|fail(?:s|ed|ing)?|error|stuck|hang(?:s|ing)?|timeout|unavailable)\b`,
   String.raw`\b(?:lost|losing|corrupt(?:ed|ion)?)\b[^.!?\n]{0,36}\b(?:session|work|changes|context|state)\b`,
+  String.raw`\b(?:security|privacy)\s+(?:incident|issue|bug|flaw|regression|vulnerabilit(?:y|ies))\b`,
+  String.raw`\b(?:cve-\d{4}-\d+|exploit(?:ed|able)?|(?:authentication\s+)?credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b[^.!?\n]{0,48}\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b`,
+  String.raw`\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b[^.!?\n]{0,48}\b(?:authentication\s+)?(?:credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b`,
+  String.raw`\b(?:data|files?|changes?|work)\b[^.!?\n]{0,36}\b(?:loss|lost|corrupt(?:ed|ion)?|overwrit(?:e|ten)|truncat(?:ed|ion))\b`,
+  String.raw`\b(?:lost|losing|corrupt(?:s|ed|ing|ion)?|overwrit(?:e|es|ten|ing)|truncat(?:e|es|ed|ing|ion))\b[^.!?\n]{0,48}\b(?:data|files?|changes?|work|workspace|repositor(?:y|ies)|repos?|projects?|sessions?|context|state)\b`,
+  String.raw`\b(?:incompatib(?:le|ility)|compatibility\s+(?:issue|bug|regression)|version\s+mismatch)\b`,
+  String.raw`\b(?:still|again)\b[^.!?\n]{0,36}\b(?:broken|failing|affected|unavailable|reproducible)\b`,
 ].join("|"), "i");
-const EXPERIENCE_RECOVERY_TERMS = /\b(fix(?:ed|ing)?|resolved|working again|back (?:online|to normal|up)|recover(?:ed|ing|y)|restore(?:d|ing)?)\b/i;
+const EXPERIENCE_RESOLUTION_TERMS =
+  /\b(?:fixed|patched|resolved|working\s+again|back\s+(?:online|to\s+normal|up)|recovered|restored)\b/i;
+const EXPERIENCE_MITIGATION_TERMS =
+  /\b(?:fixing|patching|recovering|restoring|roll(?:ed|ing)?\s+back|workaround\s+(?:is\s+)?available|mitigat(?:e|es|ed|ing|ion))\b/i;
+const EXPERIENCE_RECOVERY_TERMS = new RegExp(
+  `${EXPERIENCE_RESOLUTION_TERMS.source}|${EXPERIENCE_MITIGATION_TERMS.source}`,
+  "i",
+);
+const CONTINUING_EXPERIENCE_ISSUE_TERMS = new RegExp([
+  String.raw`\b(?:still|again|remains?|continues?|continuing)\b[^.!?\n]{0,48}\b(?:broken|failing|affected|unavailable|unusable|reproducible|crash(?:es|ing)?|hang(?:s|ing)?|corrupt(?:ed|ing)?|leak(?:s|ing)?)\b`,
+  String.raw`\b(?:broken|failing|affected|unavailable|unusable|reproducible|crash(?:es|ing)?|hang(?:s|ing)?|corrupt(?:ed|ing)?|leak(?:s|ing)?)\b[^.!?\n]{0,32}\b(?:still|again|remains?|continues?|continuing)\b`,
+].join("|"), "i");
 const QUOTA_ANOMALY_TERMS = new RegExp([
   String.raw`\b(?:reset|refill)(?:s|ting|ted)?\b[^.!?\n]{0,72}\b(?:still|yet|immediately|instantly)\b[^.!?\n]{0,72}\b(?:429|quota|limit|exhausted)\b`,
   String.raw`\b(?:429|quota|limit|exhausted)\b[^.!?\n]{0,72}\b(?:after|despite)\b[^.!?\n]{0,36}\b(?:reset|refill)\b`,
@@ -156,6 +174,8 @@ function sourceRole(observation, config) {
 function classifyEvent(text) {
   const releaseClaim =
     RELEASE_TERMS.test(text) && !NON_RELEASE_LAUNCH_CONTEXT.test(text);
+  const codexExperienceIssue =
+    CODEX_TERMS.test(text) && EXPERIENCE_ISSUE_TERMS.test(text);
   if (CODEX_TERMS.test(text) && QUOTA_ANOMALY_TERMS.test(text)) {
     return "experience_issue";
   }
@@ -166,17 +186,27 @@ function classifyEvent(text) {
   if (COMPETITOR_TERMS.test(text) && releaseClaim) {
     return "competitor_model_release";
   }
-  if (CODEX_TERMS.test(text) && EXPERIENCE_RECOVERY_TERMS.test(text)) {
-    return OFFICIAL_INCIDENT_TERMS.test(text)
-      ? "capacity_restore"
-      : "experience_recovery";
+  if (
+    codexExperienceIssue &&
+    (
+      CONTINUING_EXPERIENCE_ISSUE_TERMS.test(text) ||
+      (
+        EXPERIENCE_MITIGATION_TERMS.test(text) &&
+        !EXPERIENCE_RESOLUTION_TERMS.test(text)
+      )
+    )
+  ) {
+    return "experience_issue";
   }
   if (OFFICIAL_INCIDENT_TERMS.test(text)) {
-    return /\b(?:restore|recover|resolved|fixed)\b/i.test(text)
+    return EXPERIENCE_RESOLUTION_TERMS.test(text)
       ? "capacity_restore"
       : "incident";
   }
-  if (CODEX_TERMS.test(text) && EXPERIENCE_ISSUE_TERMS.test(text)) {
+  if (CODEX_TERMS.test(text) && EXPERIENCE_RECOVERY_TERMS.test(text)) {
+    return "experience_recovery";
+  }
+  if (codexExperienceIssue) {
     return "experience_issue";
   }
   if (releaseClaim) return "release";
@@ -187,6 +217,24 @@ function classifyEvent(text) {
 }
 
 function impactKind(text) {
+  if (
+    /\b(?:security|privacy)\s+(?:incident|issue|bug|flaw|regression|vulnerabilit(?:y|ies))\b/i
+      .test(text) ||
+    /\b(?:cve-\d{4}-\d+|exploit(?:ed|able)?|(?:authentication\s+)?credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b[^.!?\n]{0,48}\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b/i
+      .test(text) ||
+    /\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b[^.!?\n]{0,48}\b(?:authentication\s+)?(?:credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b/i
+      .test(text)
+  ) return "security_privacy";
+  if (
+    /\b(?:data|files?|changes?|work)\b[^.!?\n]{0,36}\b(?:loss|lost|corrupt(?:ed|ion)?|overwrit(?:e|ten)|truncat(?:ed|ion))\b/i
+      .test(text) ||
+    /\b(?:lost|losing|corrupt(?:s|ed|ing|ion)?|overwrit(?:e|es|ten|ing)|truncat(?:e|es|ed|ing|ion))\b[^.!?\n]{0,48}\b(?:data|files?|changes?|work|workspace|repositor(?:y|ies)|repos?|projects?|sessions?|context|state)\b/i
+      .test(text)
+  ) return "data_integrity";
+  if (
+    /\b(?:incompatib(?:le|ility)|compatibility\s+(?:issue|bug|regression)|version\s+mismatch)\b/i
+      .test(text)
+  ) return "compatibility";
   if (/\b(?:outage|down|unavailable|service disruption)\b/i.test(text)) return "availability";
   if (/\b(?:slow|slower|latency|laggy|timeout)\b/i.test(text)) return "performance";
   if (/\b(?:mcp|tool(?:\s+call|\s+use|\s+execution)?)\b/i.test(text)) return "tool_execution";
@@ -216,7 +264,7 @@ function affectedSurfaces(text) {
 function impactScope(text) {
   if (
     PLATFORM_SCOPE_TERMS.test(text) ||
-    /\b(?:platform[-\s]?wide|service[-\s]?wide|globally|widespread|almost global)\b/i.test(text)
+    /\b(?:platform[-\s]?wide|service[-\s]?wide|across\s+the\s+platform|globally|widespread|almost global)\b/i.test(text)
   ) return "platform";
   if (/\b(?:many|multiple|several|some)\s+users\b|\bothers?\s+(?:are\s+)?seeing\b/i.test(text)) {
     return "multiple_users";
@@ -226,9 +274,14 @@ function impactScope(text) {
 }
 
 function impactLifecycle(text, eventType) {
-  if (["capacity_restore", "experience_recovery"].includes(eventType)) return "resolved";
-  if (/\bmitigat(?:e|es|ed|ing|ion)\b/i.test(text)) return "mitigating";
+  if (eventType === "capacity_restore") return "resolved";
+  if (CONTINUING_EXPERIENCE_ISSUE_TERMS.test(text)) {
+    return EXPERIENCE_MITIGATION_TERMS.test(text) ? "mitigating" : "active";
+  }
+  if (EXPERIENCE_RESOLUTION_TERMS.test(text)) return "resolved";
+  if (EXPERIENCE_MITIGATION_TERMS.test(text)) return "mitigating";
   if (/\binvestigat(?:e|es|ed|ing|ion)\b/i.test(text)) return "investigating";
+  if (eventType === "experience_recovery") return "resolved";
   if (["incident", "experience_issue"].includes(eventType)) return "active";
   return "unknown";
 }
@@ -236,16 +289,25 @@ function impactLifecycle(text, eventType) {
 function impactSeverity(text, scope, lifecycle) {
   if (lifecycle === "resolved") return "unknown";
   const hardBlock = /\b(?:outage|down|unavailable|unusable|cannot|can['’]?t|crash|stuck|hang(?:s|ing)?|login|auth)\b/i.test(text);
-  const destructive = /\b(?:lost|losing|corrupt(?:ed|ion)?|data loss)\b/i.test(text);
+  const destructive =
+    /\b(?:lost|losing|corrupt(?:s|ed|ing|ion)?|data\s+loss|overwrit(?:e|es|ten|ing)|truncat(?:e|es|ed|ing|ion))\b/i
+      .test(text);
+  const securityExposure =
+    /\b(?:security|privacy)\s+(?:incident|issue|bug|flaw|regression|vulnerabilit(?:y|ies))\b/i
+      .test(text) ||
+    /\b(?:cve-\d{4}-\d+|exploit(?:ed|able)?|(?:authentication\s+)?credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b[^.!?\n]{0,48}\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b/i
+      .test(text) ||
+    /\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b[^.!?\n]{0,48}\b(?:authentication\s+)?(?:credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b/i
+      .test(text);
   const degraded = /\b(?:degrad(?:ed|ation)|fail(?:s|ed|ing|ure)?|errors?|broken|usage drain)\b/i.test(text);
   const performanceOnly = /\b(?:slow|slower|latency|laggy)\b/i.test(text) &&
     !hardBlock && !destructive && !degraded;
   if (scope === "platform" && (hardBlock || destructive)) return "critical";
   if (
     ["platform", "multiple_users"].includes(scope) &&
-    (hardBlock || destructive || degraded)
+    (hardBlock || destructive || securityExposure || degraded)
   ) return "high";
-  if (hardBlock || destructive || degraded) return "medium";
+  if (hardBlock || destructive || securityExposure || degraded) return "medium";
   if (performanceOnly || /\b(?:minor|cosmetic|annoying|friction)\b/i.test(text)) return "low";
   return "unknown";
 }
@@ -376,7 +438,9 @@ function classifyPhase(text, eventType) {
     return "scheduled";
   }
   if (/\b(expect|likely|probably|should|might|may)\b/i.test(text)) return "expected";
-  if (eventType === "experience_recovery") return "completed";
+  if (eventType === "experience_recovery") {
+    return EXPERIENCE_RESOLUTION_TERMS.test(text) ? "completed" : "started";
+  }
   if (eventType === "experience_issue") {
     if (/\b(?:investigat|mitigat)(?:e|es|ed|ing|ion)\b/i.test(text)) return "started";
     return /\b(?:rumor|reportedly|unconfirmed)\b/i.test(text) ? "rumor" : "started";

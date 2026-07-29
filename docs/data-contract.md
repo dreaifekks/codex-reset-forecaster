@@ -70,6 +70,21 @@ confidence. Codex experience claims may additionally carry structured `impact`;
 competitor release claims may carry `competitive_context`. These semantic fields
 remain separate from extraction confidence and forecast probability.
 
+### `impact_episode`
+
+An append-only projection of related Codex experience issue and recovery signals.
+Each revision binds a versioned impact-tracking policy together with the active
+taxonomy, extractor semantic contract, and deduplication version in its producer
+configuration hash. It records its stable topic key, half-open episode interval,
+exact signal/evidence references, current lifecycle and impact summary, and a
+bounded freshness-decayed pressure. Independent evidence roots contribute at most
+once; quotes, reposts, and derivative summaries cannot amplify the episode.
+
+The pressure describes observed issue impact and persistence. It is not extraction
+confidence, epistemic uncertainty, data quality, or reset probability. A later
+follow-up appends a superseding episode revision rather than mutating the prior
+state, so every historical view remains reproducible at its own cutoff.
+
 ### `event_candidate`
 
 A revisable hypothesis that links supporting and contradicting signals. Evidence
@@ -207,7 +222,8 @@ Stance is one of `supports`, `contradicts`, `neutral`, or `unknown`.
 incident/recovery and otherwise null. It keeps the following dimensions separate:
 
 - `category`: availability, performance, correctness, tool execution, session
-  state, quota accounting, auth, client UX, or other;
+  state, quota accounting, auth, client UX, security/privacy, data integrity,
+  compatibility, or other;
 - `severity`: critical, high, medium, low, or unknown;
 - `lifecycle`: active, investigating, mitigating, resolved, or unknown;
 - `affected_scope`: individual, multiple users, platform, or unknown;

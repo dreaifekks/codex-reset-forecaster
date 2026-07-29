@@ -165,6 +165,17 @@ summarized, supporting, or contradicting. Event-candidate evidence uses
 `provenance_relation: "reply"` for the parent-bound reply case. Twenty derivative
 reports from one original post remain one independent evidence root.
 
+Experience issues and recoveries are additionally folded into versioned,
+append-only `impact_episode` revisions before event-candidate linking; the
+projection does not depend on a candidate becoming a confirmed event. Episode
+construction operates on current extractor-compatible normalized revisions and
+independent evidence roots, applies a bounded temporal clustering gap, and binds
+its policy, taxonomy, extractor, and deduplication contracts. Its
+freshness-decayed pressure preserves severity, scope, persistence, and lifecycle
+movement without turning copied-post volume into impact. The pressure is a
+display/audit measurement for follow-up tracking; it is not an estimate of reset
+probability and is not part of the current champion feature vector.
+
 ### 5. As-of feature builder
 
 At every cutoff, the builder creates immutable features using only record revisions
@@ -300,11 +311,15 @@ into seven 24-hour heatmap rows. Time-zone conversion changes display labels, no
 slot order or canonical UTC storage.
 
 Recent evidence is projected into semantic `core`, `experience`, `competition`,
-and `other_context` groups. Experience entries carry the structured impact
+and `other_context` groups. A separate exact-source `timeline` shows recent Tibo
+posts even when no normalized signal matched, so collection freshness is not
+confused with topic selection. Experience entries carry the structured impact
 classification, while competition entries carry the structured release context.
-The API retains `community` for one compatibility version as a deprecated aggregate
-of the three non-core groups; the website no longer uses community resonance as a
-product concept.
+Current `impact_episodes` expose ranked issue/recovery follow-up with the explicit
+warning that episode pressure is not reset probability. The API retains
+`community` for one compatibility version as a deprecated aggregate of the three
+non-core groups; the website no longer uses community resonance as a product
+concept.
 
 The evaluation view joins immutable as-issued predictions with settled outcomes.
 It reports calibration and rare-event forecast quality rather than plain

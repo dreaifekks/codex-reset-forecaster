@@ -7,6 +7,7 @@ const RECORD_TYPES = [
   "raw_observation",
   "normalized_signal",
   "event_candidate",
+  "impact_episode",
   "reset_outcome",
   "feature_snapshot",
   "prediction",

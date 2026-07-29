@@ -5,6 +5,7 @@ const PREFIXES = {
   raw_observation: "obs",
   normalized_signal: "sig",
   event_candidate: "evt",
+  impact_episode: "imp",
   reset_outcome: "out",
   feature_snapshot: "feat",
   prediction: "pred",

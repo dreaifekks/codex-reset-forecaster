@@ -1,4 +1,4 @@
-export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/3";
+export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/4";
 
 const TARGET_PRODUCT_TERMS = /\b(?:codex(?:er|ers)?|chatgpt\s+work)\b/i;
 const ECOSYSTEM_PRODUCT_TERMS =
@@ -51,6 +51,13 @@ const EXPERIENCE_ISSUE_TERMS = new RegExp([
   String.raw`\busage\b[^.!?\n]{0,16}\bdrain(?:s|ed|ing)?\b`,
   String.raw`\b(?:mcp|tool(?:\s+call|\s+use|\s+execution)?|login|auth(?:entication)?|session)\b[^.!?\n]{0,48}\b(?:broken|fail(?:s|ed|ing)?|error|stuck|hang(?:s|ing)?|timeout|unavailable)\b`,
   String.raw`\b(?:lost|losing|corrupt(?:ed|ion)?)\b[^.!?\n]{0,36}\b(?:session|work|changes|context|state)\b`,
+  String.raw`\b(?:security|privacy)\s+(?:incident|issue|bug|flaw|regression|vulnerabilit(?:y|ies))\b`,
+  String.raw`\b(?:cve-\d{4}-\d+|exploit(?:ed|able)?|(?:authentication\s+)?credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b[^.!?\n]{0,48}\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b`,
+  String.raw`\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b[^.!?\n]{0,48}\b(?:authentication\s+)?(?:credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b`,
+  String.raw`\b(?:data|files?|changes?|work)\b[^.!?\n]{0,36}\b(?:loss|lost|corrupt(?:ed|ion)?|overwrit(?:e|ten)|truncat(?:ed|ion))\b`,
+  String.raw`\b(?:lost|losing|corrupt(?:s|ed|ing|ion)?|overwrit(?:e|es|ten|ing)|truncat(?:e|es|ed|ing|ion))\b[^.!?\n]{0,48}\b(?:data|files?|changes?|work|workspace|repositor(?:y|ies)|repos?|projects?|sessions?|context|state)\b`,
+  String.raw`\b(?:incompatib(?:le|ility)|compatibility\s+(?:issue|bug|regression)|version\s+mismatch)\b`,
+  String.raw`\b(?:still|again|remains?|continues?|continuing)\b[^.!?\n]{0,48}\b(?:broken|failing|affected|unavailable|unusable|reproducible|crash(?:es|ing)?|hang(?:s|ing)?|corrupt(?:ed|ing)?|leak(?:s|ing)?)\b`,
 ].join("|"), "i");
 const OBSERVED_EXPERIENCE_STATE = new RegExp([
   String.raw`\bbroken\b`,
@@ -68,13 +75,22 @@ const OBSERVED_EXPERIENCE_STATE = new RegExp([
   String.raw`\b(?:slow|slower|latency|laggy)\b`,
   String.raw`\busage\b[^.!?\n]{0,16}\bdrain(?:s|ed|ing)?\b`,
   String.raw`\b(?:lost|losing|corrupt(?:ed|ion)?)\b`,
+  String.raw`\b(?:security|privacy)\s+(?:incident|issue|bug|flaw|regression|vulnerabilit(?:y|ies))\b`,
+  String.raw`\b(?:cve-\d{4}-\d+|exploit(?:ed|able)?|(?:authentication\s+)?credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b[^.!?\n]{0,48}\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b`,
+  String.raw`\b(?:leak(?:s|ed|ing)?|expos(?:e|es|ed|ing|ure)|compromis(?:e|es|ed|ing))\b[^.!?\n]{0,48}\b(?:authentication\s+)?(?:credentials?|tokens?|secrets?|api\s+keys?|private\s+(?:customer\s+)?data)\b`,
+  String.raw`\b(?:data|files?|changes?|work)\b[^.!?\n]{0,36}\b(?:loss|lost|corrupt(?:ed|ion)?|overwrit(?:e|ten)|truncat(?:ed|ion))\b`,
+  String.raw`\b(?:lost|losing|corrupt(?:s|ed|ing|ion)?|overwrit(?:e|es|ten|ing)|truncat(?:e|es|ed|ing|ion))\b[^.!?\n]{0,48}\b(?:data|files?|changes?|work|workspace|repositor(?:y|ies)|repos?|projects?|sessions?|context|state)\b`,
+  String.raw`\b(?:incompatib(?:le|ility)|compatibility\s+(?:issue|bug|regression)|version\s+mismatch)\b`,
 ].join("|"), "i");
 const EXPERIENCE_RECOVERY_TERMS = new RegExp([
   String.raw`\bfix(?:ed|ing)?\b`,
+  String.raw`\bpatch(?:ed|ing)?\b`,
   String.raw`\bresolved\b`,
   String.raw`\bworking\s+again\b`,
   String.raw`\bback\s+(?:online|to\s+normal|up)\b`,
   String.raw`\brecover(?:ed|ing|y)\b`,
+  String.raw`\broll(?:ed|ing)?\s+back\b`,
+  String.raw`\bworkaround\s+(?:is\s+)?available\b`,
 ].join("|"), "i");
 const STRONG_INCIDENT_TERMS = new RegExp([
   String.raw`\bincidents?\b`,

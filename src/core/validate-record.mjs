@@ -10,6 +10,7 @@ const RECORD_TYPES = new Set([
   "raw_observation",
   "normalized_signal",
   "event_candidate",
+  "impact_episode",
   "reset_outcome",
   "feature_snapshot",
   "prediction",
@@ -58,6 +59,318 @@ function scope(value, label) {
       value.products.length >= 2 &&
       new Set(value.products).size === value.products.length,
       `${label} multi-product membership is invalid`,
+    );
+  }
+}
+
+const IMPACT_CATEGORIES = new Set([
+  "availability",
+  "performance",
+  "correctness",
+  "tool_execution",
+  "session_state",
+  "quota_accounting",
+  "auth",
+  "client_ux",
+  "security_privacy",
+  "data_integrity",
+  "compatibility",
+  "other",
+]);
+const IMPACT_SEVERITIES = new Set([
+  "critical",
+  "high",
+  "medium",
+  "low",
+  "unknown",
+]);
+const IMPACT_LIFECYCLES = new Set([
+  "active",
+  "investigating",
+  "mitigating",
+  "resolved",
+  "unknown",
+]);
+const IMPACT_AFFECTED_SCOPES = new Set([
+  "individual",
+  "multiple_users",
+  "platform",
+  "unknown",
+]);
+const IMPACT_SURFACES = new Set([
+  "cli",
+  "ide",
+  "api",
+  "web",
+  "agent_loop",
+  "tool_use",
+  "mcp",
+  "auth",
+  "fast_mode",
+  "unknown",
+]);
+const IMPACT_WORKAROUNDS = new Set([
+  "none",
+  "partial",
+  "available",
+  "unknown",
+]);
+const IMPACT_EVIDENCE_BASES = new Set([
+  "first_party_report",
+  "independent_corroboration",
+  "official_incident",
+  "reproduction",
+  "unknown",
+]);
+
+function validateImpactClassification(impact, label) {
+  invariant(
+    impact &&
+      IMPACT_CATEGORIES.has(impact.category) &&
+      IMPACT_SEVERITIES.has(impact.severity) &&
+      IMPACT_LIFECYCLES.has(impact.lifecycle) &&
+      IMPACT_AFFECTED_SCOPES.has(impact.affected_scope) &&
+      Array.isArray(impact.affected_surfaces) &&
+      impact.affected_surfaces.length > 0 &&
+      new Set(impact.affected_surfaces).size ===
+        impact.affected_surfaces.length &&
+      impact.affected_surfaces.every((surface) =>
+        IMPACT_SURFACES.has(surface)
+      ) &&
+      IMPACT_WORKAROUNDS.has(impact.workaround) &&
+      IMPACT_EVIDENCE_BASES.has(impact.evidence_basis),
+    `${label} classification invalid`,
+  );
+}
+
+function validateImpactEpisode(record) {
+  const data = record.data;
+  invariant(
+    record.producer.name === "impact-episode-builder" &&
+      record.producer.version === "0.1.0" &&
+      /^sha256:[a-f0-9]{64}$/.test(
+        record.producer.config_hash ?? "",
+      ),
+    "impact episode producer contract invalid",
+  );
+  invariant(
+    data.policy_version === "impact-episode-policy/1" &&
+      data.policy_config_hash === record.producer.config_hash,
+    "impact episode policy binding invalid",
+  );
+  invariant(
+    (data.taxonomy_version === null ||
+      (
+        typeof data.taxonomy_version === "string" &&
+        data.taxonomy_version.length > 0
+      )) &&
+      (data.deduplication_version === null ||
+        (
+          typeof data.deduplication_version === "string" &&
+          data.deduplication_version.length > 0
+        )),
+    "impact episode taxonomy or deduplication version invalid",
+  );
+  if (data.extractor_contract !== null) {
+    const extractor = data.extractor_contract;
+    invariant(
+      typeof extractor?.model === "string" &&
+        extractor.model.length > 0 &&
+        typeof extractor.model_version === "string" &&
+        extractor.model_version.length > 0 &&
+        typeof extractor.prompt_version === "string" &&
+        extractor.prompt_version.length > 0 &&
+        typeof extractor.topic_relevance_policy_version === "string" &&
+        extractor.topic_relevance_policy_version.length > 0 &&
+        /^sha256:[a-f0-9]{64}$/.test(
+          extractor.semantic_policy_hash ?? "",
+        ),
+      "impact episode extractor contract invalid",
+    );
+  }
+  invariant(
+    typeof data.episode_id === "string" &&
+      data.episode_id.length > 0 &&
+      typeof data.topic_key === "string" &&
+      data.topic_key.length > 0 &&
+      IMPACT_CATEGORIES.has(data.category) &&
+      isUtc(data.as_of) &&
+      isUtc(data.first_observed_at) &&
+      isUtc(data.last_independent_update_at),
+    "impact episode identity or timestamps invalid",
+  );
+  range(data.episode_interval, "impact episode interval");
+  invariant(
+    Date.parse(data.first_observed_at) <=
+        Date.parse(data.last_independent_update_at) &&
+      Date.parse(data.last_independent_update_at) <=
+        Date.parse(data.as_of) &&
+      data.episode_interval.start === data.first_observed_at &&
+      Date.parse(data.last_independent_update_at) <
+        Date.parse(data.episode_interval.end) &&
+      Date.parse(data.episode_interval.end) <=
+        Date.parse(data.as_of) + 1,
+    "impact episode evidence timestamps exceed as_of",
+  );
+  scope(data.scope, "impact episode scope");
+  invariant(
+    [
+      "active",
+      "investigating",
+      "mitigating",
+      "resolved",
+      "reopened",
+      "unknown",
+    ].includes(data.state),
+    "impact episode state invalid",
+  );
+  invariant(
+    ["rising", "stable", "falling", "resolved", "unknown"].includes(
+      data.trend,
+    ),
+    "impact episode trend invalid",
+  );
+  invariant(
+    [
+      "opened",
+      "evidence_added",
+      "evidence_updated",
+      "escalated",
+      "mitigated",
+      "resolved",
+      "reopened",
+      "recomputed",
+    ].includes(data.update_kind),
+    "impact episode update kind invalid",
+  );
+  validateImpactClassification(
+    data.current_impact,
+    "impact episode current impact",
+  );
+  validateImpactClassification(
+    data.peak_impact,
+    "impact episode peak impact",
+  );
+  invariant(
+    data.category === data.peak_impact.category,
+    "impact episode category does not match its peak impact",
+  );
+  probability(data.current_pressure, "impact episode current pressure");
+  probability(data.peak_pressure, "impact episode peak pressure");
+  invariant(
+    data.peak_pressure + 1e-8 >= data.current_pressure,
+    "impact episode peak pressure is below current pressure",
+  );
+  invariant(
+    data.state !== "resolved" || data.current_pressure <= 0.05,
+    "resolved impact episode pressure must be near zero",
+  );
+  const parameters = data.policy_parameters;
+  invariant(
+    Number.isFinite(parameters?.cluster_gap_hours) &&
+      parameters.cluster_gap_hours > 0 &&
+      Number.isFinite(parameters?.active_evidence_ttl_hours) &&
+      parameters.active_evidence_ttl_hours > 0 &&
+      Number.isFinite(parameters?.freshness_half_life_hours) &&
+      parameters.freshness_half_life_hours > 0,
+    "impact episode policy parameters invalid",
+  );
+  const components = data.pressure_components;
+  for (const field of [
+    "severity",
+    "affected_scope",
+    "lifecycle",
+    "persistence",
+    "corroboration",
+    "freshness",
+    "workaround",
+  ]) {
+    probability(components?.[field], `impact episode pressure ${field}`);
+  }
+  invariant(
+    Number.isInteger(components?.independent_evidence_count) &&
+      components.independent_evidence_count >= 1 &&
+      typeof components?.active_duration_hours === "number" &&
+      Number.isFinite(components.active_duration_hours) &&
+      components.active_duration_hours >= 0 &&
+      components.active_duration_hours <=
+        parameters.active_evidence_ttl_hours + 1e-8 &&
+      typeof components?.hours_since_last_independent_update ===
+        "number" &&
+      Number.isFinite(components.hours_since_last_independent_update) &&
+      components.hours_since_last_independent_update >= 0,
+    "impact episode pressure counters invalid",
+  );
+  const expectedUpdateAge =
+    (Date.parse(data.as_of) -
+      Date.parse(data.last_independent_update_at)) /
+    3_600_000;
+  invariant(
+    Math.abs(
+      expectedUpdateAge -
+        components.hours_since_last_independent_update
+    ) <= 1e-5,
+    "impact episode freshness age is not bounded by as_of",
+  );
+  for (const field of [
+    "official_acknowledged_at",
+    "mitigated_at",
+    "resolved_at",
+  ]) {
+    invariant(
+      data[field] === null ||
+        (isUtc(data[field]) &&
+          Date.parse(data[field]) <= Date.parse(data.as_of)),
+      `impact episode ${field} invalid`,
+    );
+  }
+  invariant(
+    data.state !== "resolved" || data.resolved_at !== null,
+    "resolved impact episode requires resolved_at",
+  );
+  invariant(
+    Array.isArray(data.evidence) && data.evidence.length > 0,
+    "impact episode evidence missing",
+  );
+  const independenceGroups = new Set();
+  for (const [index, entry] of data.evidence.entries()) {
+    recordReference(
+      entry.signal_ref,
+      `impact episode evidence ${index}`,
+    );
+    invariant(
+      typeof entry.independence_group_id === "string" &&
+        entry.independence_group_id.length > 0 &&
+        [
+          "reports",
+          "corroborates",
+          "investigates",
+          "mitigates",
+          "resolves",
+          "reopens",
+        ].includes(entry.relation),
+      `impact episode evidence ${index} invalid`,
+    );
+    invariant(
+      !independenceGroups.has(entry.independence_group_id),
+      "impact episode evidence roots must be independent",
+    );
+    independenceGroups.add(entry.independence_group_id);
+  }
+  invariant(
+    components.independent_evidence_count === data.evidence.length,
+    "impact episode evidence count mismatch",
+  );
+  if (record.revision === 1) {
+    invariant(
+      record.supersedes === null,
+      "first impact episode revision cannot supersede a record",
+    );
+  } else {
+    invariant(
+      record.supersedes?.record_id === record.record_id &&
+        record.supersedes?.revision === record.revision - 1,
+      "impact episode revision must supersede its exact prior revision",
     );
   }
 }
@@ -388,55 +701,7 @@ export function assertCanonicalRecord(record) {
     scope(data.claim?.scope, "signal scope");
     range(data.claim?.asserted_time_range, "asserted time", true);
     if (data.claim?.impact !== undefined && data.claim.impact !== null) {
-      const impact = data.claim.impact;
-      invariant(
-        [
-          "availability",
-          "performance",
-          "correctness",
-          "tool_execution",
-          "session_state",
-          "quota_accounting",
-          "auth",
-          "client_ux",
-          "other",
-        ].includes(impact.category) &&
-          ["critical", "high", "medium", "low", "unknown"].includes(
-            impact.severity,
-          ) &&
-          ["active", "investigating", "mitigating", "resolved", "unknown"].includes(
-            impact.lifecycle,
-          ) &&
-          ["individual", "multiple_users", "platform", "unknown"].includes(
-            impact.affected_scope,
-          ) &&
-          Array.isArray(impact.affected_surfaces) &&
-          impact.affected_surfaces.length > 0 &&
-          new Set(impact.affected_surfaces).size === impact.affected_surfaces.length &&
-          impact.affected_surfaces.every((surface) =>
-            [
-              "cli",
-              "ide",
-              "api",
-              "web",
-              "agent_loop",
-              "tool_use",
-              "mcp",
-              "auth",
-              "fast_mode",
-              "unknown",
-            ].includes(surface)
-          ) &&
-          ["none", "partial", "available", "unknown"].includes(impact.workaround) &&
-          [
-            "first_party_report",
-            "independent_corroboration",
-            "official_incident",
-            "reproduction",
-            "unknown",
-          ].includes(impact.evidence_basis),
-        "signal impact classification invalid",
-      );
+      validateImpactClassification(data.claim.impact, "signal impact");
     }
     if (
       data.claim?.competitive_context !== undefined &&
@@ -497,6 +762,8 @@ export function assertCanonicalRecord(record) {
     scope(data.scope, "candidate scope");
     range(data.hypothesized_time_range, "candidate time", true);
     invariant(Array.isArray(data.evidence), "candidate evidence missing");
+  } else if (record.record_type === "impact_episode") {
+    validateImpactEpisode(record);
   } else if (record.record_type === "reset_outcome") {
     invariant(isUtc(data.known_at), "outcome known_at invalid");
     invariant(

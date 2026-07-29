@@ -1,0 +1,106 @@
+{
+  "schema_version": "reset-intel/0.2",
+  "record_type": "impact_episode",
+  "record_id": "imp_example_001",
+  "revision": 1,
+  "supersedes": null,
+  "created_at": "2026-07-29T12:00:00Z",
+  "producer": {
+    "name": "impact-episode-builder",
+    "version": "0.1.0",
+    "config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "data": {
+    "as_of": "2026-07-29T12:00:00Z",
+    "episode_id": "episode_example_001",
+    "topic_key": "topic_example_001",
+    "category": "tool_execution",
+    "episode_interval": {
+      "start": "2026-07-29T08:00:00Z",
+      "end": "2026-07-29T12:00:00Z",
+      "boundary": "[start,end)"
+    },
+    "policy_version": "impact-episode-policy/1",
+    "policy_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "policy_parameters": {
+      "cluster_gap_hours": 72,
+      "active_evidence_ttl_hours": 24,
+      "freshness_half_life_hours": 36
+    },
+    "taxonomy_version": "reset-taxonomy/0.3.1",
+    "deduplication_version": "reset-dedup/0.2.3",
+    "extractor_contract": {
+      "model": "deterministic-rules",
+      "model_version": "0.3.2",
+      "prompt_version": "reset-extract/rules-0.3.2",
+      "topic_relevance_policy_version": "reset-topic-relevance/4",
+      "semantic_policy_hash": "sha256:26bc2a4fabb83ce8e3350404c5ceb990e0261f58692caba3c6168b475893181b"
+    },
+    "scope": {
+      "vendor": "openai",
+      "product": "codex",
+      "population": "affected_users",
+      "plans": ["paid"],
+      "regions": ["global"],
+      "quota_bucket": null
+    },
+    "state": "investigating",
+    "trend": "rising",
+    "first_observed_at": "2026-07-29T08:00:00Z",
+    "last_independent_update_at": "2026-07-29T10:00:00Z",
+    "current_impact": {
+      "category": "tool_execution",
+      "severity": "high",
+      "lifecycle": "investigating",
+      "affected_scope": "multiple_users",
+      "affected_surfaces": ["cli", "mcp", "tool_use"],
+      "workaround": "partial",
+      "evidence_basis": "official_incident"
+    },
+    "peak_impact": {
+      "category": "tool_execution",
+      "severity": "high",
+      "lifecycle": "investigating",
+      "affected_scope": "multiple_users",
+      "affected_surfaces": ["cli", "mcp", "tool_use"],
+      "workaround": "partial",
+      "evidence_basis": "official_incident"
+    },
+    "current_pressure": 0.72,
+    "peak_pressure": 0.72,
+    "pressure_components": {
+      "severity": 0.8,
+      "affected_scope": 0.72,
+      "lifecycle": 0.9,
+      "persistence": 0.414098,
+      "corroboration": 0.6,
+      "freshness": 1,
+      "workaround": 0.72,
+      "independent_evidence_count": 2,
+      "active_duration_hours": 4,
+      "hours_since_last_independent_update": 2
+    },
+    "update_kind": "opened",
+    "official_acknowledged_at": "2026-07-29T10:00:00Z",
+    "mitigated_at": null,
+    "resolved_at": null,
+    "evidence": [
+      {
+        "signal_ref": {
+          "record_id": "sig_issue_example_001",
+          "revision": 1
+        },
+        "independence_group_id": "ind_issue_example_001",
+        "relation": "reports"
+      },
+      {
+        "signal_ref": {
+          "record_id": "sig_followup_example_001",
+          "revision": 1
+        },
+        "independence_group_id": "ind_followup_example_001",
+        "relation": "investigates"
+      }
+    ]
+  }
+}

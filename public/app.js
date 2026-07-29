@@ -52,6 +52,52 @@ const impactSeverityLabels = {
   unknown: "严重级待确认",
 };
 
+const timelineRelevanceLabels = {
+  relevant: "相关信号",
+  irrelevant: "已筛除",
+  pending_context: "等待上下文",
+  unclassified: "未形成信号",
+};
+
+const episodeStateLabels = {
+  active: "持续中",
+  investigating: "调查中",
+  mitigating: "缓解中",
+  resolved: "已缓解",
+  reopened: "再次出现",
+  unknown: "状态待确认",
+};
+
+const episodeTrendLabels = {
+  rising: "升温",
+  stable: "持平",
+  falling: "降温",
+  resolved: "已解决",
+  unknown: "趋势待确认",
+};
+
+const impactCategoryLabels = {
+  availability: "可用性",
+  performance: "性能",
+  correctness: "正确性",
+  tool_execution: "工具执行",
+  session_state: "会话状态",
+  quota_accounting: "额度计量",
+  auth: "认证",
+  client_ux: "客户端体验",
+  security_privacy: "安全与隐私",
+  data_integrity: "数据完整性",
+  compatibility: "兼容性",
+  other: "其他问题",
+};
+
+const impactScopeLabels = {
+  individual: "单个用户",
+  multiple_users: "多个用户",
+  platform: "平台范围",
+  unknown: "范围待确认",
+};
+
 const publicationBlockerLabels = {
   champion_missing: "模型尚未就绪",
   champion_incompatible: "模型版本需要更新",
@@ -720,6 +766,161 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
   }
 }
 
+function renderTimeline(items) {
+  const targetSelector = "#tibo-timeline-list";
+  const target = document.querySelector(targetSelector);
+  target.replaceChildren();
+  if (!Array.isArray(items) || items.length === 0) {
+    setListMessage(targetSelector, "暂无可展示的 Tibo 精确动态");
+    return;
+  }
+  for (const item of items.slice(0, 12)) {
+    const row = document.createElement("li");
+    row.className = "timeline-item";
+    const sourceUrl = safeExternalUrl(item.canonical_url);
+    const eventType = item.event_type
+      ? eventTypeLabels[item.event_type] ?? item.event_type
+      : "未匹配信号";
+    const relevance = timelineRelevanceLabels[item.relevance] ??
+      item.relevance ??
+      "状态未知";
+    const featureStatus = item.matched_signal
+      ? item.forecast_feature_eligible
+        ? "可进入预测特征"
+        : "仅展示"
+      : "未抽取";
+    const publishedAt = item.published_at ?? item.first_seen_at;
+    const firstSeenTitle = item.first_seen_at
+      ? `系统首次获取：${formatCompactTime(item.first_seen_at)}`
+      : "首次获取时间不可用";
+    row.innerHTML = `
+      <div class="signal-head">
+        <span class="signal-badges">
+          <span class="signal-badge">${escapeHtml(eventType)}</span>
+          <span class="signal-badge secondary">${escapeHtml(relevance)}</span>
+          <span class="signal-badge ${item.forecast_feature_eligible ? "" : "muted"}">${escapeHtml(featureStatus)}</span>
+        </span>
+        <time title="${escapeHtml(firstSeenTitle)}">${escapeHtml(formatCompactTime(publishedAt))}</time>
+      </div>
+      <p class="signal-card-text">${escapeHtml(item.text ?? "暂无原始文本")}</p>
+      <div class="signal-footer">
+        <small>${escapeHtml(item.display_handle ?? "@thsottiaux")} · ${escapeHtml(item.ingest_provider ?? "exact source")}</small>
+        ${sourceUrl
+          ? `<a class="signal-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="在新窗口打开 Tibo 原文"><span>原文</span>${externalLinkIcon}</a>`
+          : ""}
+      </div>
+    `;
+    if (String(item.text ?? "").length > 180) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "timeline-expand";
+      toggle.textContent = "展开完整内容";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.addEventListener("click", () => {
+        const expanded = row.classList.toggle("expanded");
+        toggle.textContent = expanded ? "收起内容" : "展开完整内容";
+        toggle.setAttribute("aria-expanded", String(expanded));
+      });
+      row.querySelector(".signal-footer")?.before(toggle);
+    }
+    target.append(row);
+  }
+}
+
+function pressureScore(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "—";
+}
+
+function impactSummary(value) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (!value || typeof value !== "object") return "当前影响尚待补充";
+  if (typeof value.summary === "string" && value.summary.trim()) {
+    return value.summary.trim();
+  }
+  if (typeof value.description === "string" && value.description.trim()) {
+    return value.description.trim();
+  }
+  const fields = [
+    value.severity ? impactSeverityLabels[value.severity] ?? value.severity : null,
+    value.category
+      ? impactCategoryLabels[value.category] ?? value.category
+      : null,
+    value.lifecycle
+      ? episodeStateLabels[value.lifecycle] ?? value.lifecycle
+      : null,
+    value.affected_scope
+      ? impactScopeLabels[value.affected_scope] ?? value.affected_scope
+      : null,
+  ].filter(Boolean);
+  return fields.length > 0 ? fields.join(" · ") : "当前影响尚待补充";
+}
+
+function renderImpactEpisodes(items, tracking = {}) {
+  const targetSelector = "#impact-episode-list";
+  const target = document.querySelector(targetSelector);
+  target.replaceChildren();
+  if (tracking.enabled === false) {
+    setListMessage(targetSelector, "问题发酵追踪当前已关闭");
+    return;
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    setListMessage(targetSelector, "暂无形成持续发酵的问题");
+    return;
+  }
+  for (const item of items.slice(0, 8)) {
+    const row = document.createElement("li");
+    row.className = "impact-episode-item";
+    const current = Number(item.current_pressure);
+    const peak = Number(item.peak_pressure);
+    const denominator = Number.isFinite(peak) && peak > 0
+      ? peak
+      : Number.isFinite(current) && current > 0
+        ? current
+        : 1;
+    const relativeWidth = Number.isFinite(current)
+      ? Math.max(0, Math.min(100, (current / denominator) * 100))
+      : 0;
+    const state = episodeStateLabels[item.state] ?? item.state ?? "状态未知";
+    const trend = episodeTrendLabels[item.trend] ?? item.trend ?? "趋势未知";
+    const category = impactCategoryLabels[item.category] ??
+      String(item.category ?? "其他问题").replaceAll("_", " ");
+    const evidenceCount = Array.isArray(item.evidence)
+      ? item.evidence.length
+      : item.evidence && typeof item.evidence === "object"
+        ? Object.keys(item.evidence).length
+        : 0;
+    const lastUpdate = item.last_independent_update_at
+      ? formatCompactTime(item.last_independent_update_at)
+      : "更新时间未知";
+    const firstObserved = item.first_observed_at
+      ? formatCompactTime(item.first_observed_at)
+      : "时间未知";
+    const computedAt = item.as_of
+      ? formatCompactTime(item.as_of)
+      : "计算时间未知";
+    row.innerHTML = `
+      <div class="episode-heading">
+        <div>
+          <span class="episode-category">${escapeHtml(category)}</span>
+          <span class="signal-badge secondary">${escapeHtml(state)}</span>
+          <span class="signal-badge trend-${escapeHtml(String(item.trend ?? "unknown"))}">${escapeHtml(trend)}</span>
+        </div>
+        <time>${escapeHtml(lastUpdate)}</time>
+      </div>
+      <p class="episode-impact">${escapeHtml(impactSummary(item.current_impact))}</p>
+      <div class="pressure-row">
+        <span>当前压力 <strong>${escapeHtml(pressureScore(item.current_pressure))}</strong></span>
+        <span>峰值 ${escapeHtml(pressureScore(item.peak_pressure))}</span>
+      </div>
+      <div class="pressure-track" aria-hidden="true"><i style="width:${relativeWidth.toFixed(1)}%"></i></div>
+      <small>首次观察 ${escapeHtml(firstObserved)} · ${evidenceCount} 条独立证据 · 压力计算于 ${escapeHtml(computedAt)}</small>
+    `;
+    target.append(row);
+  }
+}
+
 function isCoreEvidence(item) {
   if (
     item.source_role === "aggregator" ||
@@ -737,9 +938,14 @@ function isCoreEvidence(item) {
     /\b(?:codex|chatgpt(?:\s+work)?)\b/i.test(item.source?.text ?? "");
 }
 
-async function fetchJson(url) {
+async function fetchJson(url, { timeoutMs = null } = {}) {
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, {
+      cache: "no-store",
+      ...(Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? { signal: AbortSignal.timeout(timeoutMs) }
+        : {}),
+    });
     let data = null;
     try {
       data = await response.json();
@@ -1041,6 +1247,8 @@ function renderEvidenceResponse(result) {
     setListMessage("#experience-signal-list", `体验问题加载失败：${result.error}`, "error");
     setListMessage("#competition-signal-list", `竞争动态加载失败：${result.error}`, "error");
     setListMessage("#pending-signal-list", `待纳入信号加载失败：${result.error}`, "error");
+    setListMessage("#tibo-timeline-list", `Tibo 动态加载失败：${result.error}`, "error");
+    setListMessage("#impact-episode-list", `问题追踪加载失败：${result.error}`, "error");
     return;
   }
   const evidence = result.data;
@@ -1057,12 +1265,56 @@ function renderEvidenceResponse(result) {
   renderEvidence("#experience-signal-list", experience, "截止时间前暂无新的 Codex 体验问题", "experience");
   renderEvidence("#competition-signal-list", competition, "截止时间前暂无新的竞争模型发布", "competition");
   renderEvidence("#pending-signal-list", pending, "当前没有晚于截止时间的新信号", "pending");
+  renderTimeline(evidence.timeline);
+  renderImpactEpisodes(evidence.impact_episodes, evidence.impact_tracking);
 }
 
 let refreshTimer = null;
+let evidenceRefreshTimer = null;
+let evidenceRequest = null;
+let lastEvidenceSignature = null;
 let loading = false;
 let lastLoadedAt = 0;
 let latestForecastCutoff = null;
+
+function evidenceSignature(result) {
+  return result.ok && result.data
+    ? JSON.stringify(result.data)
+    : `error:${result.status}:${result.error ?? "unknown"}`;
+}
+
+function scheduleEvidenceRefresh() {
+  if (evidenceRefreshTimer) clearTimeout(evidenceRefreshTimer);
+  evidenceRefreshTimer = null;
+  if (
+    document.visibilityState !== "visible" ||
+    navigator.onLine === false
+  ) return;
+  evidenceRefreshTimer = setTimeout(() => {
+    void loadEvidence();
+  }, 2 * 60_000);
+}
+
+async function loadEvidence() {
+  if (evidenceRequest) return evidenceRequest;
+  evidenceRequest = (async () => {
+    const result = await fetchJson("/api/evidence/recent", {
+      timeoutMs: 20_000,
+    });
+    const signature = evidenceSignature(result);
+    if (signature !== lastEvidenceSignature) {
+      lastEvidenceSignature = signature;
+      renderEvidenceResponse(result);
+    }
+    return result;
+  })();
+  try {
+    return await evidenceRequest;
+  } finally {
+    evidenceRequest = null;
+    scheduleEvidenceRefresh();
+  }
+}
 
 function scheduleCadenceRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
@@ -1101,10 +1353,7 @@ async function load() {
   loading = true;
   document.querySelector("#timezone-display").textContent = `时区 · ${displayZone}`;
   let readinessResult = { ok: true, status: 200, data: {} };
-  const evidencePromise = fetchJson("/api/evidence/recent").then((result) => {
-    renderEvidenceResponse(result);
-    return result;
-  });
+  const evidencePromise = loadEvidence();
   try {
     const forecastResult = await fetchJson("/api/forecast/current");
     const forecastCutoff = forecastResult.data?.data?.knowledge_cutoff ??
@@ -1160,10 +1409,21 @@ async function load() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && Date.now() - lastLoadedAt > 60_000) {
-    void load();
+  if (document.visibilityState === "visible") {
+    if (Date.now() - lastLoadedAt > 60_000) {
+      void load();
+    } else {
+      void loadEvidence();
+    }
+  } else if (evidenceRefreshTimer) {
+    clearTimeout(evidenceRefreshTimer);
+    evidenceRefreshTimer = null;
   }
 });
 window.addEventListener("online", () => void load());
+window.addEventListener("offline", () => {
+  if (evidenceRefreshTimer) clearTimeout(evidenceRefreshTimer);
+  evidenceRefreshTimer = null;
+});
 
 void load();

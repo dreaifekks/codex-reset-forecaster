@@ -3,7 +3,13 @@
   "$id": "https://example.invalid/reset-intel/0.2/provider-config.schema.json",
   "title": "Reset Intelligence Provider Configuration",
   "type": "object",
-  "required": ["config_version", "outcome_definition", "target", "providers"],
+  "required": [
+    "config_version",
+    "outcome_definition",
+    "target",
+    "providers",
+    "impact_tracking"
+  ],
   "properties": {
     "config_version": { "type": "string", "minLength": 1 },
     "outcome_definition": { "$ref": "#/$defs/outcomeDefinition" },
@@ -23,6 +29,9 @@
               ]
             }
           }
+        },
+        "x_search_gateway": {
+          "$ref": "#/$defs/xSearchGatewayProvider"
         },
         "historical_monitor": {
           "type": "object",
@@ -110,6 +119,9 @@
         }
       }
     },
+    "impact_tracking": {
+      "$ref": "#/$defs/impactTrackingPolicy"
+    },
     "model": {
       "type": "object",
       "properties": {
@@ -129,6 +141,133 @@
     }
   },
   "$defs": {
+    "xSearchGatewayProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "freshness_max_age_hours",
+        "refresh_interval_minutes",
+        "base_url",
+        "upstream_provider",
+        "token_file",
+        "request_timeout_ms",
+        "limit",
+        "state_prefix",
+        "confirmation_identities",
+        "context_identities",
+        "queries"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "freshness_max_age_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "refresh_interval_minutes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1440
+        },
+        "base_url": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "upstream_provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token_file": {
+          "type": ["string", "null"]
+        },
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600000
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "state_prefix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confirmation_identities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/sourceIdentity" }
+        },
+        "context_identities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sourceIdentity" }
+        },
+        "queries": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/xSearchGatewayQuery" }
+        }
+      }
+    },
+    "xSearchGatewayQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "query"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1
+        },
+        "handles": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "search_type": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "impactTrackingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "cluster_gap_hours",
+        "active_evidence_ttl_hours",
+        "freshness_half_life_hours"
+      ],
+      "properties": {
+        "version": { "const": "impact-episode-policy/1" },
+        "enabled": { "type": "boolean" },
+        "cluster_gap_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 336
+        },
+        "active_evidence_ttl_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 168
+        },
+        "freshness_half_life_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 336
+        }
+      }
+    },
     "postOutcomeRefractoryPolicy": {
       "type": "object",
       "additionalProperties": false,

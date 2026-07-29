@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { projectRoot } from "../core/config.mjs";
+import { hashLabel } from "../core/hash.mjs";
 import {
   extractorContract,
   matchesExtractorContract,
@@ -13,6 +14,9 @@ import {
 import {
   selectCurrentRelevantSignals,
 } from "../pipeline/signal-selection.mjs";
+import {
+  impactEpisodeContract,
+} from "../pipeline/impact-episodes.mjs";
 import { verifiedCoverageAssertionRevisions } from "../pipeline/coverage.mjs";
 import {
   buildOutcomeEligibilityContext,
@@ -313,6 +317,172 @@ function sortEvidenceItems(items) {
     right.created_at.localeCompare(left.created_at) ||
     right.signal_ref.record_id.localeCompare(left.signal_ref.record_id)
   );
+}
+
+const TIMELINE_PROVIDER_RANK = new Map([
+  ["x", 4],
+  ["rsshub_x_timeline", 3],
+  ["timeline_jsonl", 2],
+  ["historical_monitor", 1],
+]);
+
+function compareTimelineObservations(left, right) {
+  const providerRank = (
+    TIMELINE_PROVIDER_RANK.get(left.data.ingest_provider) ?? 0
+  ) - (
+    TIMELINE_PROVIDER_RANK.get(right.data.ingest_provider) ?? 0
+  );
+  if (providerRank !== 0) return providerRank;
+  if (left.revision !== right.revision) return left.revision - right.revision;
+  return String(left.data.fetched_at ?? left.created_at ?? "")
+    .localeCompare(String(right.data.fetched_at ?? right.created_at ?? ""));
+}
+
+function compareTimelineSignals(left, right) {
+  return left.created_at.localeCompare(right.created_at) ||
+    left.revision - right.revision ||
+    left.record_id.localeCompare(right.record_id);
+}
+
+function confirmationTimeline(observations, signals, config) {
+  const confirmationIds = configuredConfirmationIdentityIds(config);
+  const signalsByObservationRef = new Map();
+  for (const signal of signals) {
+    const reference = signal.data.observation_refs?.[0];
+    if (!reference) continue;
+    const key = exactRecordKey(reference);
+    const previous = signalsByObservationRef.get(key);
+    if (!previous || compareTimelineSignals(previous, signal) < 0) {
+      signalsByObservationRef.set(key, signal);
+    }
+  }
+
+  const observationsByStatus = new Map();
+  for (const observation of observations) {
+    if (
+      !confirmationIds.has(observation.data.author?.identity_id) ||
+      observation.data.content?.media_type !== "text/plain" ||
+      !String(observation.data.content?.text ?? "").trim()
+    ) {
+      continue;
+    }
+    const statusId = xStatusIdentity(
+      observation.data.canonical_url ?? observation.data.provider_item_id,
+    );
+    if (!statusId) continue;
+    const group = observationsByStatus.get(statusId) ?? [];
+    group.push(observation);
+    observationsByStatus.set(statusId, group);
+  }
+
+  return [...observationsByStatus.entries()]
+    .map(([statusId, groupedObservations]) => {
+      const selectedObservation = [...groupedObservations]
+        .sort(compareTimelineObservations)
+        .at(-1);
+      const matchedSignal = groupedObservations
+        .map((observation) =>
+          signalsByObservationRef.get(exactRecordKey(observation))
+        )
+        .filter(Boolean)
+        .sort(compareTimelineSignals)
+        .at(-1) ?? null;
+      const relevance = matchedSignal?.data.extraction?.relevance ?? null;
+      const earliestFirstSeenAt = groupedObservations
+        .map((observation) => observation.data.first_seen_at)
+        .filter((value) =>
+          typeof value === "string" && Number.isFinite(Date.parse(value))
+        )
+        .sort()
+        .at(0) ?? selectedObservation.data.first_seen_at ?? null;
+      return {
+        observation_ref: {
+          record_id: selectedObservation.record_id,
+          revision: selectedObservation.revision,
+        },
+        status_id: statusId,
+        canonical_url: selectedObservation.data.canonical_url,
+        published_at: observationPublishedAt(selectedObservation),
+        first_seen_at: earliestFirstSeenAt,
+        fetched_at: selectedObservation.data.fetched_at ?? null,
+        display_handle: selectedObservation.data.author.display_handle ?? null,
+        text: selectedObservation.data.content.text,
+        ingest_provider: selectedObservation.data.ingest_provider,
+        matched_signal: Boolean(matchedSignal),
+        matched_signal_ref: matchedSignal
+          ? { record_id: matchedSignal.record_id, revision: matchedSignal.revision }
+          : null,
+        event_type: matchedSignal?.data.claim?.event_type ?? null,
+        relevance: relevance?.decision ?? "unclassified",
+        relevance_reason: relevance?.reason_code ?? null,
+        forecast_feature_eligible:
+          matchedSignal?.data.provenance?.feature_eligible !== false &&
+          Boolean(matchedSignal),
+      };
+    })
+    .sort((left, right) =>
+      String(right.published_at ?? "").localeCompare(
+        String(left.published_at ?? ""),
+      ) ||
+      right.status_id.localeCompare(left.status_id)
+    )
+    .slice(0, 12);
+}
+
+function matchesImpactPolicy(episode, policy, expectedContractHash) {
+  const parameters = episode.data.policy_parameters;
+  return policy?.enabled === true &&
+    episode.producer?.config_hash === expectedContractHash &&
+    episode.data.policy_config_hash === expectedContractHash &&
+    episode.data.policy_version === policy.version &&
+    parameters?.cluster_gap_hours === policy.cluster_gap_hours &&
+    parameters?.active_evidence_ttl_hours ===
+      policy.active_evidence_ttl_hours &&
+    parameters?.freshness_half_life_hours ===
+      policy.freshness_half_life_hours;
+}
+
+function latestImpactEpisodes(episodes, policy, expectedContractHash) {
+  return episodes
+    .filter((episode) =>
+      matchesImpactPolicy(episode, policy, expectedContractHash)
+    )
+    .sort((left, right) => {
+      const pressureDifference =
+        (Number.isFinite(Number(right.data.current_pressure))
+          ? Number(right.data.current_pressure)
+          : Number.NEGATIVE_INFINITY) -
+        (Number.isFinite(Number(left.data.current_pressure))
+          ? Number(left.data.current_pressure)
+          : Number.NEGATIVE_INFINITY);
+      if (pressureDifference !== 0) return pressureDifference;
+      return String(right.data.last_independent_update_at ?? "")
+        .localeCompare(String(left.data.last_independent_update_at ?? "")) ||
+        right.revision - left.revision ||
+        right.record_id.localeCompare(left.record_id);
+    })
+    .slice(0, 8)
+    .map((episode) => ({
+      episode_ref: {
+        record_id: episode.record_id,
+        revision: episode.revision,
+      },
+      state: episode.data.state,
+      trend: episode.data.trend,
+      category:
+        episode.data.category ?? episode.data.current_impact?.category ?? null,
+      as_of: episode.data.as_of,
+      policy_version: episode.data.policy_version,
+      policy_config_hash: episode.data.policy_config_hash,
+      update_kind: episode.data.update_kind,
+      current_pressure: episode.data.current_pressure,
+      peak_pressure: episode.data.peak_pressure,
+      pressure_components: episode.data.pressure_components,
+      current_impact: episode.data.current_impact,
+      first_observed_at: episode.data.first_observed_at,
+      last_independent_update_at: episode.data.last_independent_update_at,
+      evidence: episode.data.evidence,
+    }));
 }
 
 async function serveStatic(response, pathname) {
@@ -620,10 +790,13 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         return;
       }
       if (url.pathname === "/api/evidence/recent") {
-        const [signals, observations, prediction] = await Promise.all([
+        const [signals, observations, prediction, impactEpisodes] = await Promise.all([
           store.all("normalized_signal", { latestOnly: false }),
           store.all("raw_observation", { latestOnly: false }),
           latestPrediction(store),
+          config.impact_tracking?.enabled === true
+            ? store.all("impact_episode")
+            : Promise.resolve([]),
         ]);
         const observationsByRef = new Map(
           observations.map((item) => [exactRecordKey(item), item]),
@@ -632,6 +805,24 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         const currentExtractorSignals = signals.filter((signal) =>
           matchesExtractorContract(signal, expectedExtractor)
         );
+        const timeline = confirmationTimeline(
+          observations,
+          currentExtractorSignals,
+          config,
+        );
+        const impactEpisodeContractHash = hashLabel(
+          impactEpisodeContract(config),
+        );
+        const currentImpactEpisodes = latestImpactEpisodes(
+          impactEpisodes,
+          config.impact_tracking,
+          impactEpisodeContractHash,
+        );
+        const latestImpactAsOf = currentImpactEpisodes
+          .map((episode) => episode.as_of)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ?? null;
         const knowledgeCutoff = prediction?.data.knowledge_cutoff ?? now().toISOString();
         const cutoffMs = Date.parse(knowledgeCutoff);
         const current = sortEvidenceForDisplay(uniqueEvidenceRoots(selectCurrentRelevantSignals(
@@ -749,6 +940,15 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           aligned_to_latest_prediction: Boolean(prediction),
           view,
           ...selected,
+          timeline,
+          impact_episodes: currentImpactEpisodes,
+          impact_tracking: {
+            enabled: config.impact_tracking?.enabled === true,
+            policy_version: config.impact_tracking?.version ?? null,
+            contract_hash: impactEpisodeContractHash,
+            latest_episode_as_of: latestImpactAsOf,
+            episode_count: currentImpactEpisodes.length,
+          },
           post_cutoff: pendingEvidence,
           pending_next_forecast: pendingEvidence,
         });

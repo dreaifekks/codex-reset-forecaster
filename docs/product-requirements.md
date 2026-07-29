@@ -43,7 +43,8 @@ The context set may include:
 - other Tibo posts available before a forecast cutoff;
 - OpenAI/Codex product, release, capacity, and incident discussion;
 - Codex experience issues and recoveries, classified by severity, lifecycle,
-  affected scope, affected surface, and workaround;
+  affected scope, affected surface, and workaround, including security/privacy,
+  data-integrity, and compatibility failures;
 - verifiable competing-model and coding-agent announcements, previews, general
   availability, rollouts, and related limit changes.
 
@@ -51,7 +52,10 @@ Context-only replies, quotes, reposts, copied articles, and summaries are collap
 to their independent evidence roots. Community volume, momentum, resonance,
 disagreement, and raw post count are not model features. Experience reports remain
 visible as structured evidence even when they are not yet eligible for the
-forecast vector.
+forecast vector. Current revisions are grouped into append-only impact episodes so
+later corroboration, continuing failures, mitigations, workarounds, and resolutions
+can be followed over time. Episode pressure is bounded and freshness-decayed; it
+must be labeled as impact tracking rather than reset probability.
 
 The live profile also enables a self-hosted RSSHub X timeline route for configured
 accounts. Its exact status IDs, author identity, wrapper text, and native
@@ -86,6 +90,7 @@ had already been known.
 configured provider adapters
   -> append-only raw observations
   -> normalized claims
+  -> impact-episode follow-up projection
   -> evidence dependency and event linking
   -> 10-minute refreshes of hourly-slot as-of feature snapshots
   -> hourly hazard model
@@ -193,8 +198,11 @@ not yet been validated; it does not turn an exploratory replay score into a
 performance claim.
 
 The recent-evidence endpoint and page separate `core`, `experience`,
-`competition`, and `other_context`. Experience items expose their structured
-`impact`; competition items expose `competitive_context`. A `community` array is
+`competition`, and `other_context`. They also expose an exact-source Tibo
+`timeline`, including posts that did not produce a normalized signal, and ranked
+`impact_episodes` for issue/recovery follow-up. Experience items expose their
+structured `impact`; competition items expose `competitive_context`. The UI must
+state that impact pressure is not reset probability. A `community` array is
 retained for one API compatibility version as a deprecated aggregate of the
 non-core groups, but the UI does not present it as community resonance.
 

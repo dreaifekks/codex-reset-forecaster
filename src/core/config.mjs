@@ -160,6 +160,73 @@ function validateRsshubXProvider(config) {
   }
 }
 
+function validateXSearchGatewayProvider(config) {
+  const provider = config.providers?.x_search_gateway;
+  const queries = provider?.queries;
+  const queryNames = Array.isArray(queries)
+    ? queries.map((query) => query?.name)
+    : [];
+  if (
+    !provider ||
+    typeof provider.enabled !== "boolean" ||
+    !Number.isFinite(provider.freshness_max_age_hours) ||
+    provider.freshness_max_age_hours <= 0 ||
+    !Number.isFinite(provider.refresh_interval_minutes) ||
+    provider.refresh_interval_minutes <= 0 ||
+    provider.refresh_interval_minutes > 1_440 ||
+    typeof provider.base_url !== "string" ||
+    !/^https?:\/\//i.test(provider.base_url) ||
+    typeof provider.upstream_provider !== "string" ||
+    provider.upstream_provider.trim().length === 0 ||
+    !Number.isInteger(provider.request_timeout_ms) ||
+    provider.request_timeout_ms <= 0 ||
+    provider.request_timeout_ms > 600_000 ||
+    !Number.isInteger(provider.limit) ||
+    provider.limit < 1 ||
+    provider.limit > 100 ||
+    typeof provider.state_prefix !== "string" ||
+    provider.state_prefix.trim().length === 0 ||
+    !Array.isArray(provider.confirmation_identities) ||
+    provider.confirmation_identities.length < 1 ||
+    !Array.isArray(provider.context_identities) ||
+    !Array.isArray(queries) ||
+    queries.length < 1 ||
+    new Set(queryNames).size !== queryNames.length ||
+    queries.some((query) =>
+      typeof query?.name !== "string" ||
+      query.name.trim().length === 0 ||
+      typeof query.query !== "string" ||
+      query.query.trim().length === 0 ||
+      (
+        query.handles !== undefined &&
+        (
+          !Array.isArray(query.handles) ||
+          query.handles.some((handle) => typeof handle !== "string")
+        )
+      ) ||
+      (
+        query.limit !== undefined &&
+        (
+          !Number.isInteger(query.limit) ||
+          query.limit < 1 ||
+          query.limit > 100
+        )
+      ) ||
+      (
+        query.search_type !== undefined &&
+        (
+          typeof query.search_type !== "string" ||
+          query.search_type.trim().length === 0
+        )
+      )
+    )
+  ) {
+    throw new TypeError(
+      "providers.x_search_gateway must declare a bounded refresh, non-empty uniquely named queries, and a valid gateway endpoint",
+    );
+  }
+}
+
 function validateAuthorityTiming(config) {
   const policy = config.model?.authority_timing;
   const reliabilities = policy?.phase_reliability;
@@ -207,6 +274,27 @@ function validateLiveForecastPromotionGuard(config) {
 
 function validateFeatureSupport(config) {
   assertFeatureSupportPolicy(config.model?.feature_support);
+}
+
+function validateImpactTracking(config) {
+  const policy = config.impact_tracking;
+  if (
+    policy?.version !== "impact-episode-policy/1" ||
+    typeof policy.enabled !== "boolean" ||
+    !Number.isFinite(policy.cluster_gap_hours) ||
+    policy.cluster_gap_hours <= 0 ||
+    policy.cluster_gap_hours > 336 ||
+    !Number.isFinite(policy.active_evidence_ttl_hours) ||
+    policy.active_evidence_ttl_hours <= 0 ||
+    policy.active_evidence_ttl_hours > 168 ||
+    !Number.isFinite(policy.freshness_half_life_hours) ||
+    policy.freshness_half_life_hours <= 0 ||
+    policy.freshness_half_life_hours > 336
+  ) {
+    throw new TypeError(
+      "impact_tracking must use the supported bounded impact-episode-policy/1",
+    );
+  }
 }
 
 function semanticConfigHash(config) {
@@ -272,7 +360,9 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validatePostOutcomeEvidence(config);
   validateLiveForecastPromotionGuard(config);
   validateFeatureSupport(config);
+  validateImpactTracking(config);
   validateSchedulerInterval(config);
+  validateXSearchGatewayProvider(config);
   validateRsshubXProvider(config);
   config.config_hash = semanticConfigHash(config);
   return config;

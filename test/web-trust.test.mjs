@@ -8,6 +8,7 @@ import {
   getReadiness,
 } from "../src/runtime/readiness.mjs";
 import { createRequestHandler } from "../src/web/app.mjs";
+import { impactEpisodeContract } from "../src/pipeline/impact-episodes.mjs";
 import {
   evaluationArtifactHash,
   evaluationContractHash,
@@ -83,6 +84,13 @@ function config(overrides = {}) {
         context_identities: [],
         context_queries: [],
       },
+    },
+    impact_tracking: {
+      version: "impact-episode-policy/1",
+      enabled: true,
+      cluster_gap_hours: 72,
+      active_evidence_ttl_hours: 24,
+      freshness_half_life_hours: 36,
     },
     model: {
       outcome_coverage_providers: ["x"],
@@ -270,6 +278,83 @@ function observation(id, revision, text, publishedAt) {
       ingest_provider: "x",
       author: { display_handle: `@source-r${revision}` },
       content: { text },
+    },
+  };
+}
+
+function timelineObservation({
+  id,
+  statusId,
+  text,
+  publishedAt,
+  identity = "person_tibo_sottiaux",
+  provider = "rsshub_x_timeline",
+  mediaType = "text/plain",
+}) {
+  const item = observation(id, 1, text, publishedAt);
+  item.data.provider_item_id = statusId;
+  item.data.canonical_url = `https://x.com/thsottiaux/status/${statusId}`;
+  item.data.ingest_provider = provider;
+  item.data.first_seen_at = publishedAt;
+  item.data.fetched_at = publishedAt;
+  item.data.author = {
+    identity_id: identity,
+    display_handle: identity === "person_tibo_sottiaux"
+      ? "@thsottiaux"
+      : "@someone_else",
+  };
+  item.data.content.media_type = mediaType;
+  return item;
+}
+
+function impactEpisode(
+  id,
+  currentPressure,
+  lastUpdate,
+  runConfig = config(),
+) {
+  const contractHash = hashLabel(impactEpisodeContract(runConfig));
+  const impact = {
+    category: "tool_execution",
+    severity: "medium",
+    lifecycle: "active",
+    affected_scope: "multiple_users",
+    affected_surfaces: ["cli", "tool_use"],
+    workaround: "unknown",
+    evidence_basis: "first_party_report",
+  };
+  return {
+    record_id: id,
+    revision: 1,
+    created_at: lastUpdate,
+    producer: {
+      name: "impact-episode-builder",
+      version: "0.1.0",
+      config_hash: contractHash,
+    },
+    data: {
+      as_of: lastUpdate,
+      policy_version: "impact-episode-policy/1",
+      policy_config_hash: contractHash,
+      policy_parameters: {
+        cluster_gap_hours: 72,
+        active_evidence_ttl_hours: 24,
+        freshness_half_life_hours: 36,
+      },
+      state: "active",
+      trend: "rising",
+      category: "tool_execution",
+      update_kind: "evidence_added",
+      current_pressure: currentPressure,
+      peak_pressure: Math.max(currentPressure, 0.9),
+      pressure_components: {
+        independent_evidence_count: 1,
+      },
+      current_impact: impact,
+      peak_impact: impact,
+      first_observed_at: "2026-07-24T00:00:00.000Z",
+      last_independent_update_at: lastUpdate,
+      evidence: [{ record_id: `signal_${id}`, revision: 1 }],
     },
   };
 }
@@ -585,6 +670,161 @@ test("recent evidence partitions experience impact and competition by semantics"
     new Set(evidence.community.map((item) => item.signal_ref.record_id)),
     new Set(["sig_experience", "sig_competition"]),
   );
+});
+
+test("recent evidence exposes unclassified Tibo originals and ranked impact episodes", async (t) => {
+  const matched = timelineObservation({
+    id: "obs_timeline_matched",
+    statusId: "2075657265508647008",
+    text: "Codex released an exact product update.",
+    publishedAt: "2026-07-25T09:30:00.000Z",
+  });
+  const unmatched = timelineObservation({
+    id: "obs_timeline_unmatched",
+    statusId: "2075657266508647008",
+    text: "A Tibo post with no reset or extraction keywords.",
+    publishedAt: "2026-07-25T09:35:00.000Z",
+  });
+  const duplicate = timelineObservation({
+    id: "obs_timeline_duplicate",
+    statusId: "2075657266508647008",
+    text: "Historical duplicate of the same Tibo post.",
+    publishedAt: "2026-07-25T09:35:00.000Z",
+    provider: "historical_monitor",
+  });
+  duplicate.data.first_seen_at = "2026-07-25T09:20:00.000Z";
+  const otherIdentity = timelineObservation({
+    id: "obs_timeline_other",
+    statusId: "2075657267508647008",
+    text: "Another identity should not enter the Tibo timeline.",
+    publishedAt: "2026-07-25T09:40:00.000Z",
+    identity: "someone_else",
+  });
+  const summary = timelineObservation({
+    id: "obs_timeline_summary",
+    statusId: "2075657268508647008",
+    text: "A summary is not an exact original post.",
+    publishedAt: "2026-07-25T09:45:00.000Z",
+    mediaType: "application/vnd.x-search-summary+text",
+  });
+  const matchedSignal = signal({
+    id: "sig_timeline_matched",
+    observationRef: { record_id: matched.record_id, revision: 1 },
+    availableAt: matched.created_at,
+    role: "product_lead",
+    derivation: "primary_statement",
+    identity: "person_tibo_sottiaux",
+    eventType: "release",
+  });
+  const episodes = [
+    impactEpisode("episode_newer", 0.9, "2026-07-25T09:50:00.000Z"),
+    impactEpisode("episode_older", 0.9, "2026-07-25T09:40:00.000Z"),
+    ...Array.from({ length: 8 }, (_, index) =>
+      impactEpisode(
+        `episode_${index}`,
+        0.8 - index * 0.1,
+        `2026-07-25T0${index + 1}:00:00.000Z`,
+      )
+    ),
+  ];
+  const store = new MemoryStore({
+    records: {
+      prediction: [prediction()],
+      raw_observation: [
+        matched,
+        duplicate,
+        unmatched,
+        otherIdentity,
+        summary,
+      ],
+      normalized_signal: [matchedSignal],
+      impact_episode: episodes,
+    },
+  });
+  const base = await serverFor(t, store, config(), "2026-07-25T10:10:00.000Z");
+  const response = await fetch(`${base}/api/evidence/recent`);
+  assert.equal(response.status, 200);
+  const evidence = await response.json();
+
+  assert.deepEqual(
+    evidence.timeline.map((item) => item.status_id),
+    ["2075657266508647008", "2075657265508647008"],
+  );
+  assert.equal(evidence.timeline[0].matched_signal, false);
+  assert.equal(evidence.timeline[0].event_type, null);
+  assert.equal(evidence.timeline[0].relevance, "unclassified");
+  assert.equal(evidence.timeline[0].ingest_provider, "rsshub_x_timeline");
+  assert.equal(evidence.timeline[0].first_seen_at, duplicate.data.first_seen_at);
+  assert.equal(evidence.timeline[1].matched_signal, true);
+  assert.equal(evidence.timeline[1].event_type, "release");
+  assert.equal(evidence.timeline[1].relevance, "relevant");
+
+  assert.equal(evidence.impact_episodes.length, 8);
+  assert.deepEqual(evidence.impact_tracking, {
+    enabled: true,
+    policy_version: "impact-episode-policy/1",
+    contract_hash: hashLabel(impactEpisodeContract(config())),
+    latest_episode_as_of: "2026-07-25T09:50:00.000Z",
+    episode_count: 8,
+  });
+  assert.equal(evidence.impact_episodes[0].category, "tool_execution");
+  assert.equal(
+    evidence.impact_episodes[0].as_of,
+    "2026-07-25T09:50:00.000Z",
+  );
+  assert.deepEqual(
+    evidence.impact_episodes.slice(0, 2).map((item) =>
+      item.episode_ref.record_id
+    ),
+    ["episode_newer", "episode_older"],
+  );
+  assert.ok(
+    evidence.impact_episodes.every((item, index, all) =>
+      index === 0 ||
+      Number(all[index - 1].current_pressure) >= Number(item.current_pressure)
+    ),
+  );
+});
+
+test("disabled impact tracking does not surface stale append-only episodes", async (t) => {
+  const appConfig = config({
+    impact_tracking: {
+      version: "impact-episode-policy/1",
+      enabled: false,
+      cluster_gap_hours: 72,
+      active_evidence_ttl_hours: 24,
+      freshness_half_life_hours: 36,
+    },
+  });
+  const store = new MemoryStore({
+    records: {
+      prediction: [prediction()],
+      impact_episode: [
+        impactEpisode(
+          "episode_stale",
+          0.95,
+          "2026-07-24T09:50:00.000Z",
+        ),
+      ],
+    },
+  });
+  const base = await serverFor(
+    t,
+    store,
+    appConfig,
+    "2026-07-25T10:10:00.000Z",
+  );
+  const response = await fetch(`${base}/api/evidence/recent`);
+  assert.equal(response.status, 200);
+  const evidence = await response.json();
+  assert.deepEqual(evidence.impact_episodes, []);
+  assert.deepEqual(evidence.impact_tracking, {
+    enabled: false,
+    policy_version: "impact-episode-policy/1",
+    contract_hash: hashLabel(impactEpisodeContract(appConfig)),
+    latest_episode_as_of: null,
+    episode_count: 0,
+  });
 });
 
 test("recent evidence sorts reprocessed exact sources by publication time before slicing", async (t) => {
