@@ -1,5 +1,7 @@
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { assertCanonicalRecord } from "../core/validate-record.mjs";
 import { sha256, stableStringify } from "../core/hash.mjs";
 
@@ -73,9 +75,8 @@ export class JsonlStore {
   async #loadRecords(type) {
     let records = this.#recordsCache.get(type);
     if (!records) {
-      let text;
       try {
-        text = await fs.readFile(this.recordPath(type), "utf8");
+        await fs.access(this.recordPath(type));
       } catch (error) {
         if (error.code === "ENOENT") {
           records = [];
@@ -84,16 +85,25 @@ export class JsonlStore {
         }
         throw error;
       }
-      records = text
-        .split("\n")
-        .filter(Boolean)
-        .map((line, index) => {
+
+      records = [];
+      const input = createReadStream(this.recordPath(type), { encoding: "utf8" });
+      const lines = createInterface({ input, crlfDelay: Infinity });
+      let lineNumber = 0;
+      try {
+        for await (const line of lines) {
+          lineNumber += 1;
+          if (!line) continue;
           try {
-            return JSON.parse(line);
+            records.push(JSON.parse(line));
           } catch (error) {
-            throw new Error(`${type}.jsonl:${index + 1}: ${error.message}`);
+            throw new Error(`${type}.jsonl:${lineNumber}: ${error.message}`);
           }
-        });
+        }
+      } finally {
+        lines.close();
+        input.destroy();
+      }
       this.#recordsCache.set(type, records);
     }
     return records;

@@ -144,6 +144,40 @@ test("JSONL store is idempotent and enforces append-only revisions", async (t) =
   assert.equal((await store.all("raw_observation")).at(0).revision, 2);
 });
 
+test("JSONL store streams records whose lines cross file-read chunks", async (t) => {
+  const store = await temporaryStore(t);
+  const original = observation("x".repeat(256 * 1024));
+  const correction = createRecord({
+    recordType: "raw_observation",
+    naturalKey: "x:1",
+    createdAt: "2026-01-01T01:00:00Z",
+    revision: 2,
+    supersedes: recordRef(original),
+    producer: producer("test", "1"),
+    data: {
+      ...original.data,
+      fetched_at: "2026-01-01T01:00:00Z",
+      content: {
+        ...original.data.content,
+        text: "corrected",
+      },
+    },
+  });
+  await fs.writeFile(
+    store.recordPath("raw_observation"),
+    `${JSON.stringify(original)}\n${JSON.stringify(correction)}\n`,
+    "utf8",
+  );
+
+  assert.deepEqual(
+    (await store.all("raw_observation", { latestOnly: false })).map(
+      (record) => record.revision,
+    ),
+    [1, 2],
+  );
+  assert.equal((await store.all("raw_observation")).at(0).revision, 2);
+});
+
 test("model aliases retain an immutable artifact that historical predictions can replay", async (t) => {
   const store = await temporaryStore(t);
   const model = {
