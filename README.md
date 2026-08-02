@@ -44,9 +44,11 @@ been validated.
   an explicit relevant claim can be a `primary_statement`; a reply that is relevant
   only through its parent is bound to the parent's evidence root and remains
   derivative with `derivation: "reply"`, so it cannot confirm an outcome or
-  activate authority timing. A qualifying exact completion statement may support
-  a positive outcome after adjudication, but the finite feed never establishes
-  outcome coverage or a negative label.
+  activate authority timing. A marker whose exact relation is missing is retained
+  as an auditable, feature-ineligible quarantine item instead of failing every
+  otherwise valid item in the feed. A qualifying exact completion statement may
+  support a positive outcome after adjudication, but the finite feed never
+  establishes outcome coverage or a negative label.
 - Text models extract stable claims. A statistical hazard model produces the final
   probability.
 - Search matches are candidates, not signals. A versioned provider-neutral

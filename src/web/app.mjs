@@ -30,6 +30,9 @@ import {
   timestampFromXSnowflake,
   xStatusIdentity,
 } from "../providers/raw.mjs";
+import {
+  RSSHUB_X_QUARANTINE_MEDIA_TYPE,
+} from "../providers/rsshub-x-provider.mjs";
 
 const PUBLIC_DIR = path.join(projectRoot, "public");
 const MIME_TYPES = new Map([
@@ -326,7 +329,38 @@ const TIMELINE_PROVIDER_RANK = new Map([
   ["historical_monitor", 1],
 ]);
 
+function quarantinedTimelinePayload(observation) {
+  if (
+    observation.data.content?.media_type !==
+      RSSHUB_X_QUARANTINE_MEDIA_TYPE
+  ) return null;
+  try {
+    const payload = JSON.parse(observation.data.content.text);
+    return payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function timelineObservationText(observation) {
+  if (observation.data.content?.media_type === "text/plain") {
+    return String(observation.data.content.text ?? "").trim();
+  }
+  const payload = quarantinedTimelinePayload(observation);
+  return typeof payload?.source_text === "string"
+    ? payload.source_text.trim()
+    : "";
+}
+
 function compareTimelineObservations(left, right) {
+  const safeRelationRank = Number(
+    left.data.content?.media_type !== RSSHUB_X_QUARANTINE_MEDIA_TYPE,
+  ) - Number(
+    right.data.content?.media_type !== RSSHUB_X_QUARANTINE_MEDIA_TYPE,
+  );
+  if (safeRelationRank !== 0) return safeRelationRank;
   const providerRank = (
     TIMELINE_PROVIDER_RANK.get(left.data.ingest_provider) ?? 0
   ) - (
@@ -359,10 +393,10 @@ function confirmationTimeline(observations, signals, config) {
 
   const observationsByStatus = new Map();
   for (const observation of observations) {
+    const displayText = timelineObservationText(observation);
     if (
       !confirmationIds.has(observation.data.author?.identity_id) ||
-      observation.data.content?.media_type !== "text/plain" ||
-      !String(observation.data.content?.text ?? "").trim()
+      !displayText
     ) {
       continue;
     }
@@ -388,6 +422,7 @@ function confirmationTimeline(observations, signals, config) {
         .sort(compareTimelineSignals)
         .at(-1) ?? null;
       const relevance = matchedSignal?.data.extraction?.relevance ?? null;
+      const quarantine = quarantinedTimelinePayload(selectedObservation);
       const earliestFirstSeenAt = groupedObservations
         .map((observation) => observation.data.first_seen_at)
         .filter((value) =>
@@ -406,15 +441,19 @@ function confirmationTimeline(observations, signals, config) {
         first_seen_at: earliestFirstSeenAt,
         fetched_at: selectedObservation.data.fetched_at ?? null,
         display_handle: selectedObservation.data.author.display_handle ?? null,
-        text: selectedObservation.data.content.text,
+        text: timelineObservationText(selectedObservation),
         ingest_provider: selectedObservation.data.ingest_provider,
         matched_signal: Boolean(matchedSignal),
         matched_signal_ref: matchedSignal
           ? { record_id: matchedSignal.record_id, revision: matchedSignal.revision }
           : null,
         event_type: matchedSignal?.data.claim?.event_type ?? null,
-        relevance: relevance?.decision ?? "unclassified",
-        relevance_reason: relevance?.reason_code ?? null,
+        relevance: relevance?.decision ?? (
+          quarantine ? "pending_context" : "unclassified"
+        ),
+        relevance_reason:
+          relevance?.reason_code ?? quarantine?.reason_code ?? null,
+        quarantined_relation: Boolean(quarantine),
         forecast_feature_eligible:
           matchedSignal?.data.provenance?.feature_eligible !== false &&
           Boolean(matchedSignal),

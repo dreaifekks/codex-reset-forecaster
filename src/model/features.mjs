@@ -505,14 +505,12 @@ export async function buildForecastFeatureSnapshots(store, config, {
     signals,
     outcomes,
     observations,
-    existingSnapshots,
     coverageAssertionRecords,
   ] =
     await Promise.all([
     store.all("normalized_signal", { latestOnly: false }),
     store.all("reset_outcome", { latestOnly: false }),
     store.all("raw_observation", { latestOnly: false }),
-    store.all("feature_snapshot"),
     coverageAssertionRevisions(
       store,
       config.model.outcome_coverage_providers,
@@ -533,7 +531,7 @@ export async function buildForecastFeatureSnapshots(store, config, {
     config.model.outcome_coverage_providers,
   );
   const coverageIntervals = normalizeCoverageIntervals(selectedCoverageAssertions);
-  const records = [];
+  const candidates = [];
   for (let index = 0; index < horizonHours; index += 1) {
     const targetStart = addHours(firstTarget, index);
     const targetEnd = addHours(targetStart, 1);
@@ -593,15 +591,25 @@ export async function buildForecastFeatureSnapshots(store, config, {
         })),
       },
     });
-    records.push(
-      existingSnapshots.find((snapshot) => snapshot.record_id === candidate.record_id) ??
-      candidate,
-    );
+    candidates.push(candidate);
   }
-  const newRecords = records.filter((record) =>
-    !existingSnapshots.some((snapshot) => snapshot.record_id === record.record_id)
+  if (typeof store.appendOrReuseMany === "function") {
+    const results = await store.appendOrReuseMany(candidates);
+    return {
+      snapshots: results.map((result) => result.record),
+      inserted: results.filter((result) => result.inserted).length,
+    };
+  }
+  const existingSnapshots = await store.all("feature_snapshot");
+  const existingById = new Map(
+    existingSnapshots.map((snapshot) => [snapshot.record_id, snapshot]),
   );
-  const results = await store.appendMany(newRecords);
+  const records = candidates.map((candidate) =>
+    existingById.get(candidate.record_id) ?? candidate
+  );
+  const results = await store.appendMany(
+    records.filter((record) => !existingById.has(record.record_id)),
+  );
   return {
     snapshots: records,
     inserted: results.filter((result) => result.inserted).length,

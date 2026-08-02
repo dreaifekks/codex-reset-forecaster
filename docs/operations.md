@@ -117,8 +117,11 @@ For another profile, set `RSSHUB_X_ENABLED=true` or enable
 `providers.rsshub_x_timeline` in its override. The base URL must be a credential-free
 HTTPS origin. The adapter bounds response size and request time, supports ETag and
 Last-Modified revalidation, and rejects a feed whose account identity, status ID,
-wrapper publication time, reply/RT relation, or quote boundary cannot be verified.
-For reposts it derives `published_at` from the wrapper status snowflake rather than
+wrapper publication time, or quote boundary cannot be verified. A single
+reply/RT marker mismatch is quarantined as raw, feature-ineligible evidence rather
+than promoted or allowed to fail an otherwise valid snapshot; the snapshot still
+fails closed when fewer than `minimum_items` fully verified entries remain. For
+reposts it derives `published_at` from the wrapper status snowflake rather than
 copying the original post's feed date.
 
 A reply with a self-contained explicit relevant claim keeps its own status root

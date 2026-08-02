@@ -9,10 +9,13 @@ import {
 } from "./raw.mjs";
 
 const PROVIDER_NAME = "rsshub_x_timeline";
-const PROVIDER_VERSION = "0.2.0";
-const STATE_VERSION = "rsshub-x-provider-state/2";
-const FORMAT_VERSION = "rsshub-x-json-feed/1";
+const PROVIDER_VERSION = "0.3.0";
+const STATE_VERSION = "rsshub-x-provider-state/3";
+const FORMAT_VERSION = "rsshub-x-json-feed/2";
 const SELECTION_METHOD = "rsshub_x_user_timeline_with_replies/1";
+const QUARANTINE_SELECTION_METHOD = "rsshub_x_relation_quarantine/1";
+const QUARANTINE_MEDIA_TYPE = "application/vnd.reset-provider-quarantine+json";
+const QUARANTINE_VERSION = "rsshub-x-relation-quarantine/1";
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const X_HANDLE = /^[A-Za-z0-9_]{1,15}$/;
@@ -20,6 +23,14 @@ const JSON_FEED_VERSIONS = new Set([
   "https://jsonfeed.org/version/1",
   "https://jsonfeed.org/version/1.1",
 ]);
+
+class AmbiguousRelationMetadataError extends TypeError {
+  constructor(message, reasonCode) {
+    super(message);
+    this.name = "AmbiguousRelationMetadataError";
+    this.reasonCode = reasonCode;
+  }
+}
 
 const NAMED_ENTITIES = new Map([
   ["amp", "&"],
@@ -278,7 +289,7 @@ function feedDateMatchesStatus(datePublished, statusId) {
   return Math.abs(feedMs - Date.parse(timestampFromXSnowflake(statusId))) < 2_000;
 }
 
-function parseFeedItem(item, { username, identityId }) {
+function feedItemContext(item, { username, identityId }) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new TypeError("RSSHub JSON Feed item must be an object");
   }
@@ -316,22 +327,27 @@ function parseFeedItem(item, { username, identityId }) {
   const plainContent = htmlToPlainText(
     item.content_html ?? item.content_text,
   );
-  const retweetMarker =
-    startsWithRetweetMarker(item.title) ||
-    startsWithRetweetMarker(plainContent);
-  if (retweetMarker !== (reposts.length === 1)) {
-    throw new TypeError(
-      `${itemLabel} has ambiguous RT metadata; refusing to infer a primary statement`,
-    );
-  }
-  const replyMarker =
-    startsWithReplyMarker(item.title) ||
-    startsWithReplyMarker(plainContent);
-  if (replyMarker !== (replies.length === 1)) {
-    throw new TypeError(
-      `${itemLabel} has ambiguous reply metadata; refusing to infer a primary statement`,
-    );
-  }
+  return {
+    identityId,
+    item,
+    itemLabel,
+    itemUrl,
+    plainContent,
+    relationEntries,
+    relations,
+    replies,
+    reposts,
+    username,
+  };
+}
+
+function assertFeedItemPublicationTime(context) {
+  const {
+    item,
+    itemLabel,
+    itemUrl,
+    reposts,
+  } = context;
   if (
     typeof item.date_published !== "string" ||
     (
@@ -347,9 +363,21 @@ function parseFeedItem(item, { username, identityId }) {
   ) {
     throw new TypeError(`${itemLabel} has a publication time inconsistent with its status ids`);
   }
+}
 
+function feedObservation(context, {
+  content,
+  selectionContext,
+  availabilityBasis = "rsshub_json_feed_item+status_snowflake",
+}) {
+  const {
+    identityId,
+    item,
+    itemUrl,
+    relations,
+    username,
+  } = context;
   const publishedAt = timestampFromXSnowflake(itemUrl.statusId);
-  const text = htmlToPlainText(ownContentHtml(item, relationEntries, itemLabel));
   return {
     provider_item_id: itemUrl.statusId,
     canonical_url: canonicalXStatusUrl(item.url, username),
@@ -360,23 +388,85 @@ function parseFeedItem(item, { username, identityId }) {
       display_handle: `@${username}`,
     },
     native_relations: relations,
+    content,
+    selection_context: selectionContext,
+    source_timing: {
+      source_published_at: publishedAt,
+      provider_observed_at: null,
+      availability_basis: availabilityBasis,
+    },
+    raw: item,
+  };
+}
+
+function parseFeedItem(item, { username, identityId }) {
+  const context = feedItemContext(item, { username, identityId });
+  const {
+    itemLabel,
+    plainContent,
+    relationEntries,
+    replies,
+    reposts,
+  } = context;
+  const retweetMarker =
+    startsWithRetweetMarker(item.title) ||
+    startsWithRetweetMarker(plainContent);
+  if (retweetMarker !== (reposts.length === 1)) {
+    throw new AmbiguousRelationMetadataError(
+      `${itemLabel} has ambiguous RT metadata; refusing to infer a primary statement`,
+      "ambiguous_rt_metadata",
+    );
+  }
+  const replyMarker =
+    startsWithReplyMarker(item.title) ||
+    startsWithReplyMarker(plainContent);
+  if (replyMarker !== (replies.length === 1)) {
+    throw new AmbiguousRelationMetadataError(
+      `${itemLabel} has ambiguous reply metadata; refusing to infer a primary statement`,
+      "ambiguous_reply_metadata",
+    );
+  }
+  assertFeedItemPublicationTime(context);
+  const text = htmlToPlainText(ownContentHtml(item, relationEntries, itemLabel));
+  return feedObservation(context, {
     content: {
       media_type: "text/plain",
       text,
       language: item.language ?? null,
     },
-    selection_context: {
+    selectionContext: {
       feature_eligible: true,
       outcome_conditioned: false,
       selection_method: SELECTION_METHOD,
     },
-    source_timing: {
-      source_published_at: publishedAt,
-      provider_observed_at: null,
-      availability_basis: "rsshub_json_feed_item+status_snowflake",
+  });
+}
+
+function quarantinedFeedItem(item, options, error) {
+  const context = feedItemContext(item, options);
+  assertFeedItemPublicationTime(context);
+  const sourceText = htmlToPlainText(
+    ownContentHtml(item, context.relationEntries, context.itemLabel),
+  );
+  return feedObservation(context, {
+    content: {
+      media_type: QUARANTINE_MEDIA_TYPE,
+      text: JSON.stringify({
+        schema_version: QUARANTINE_VERSION,
+        reason_code: error.reasonCode,
+        reason: error.message,
+        source_text: sourceText,
+      }),
+      language: item.language ?? null,
     },
-    raw: item,
-  };
+    selectionContext: {
+      feature_eligible: false,
+      outcome_conditioned: false,
+      selection_method: QUARANTINE_SELECTION_METHOD,
+    },
+    availabilityBasis:
+      "rsshub_json_feed_item+status_snowflake+relation_quarantine",
+  });
 }
 
 function assertFeedIdentity(payload, username) {
@@ -395,10 +485,11 @@ function assertFeedIdentity(payload, username) {
   }
 }
 
-export function parseRsshubXJsonFeed(payload, {
+function parseFeedSnapshot(payload, {
   username,
   identityId,
   minimumItems = 1,
+  quarantineAmbiguousRelations = false,
 } = {}) {
   const handle = normalizedHandle(username, "RSSHub X feed");
   if (typeof identityId !== "string" || !identityId) {
@@ -415,12 +506,37 @@ export function parseRsshubXJsonFeed(payload, {
     );
   }
   const selected = new Map();
+  const quarantinedIds = new Set();
   for (const item of payload.items) {
-    const parsed = parseFeedItem(item, {
-      username: handle,
-      identityId,
-    });
+    let parsed;
+    let quarantined = false;
+    try {
+      parsed = parseFeedItem(item, {
+        username: handle,
+        identityId,
+      });
+    } catch (error) {
+      if (
+        !quarantineAmbiguousRelations ||
+        !(error instanceof AmbiguousRelationMetadataError)
+      ) {
+        throw error;
+      }
+      parsed = quarantinedFeedItem(item, {
+        username: handle,
+        identityId,
+      }, error);
+      quarantined = true;
+    }
     const previous = selected.get(parsed.provider_item_id);
+    const previousQuarantined = quarantinedIds.has(parsed.provider_item_id);
+    if (previous && previousQuarantined !== quarantined) {
+      if (!quarantined) {
+        selected.set(parsed.provider_item_id, parsed);
+        quarantinedIds.delete(parsed.provider_item_id);
+      }
+      continue;
+    }
     if (
       previous &&
       rawObservationMaterialHash(previous) !==
@@ -430,12 +546,32 @@ export function parseRsshubXJsonFeed(payload, {
         `RSSHub JSON Feed has conflicting copies of status ${parsed.provider_item_id}`,
       );
     }
-    if (!previous) selected.set(parsed.provider_item_id, parsed);
+    if (!previous) {
+      selected.set(parsed.provider_item_id, parsed);
+      if (quarantined) quarantinedIds.add(parsed.provider_item_id);
+    }
   }
-  return [...selected.values()].sort((left, right) =>
+  const validItemCount = selected.size - quarantinedIds.size;
+  if (validItemCount < minimumItems) {
+    throw new TypeError(
+      `RSSHub JSON Feed for @${handle} has too few valid items after relation quarantine`,
+    );
+  }
+  const items = [...selected.values()].sort((left, right) =>
     left.published_at.localeCompare(right.published_at) ||
     left.provider_item_id.localeCompare(right.provider_item_id)
   );
+  return {
+    items,
+    feedItemCount: payload.items.length,
+    validItemCount,
+    quarantinedItemCount: quarantinedIds.size,
+    quarantinedStatusIds: [...quarantinedIds].sort(),
+  };
+}
+
+export function parseRsshubXJsonFeed(payload, options = {}) {
+  return parseFeedSnapshot(payload, options).items;
 }
 
 export function rsshubXFeedUrl(baseUrl, username, {
@@ -530,6 +666,7 @@ export class RsshubXProvider {
     error = null,
     feedCount = 0,
     itemCount = 0,
+    quarantinedItemCount = 0,
   }) {
     return rawObservationFromItem({
       provider_item_id: `health-${at.toISOString()}-${ok ? "ok" : "error"}`,
@@ -545,6 +682,7 @@ export class RsshubXProvider {
           error,
           feed_count: feedCount,
           item_count: itemCount,
+          quarantined_item_count: quarantinedItemCount,
           coverage_created: false,
         }),
         language: null,
@@ -565,7 +703,10 @@ export class RsshubXProvider {
       includeReplies: this.includeReplies,
     });
     const currentFeedUrl = url.toString();
-    const reusablePrevious = previous.feed_url === currentFeedUrl
+    const reusablePrevious = (
+      previous.feed_url === currentFeedUrl &&
+      previous.format_version === FORMAT_VERSION
+    )
       ? previous
       : {};
     const headers = {
@@ -590,6 +731,12 @@ export class RsshubXProvider {
         url: currentFeedUrl,
         notModified: true,
         items: [],
+        feedItemCount: reusablePrevious.feed_item_count ?? 0,
+        validItemCount: reusablePrevious.item_count ?? 0,
+        quarantinedItemCount:
+          reusablePrevious.quarantined_item_count ?? 0,
+        quarantinedStatusIds:
+          reusablePrevious.quarantined_status_ids ?? [],
         cursor: {
           ...reusablePrevious,
           etag:
@@ -636,11 +783,13 @@ export class RsshubXProvider {
     } catch {
       throw new Error(`RSSHub X feed @${identity.username} returned invalid JSON`);
     }
-    const items = parseRsshubXJsonFeed(payload, {
+    const snapshot = parseFeedSnapshot(payload, {
       username: identity.username,
       identityId: identity.identity_id,
       minimumItems: this.minimumItems,
+      quarantineAmbiguousRelations: true,
     });
+    const { items } = snapshot;
     const route = response.headers.get("x-rsshub-route");
     if (route && route !== "/twitter/user/:id/:routeParams?") {
       throw new Error(`RSSHub X feed @${identity.username} matched an unexpected route`);
@@ -654,15 +803,22 @@ export class RsshubXProvider {
       url: currentFeedUrl,
       notModified: false,
       items,
+      ...snapshot,
       cursor: {
         feed_url: currentFeedUrl,
+        format_version: FORMAT_VERSION,
         etag: response.headers.get("etag"),
         last_modified: response.headers.get("last-modified"),
         cache_control: response.headers.get("cache-control"),
         rsshub_cache_status: response.headers.get("rsshub-cache-status"),
         feed_fingerprint: hashLabel(normalizedSignature),
-        item_count: items.length,
-        newest_status_id: [...items].sort((left, right) =>
+        feed_item_count: snapshot.feedItemCount,
+        item_count: snapshot.validItemCount,
+        quarantined_item_count: snapshot.quarantinedItemCount,
+        quarantined_status_ids: snapshot.quarantinedStatusIds,
+        newest_status_id: [...items]
+          .filter((item) => item.content.media_type !== QUARANTINE_MEDIA_TYPE)
+          .sort((left, right) =>
           right.published_at.localeCompare(left.published_at)
         )[0]?.provider_item_id ?? null,
         valid_snapshot: true,
@@ -689,7 +845,9 @@ export class RsshubXProvider {
       let inserted = 0;
       let unchanged = 0;
       let records = 0;
+      let quarantined = 0;
       for (const feed of feeds) {
+        quarantined += feed.quarantinedItemCount;
         for (const item of feed.items) {
           records += 1;
           const result = await appendRawObservationRevision(store, item, {
@@ -717,6 +875,7 @@ export class RsshubXProvider {
         at: fetchedAt,
         feedCount: feeds.length,
         itemCount: records,
+        quarantinedItemCount: quarantined,
       }));
       const nextFeeds = { ...(priorState.feeds ?? {}) };
       for (const feed of feeds) {
@@ -739,6 +898,17 @@ export class RsshubXProvider {
         last_success_at: fetchedAt.toISOString(),
         last_failure_at: null,
         last_error: null,
+        last_warning: quarantined > 0
+          ? `${quarantined} RSSHub item(s) quarantined because exact relation metadata was ambiguous`
+          : null,
+        last_quarantine_at: quarantined > 0
+          ? fetchedAt.toISOString()
+          : priorState.last_quarantine_at ?? null,
+        current_quarantined_item_count: quarantined,
+        current_quarantined_status_ids: feeds
+          .flatMap((feed) => feed.quarantinedStatusIds)
+          .filter((statusId, index, all) => all.indexOf(statusId) === index)
+          .sort(),
         context_status: "fresh",
         last_context_success_at: fetchedAt.toISOString(),
         last_context_failure_at: null,
@@ -750,6 +920,7 @@ export class RsshubXProvider {
         collected: inserted,
         unchanged,
         records,
+        quarantined,
         feeds: feeds.length,
         coverage_created: false,
         health,
@@ -787,4 +958,6 @@ export {
   FORMAT_VERSION as RSSHUB_X_FORMAT_VERSION,
   PROVIDER_NAME as RSSHUB_X_PROVIDER_NAME,
   PROVIDER_VERSION as RSSHUB_X_PROVIDER_VERSION,
+  QUARANTINE_MEDIA_TYPE as RSSHUB_X_QUARANTINE_MEDIA_TYPE,
+  QUARANTINE_SELECTION_METHOD as RSSHUB_X_QUARANTINE_SELECTION_METHOD,
 };

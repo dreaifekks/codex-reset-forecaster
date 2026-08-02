@@ -46,6 +46,18 @@ class MemoryStore {
     return [...latest.values()];
   }
 
+  async allByRefs(type, refs) {
+    const recordsByRef = new Map(
+      (this.records[type] ?? []).map((record) => [
+        `${record.record_id}@${record.revision}`,
+        record,
+      ]),
+    );
+    return refs
+      .map((ref) => recordsByRef.get(`${ref.record_id}@${ref.revision}`))
+      .filter(Boolean);
+  }
+
   async readState(name, fallback = {}) {
     return structuredClone(this.states[name] ?? fallback);
   }
@@ -700,6 +712,18 @@ test("recent evidence exposes unclassified Tibo originals and ranked impact epis
     publishedAt: "2026-07-25T09:40:00.000Z",
     identity: "someone_else",
   });
+  const quarantined = timelineObservation({
+    id: "obs_timeline_quarantined",
+    statusId: "2075657267608647008",
+    text: JSON.stringify({
+      schema_version: "rsshub-x-relation-quarantine/1",
+      reason_code: "ambiguous_reply_metadata",
+      reason: "reply marker lacks an exact parent",
+      source_text: "Re @someone relation awaiting exact context.",
+    }),
+    publishedAt: "2026-07-25T09:42:00.000Z",
+    mediaType: "application/vnd.reset-provider-quarantine+json",
+  });
   const summary = timelineObservation({
     id: "obs_timeline_summary",
     statusId: "2075657268508647008",
@@ -734,6 +758,7 @@ test("recent evidence exposes unclassified Tibo originals and ranked impact epis
         matched,
         duplicate,
         unmatched,
+        quarantined,
         otherIdentity,
         summary,
       ],
@@ -748,16 +773,28 @@ test("recent evidence exposes unclassified Tibo originals and ranked impact epis
 
   assert.deepEqual(
     evidence.timeline.map((item) => item.status_id),
-    ["2075657266508647008", "2075657265508647008"],
+    [
+      "2075657267608647008",
+      "2075657266508647008",
+      "2075657265508647008",
+    ],
   );
   assert.equal(evidence.timeline[0].matched_signal, false);
   assert.equal(evidence.timeline[0].event_type, null);
-  assert.equal(evidence.timeline[0].relevance, "unclassified");
+  assert.equal(evidence.timeline[0].relevance, "pending_context");
+  assert.equal(evidence.timeline[0].relevance_reason, "ambiguous_reply_metadata");
+  assert.equal(evidence.timeline[0].quarantined_relation, true);
+  assert.equal(
+    evidence.timeline[0].text,
+    "Re @someone relation awaiting exact context.",
+  );
+  assert.equal(evidence.timeline[0].forecast_feature_eligible, false);
   assert.equal(evidence.timeline[0].ingest_provider, "rsshub_x_timeline");
-  assert.equal(evidence.timeline[0].first_seen_at, duplicate.data.first_seen_at);
-  assert.equal(evidence.timeline[1].matched_signal, true);
-  assert.equal(evidence.timeline[1].event_type, "release");
-  assert.equal(evidence.timeline[1].relevance, "relevant");
+  assert.equal(evidence.timeline[1].first_seen_at, duplicate.data.first_seen_at);
+  assert.equal(evidence.timeline[1].quarantined_relation, false);
+  assert.equal(evidence.timeline[2].matched_signal, true);
+  assert.equal(evidence.timeline[2].event_type, "release");
+  assert.equal(evidence.timeline[2].relevance, "relevant");
 
   assert.equal(evidence.impact_episodes.length, 8);
   assert.deepEqual(evidence.impact_tracking, {
