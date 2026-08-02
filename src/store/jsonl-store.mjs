@@ -16,6 +16,13 @@ const RECORD_TYPES = [
   "prediction_settlement",
 ];
 
+const TARGETED_RECORD_CACHE_LIMIT = 1_024;
+const TARGETED_SCAN_TAIL_RECORDS = 512;
+
+function exactRecordKey(record) {
+  return `${record.record_id}@${record.revision}`;
+}
+
 function invalidModelArtifact(message) {
   const error = new Error(message);
   error.code = "INVALID_MODEL_ARTIFACT";
@@ -44,6 +51,10 @@ function assertStoredModelArtifact(model) {
 export class JsonlStore {
   #appendChain = Promise.resolve();
   #recordsCache = new Map();
+  #targetedRecordsCache = new Map();
+  #latestTargetedRecordsCache = new Map();
+  #negativeRefScanSizes = new Map();
+  #scanChains = new Map();
 
   constructor(root) {
     this.root = path.resolve(root);
@@ -70,6 +81,121 @@ export class JsonlStore {
   recordPath(type) {
     if (!RECORD_TYPES.includes(type)) throw new TypeError(`Unsupported record type: ${type}`);
     return path.join(this.recordsDir, `${type}.jsonl`);
+  }
+
+  #targetedCache(type) {
+    let cache = this.#targetedRecordsCache.get(type);
+    if (!cache) {
+      cache = new Map();
+      this.#targetedRecordsCache.set(type, cache);
+    }
+    return cache;
+  }
+
+  #negativeScanCache(type) {
+    let cache = this.#negativeRefScanSizes.get(type);
+    if (!cache) {
+      cache = new Map();
+      this.#negativeRefScanSizes.set(type, cache);
+    }
+    return cache;
+  }
+
+  #latestTargetedCache(type) {
+    let cache = this.#latestTargetedRecordsCache.get(type);
+    if (!cache) {
+      cache = new Map();
+      this.#latestTargetedRecordsCache.set(type, cache);
+    }
+    return cache;
+  }
+
+  #cacheLatestTargetedRecord(type, record, fileSize) {
+    const cache = this.#latestTargetedCache(type);
+    cache.delete(record.record_id);
+    cache.set(record.record_id, { record, fileSize });
+    while (cache.size > TARGETED_RECORD_CACHE_LIMIT) {
+      cache.delete(cache.keys().next().value);
+    }
+  }
+
+  #cacheTargetedRecord(type, record) {
+    const cache = this.#targetedCache(type);
+    const key = exactRecordKey(record);
+    cache.delete(key);
+    cache.set(key, record);
+    while (cache.size > TARGETED_RECORD_CACHE_LIMIT) {
+      cache.delete(cache.keys().next().value);
+    }
+    this.#negativeScanCache(type).delete(key);
+  }
+
+  #cacheScanTail(type, records) {
+    for (const record of records) this.#cacheTargetedRecord(type, record);
+  }
+
+  async #recordFileSize(type) {
+    try {
+      return (await fs.stat(this.recordPath(type))).size;
+    } catch (error) {
+      if (error.code === "ENOENT") return 0;
+      throw error;
+    }
+  }
+
+  async #withTypeScan(type, operation) {
+    const previous = this.#scanChains.get(type) ?? Promise.resolve();
+    const current = previous.then(operation, operation);
+    this.#scanChains.set(type, current);
+    try {
+      return await current;
+    } finally {
+      if (this.#scanChains.get(type) === current) this.#scanChains.delete(type);
+    }
+  }
+
+  async #scanFile(type, visit) {
+    try {
+      await fs.access(this.recordPath(type));
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    const input = createReadStream(this.recordPath(type), { encoding: "utf8" });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    let lineNumber = 0;
+    const tail = [];
+    let tailIndex = 0;
+    try {
+      for await (const line of lines) {
+        lineNumber += 1;
+        if (!line) continue;
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch (error) {
+          throw new Error(`${type}.jsonl:${lineNumber}: ${error.message}`);
+        }
+        visit(record);
+        if (tail.length < TARGETED_SCAN_TAIL_RECORDS) {
+          tail.push(record);
+        } else {
+          tail[tailIndex] = record;
+          tailIndex = (tailIndex + 1) % TARGETED_SCAN_TAIL_RECORDS;
+        }
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+    if (tail.length === TARGETED_SCAN_TAIL_RECORDS && tailIndex > 0) {
+      this.#cacheScanTail(type, [
+        ...tail.slice(tailIndex),
+        ...tail.slice(0, tailIndex),
+      ]);
+    } else {
+      this.#cacheScanTail(type, tail);
+    }
   }
 
   async #loadRecords(type) {
@@ -118,6 +244,147 @@ export class JsonlStore {
       if (!previous || record.revision > previous.revision) latest.set(record.record_id, record);
     }
     return [...latest.values()];
+  }
+
+  async allByRefs(type, refs) {
+    this.recordPath(type);
+    if (!Array.isArray(refs)) throw new TypeError("Record refs must be an array");
+    const keys = refs.map((ref) => {
+      if (
+        typeof ref?.record_id !== "string" ||
+        !Number.isInteger(ref?.revision) ||
+        ref.revision < 1
+      ) {
+        throw new TypeError("Record refs require record_id and a positive revision");
+      }
+      return exactRecordKey(ref);
+    });
+    const fullyLoaded = this.#recordsCache.get(type);
+    if (fullyLoaded) {
+      const recordsByRef = new Map(
+        fullyLoaded.map((record) => [exactRecordKey(record), record]),
+      );
+      return keys.map((key) => recordsByRef.get(key)).filter(Boolean);
+    }
+    return this.#withTypeScan(type, async () => {
+      const cache = this.#targetedCache(type);
+      const negativeScans = this.#negativeScanCache(type);
+      const fileSizeBefore = await this.#recordFileSize(type);
+      const unresolved = new Set(keys.filter((key) =>
+        !cache.has(key) && negativeScans.get(key) !== fileSizeBefore
+      ));
+      const found = new Map(
+        keys.filter((key) => cache.has(key)).map((key) => [key, cache.get(key)]),
+      );
+      if (unresolved.size > 0) {
+        await this.#scanFile(type, (record) => {
+          const key = exactRecordKey(record);
+          if (unresolved.has(key)) found.set(key, record);
+        });
+        const fileSizeAfter = await this.#recordFileSize(type);
+        for (const [key, record] of found) this.#cacheTargetedRecord(type, record);
+        if (fileSizeAfter === fileSizeBefore) {
+          for (const key of unresolved) {
+            if (!found.has(key)) negativeScans.set(key, fileSizeAfter);
+          }
+          while (negativeScans.size > TARGETED_RECORD_CACHE_LIMIT) {
+            negativeScans.delete(negativeScans.keys().next().value);
+          }
+        }
+      }
+      return keys.map((key) => found.get(key) ?? cache.get(key)).filter(Boolean);
+    });
+  }
+
+  async appendOrReuseMany(records) {
+    if (!Array.isArray(records)) throw new TypeError("Records must be an array");
+    if (records.length === 0) return [];
+    const type = records[0]?.record_type;
+    if (records.some((record) => record?.record_type !== type)) {
+      throw new TypeError("appendOrReuseMany requires one record type per batch");
+    }
+    const ids = new Set();
+    for (const record of records) {
+      assertCanonicalRecord(record);
+      if (!RECORD_TYPES.includes(record.record_type)) {
+        throw new TypeError(`Unsupported record type: ${record.record_type}`);
+      }
+      if (record.revision !== 1 || record.supersedes !== null) {
+        throw new TypeError(
+          "appendOrReuseMany only accepts deterministic first revisions",
+        );
+      }
+      if (ids.has(record.record_id)) {
+        throw new TypeError(`Duplicate record id in batch: ${record.record_id}`);
+      }
+      ids.add(record.record_id);
+    }
+    const operation = async () => this.#withTypeScan(type, async () => {
+      const existingLatest = new Map();
+      const fullyLoaded = this.#recordsCache.get(type);
+      if (fullyLoaded) {
+        for (const record of fullyLoaded) {
+          if (!ids.has(record.record_id)) continue;
+          const previous = existingLatest.get(record.record_id);
+          if (!previous || record.revision > previous.revision) {
+            existingLatest.set(record.record_id, record);
+          }
+        }
+      } else {
+        const fileSizeBefore = await this.#recordFileSize(type);
+        const latestCache = this.#latestTargetedCache(type);
+        for (const id of ids) {
+          const cached = latestCache.get(id);
+          if (cached?.fileSize === fileSizeBefore) {
+            existingLatest.set(id, cached.record);
+          }
+        }
+        if (existingLatest.size < ids.size) {
+          existingLatest.clear();
+          await this.#scanFile(type, (record) => {
+            if (!ids.has(record.record_id)) return;
+            const previous = existingLatest.get(record.record_id);
+            if (!previous || record.revision > previous.revision) {
+              existingLatest.set(record.record_id, record);
+            }
+          });
+          if (await this.#recordFileSize(type) !== fileSizeBefore) {
+            throw new Error(
+              `${type}.jsonl changed during deterministic artifact scan`,
+            );
+          }
+        }
+      }
+      const additions = records.filter((record) => !existingLatest.has(record.record_id));
+      if (additions.length > 0) {
+        await fs.appendFile(
+          this.recordPath(type),
+          additions.map((record) => `${JSON.stringify(record)}\n`).join(""),
+          "utf8",
+        );
+        if (fullyLoaded) fullyLoaded.push(...additions);
+        for (const record of additions) this.#cacheTargetedRecord(type, record);
+      }
+      if (!fullyLoaded) {
+        const finalFileSize = await this.#recordFileSize(type);
+        for (const record of records) {
+          this.#cacheLatestTargetedRecord(
+            type,
+            existingLatest.get(record.record_id) ?? record,
+            finalFileSize,
+          );
+        }
+      }
+      return records.map((record) => {
+        const existing = existingLatest.get(record.record_id);
+        return {
+          inserted: !existing,
+          record: existing ?? record,
+        };
+      });
+    });
+    this.#appendChain = this.#appendChain.then(operation, operation);
+    return this.#appendChain;
   }
 
   async append(record) {

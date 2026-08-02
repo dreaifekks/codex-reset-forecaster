@@ -784,11 +784,13 @@ function renderTimeline(items) {
     const relevance = timelineRelevanceLabels[item.relevance] ??
       item.relevance ??
       "状态未知";
-    const featureStatus = item.matched_signal
-      ? item.forecast_feature_eligible
-        ? "可进入预测特征"
-        : "仅展示"
-      : "未抽取";
+    const featureStatus = item.quarantined_relation
+      ? "已安全隔离"
+      : item.matched_signal
+        ? item.forecast_feature_eligible
+          ? "可进入预测特征"
+          : "仅展示"
+        : "未抽取";
     const publishedAt = item.published_at ?? item.first_seen_at;
     const firstSeenTitle = item.first_seen_at
       ? `系统首次获取：${formatCompactTime(item.first_seen_at)}`
@@ -984,18 +986,23 @@ function isProvisionalServing(forecast, readiness = {}) {
 }
 
 function forecastErrorText(result, readiness = {}) {
+  const blocker = primaryPublicationBlocker(
+    [
+      ...(result.data?.serving?.serving_blockers ?? []),
+      ...(readiness.serving_blockers ?? []),
+      ...(result.data?.serving?.publication_blockers ?? []),
+      ...(readiness.publication_blockers ?? []),
+    ],
+  );
+  if (blocker && publicationBlockerLabels[blocker]) {
+    return `${publicationBlockerLabels[blocker]}。`;
+  }
   const preparation = modelPreparationState(readiness);
   if (preparation === "fitted") {
     return "模型已完成拟合，正在生成首版 7 天试用预测。";
   }
   if (preparation === "running") {
     return "模型正在更新，首版可用结果生成后立即显示。";
-  }
-  const blocker = primaryPublicationBlocker(
-    result.data?.serving?.publication_blockers,
-  );
-  if (blocker && publicationBlockerLabels[blocker]) {
-    return `${publicationBlockerLabels[blocker]}。`;
   }
   const labels = {
     forecast_incompatible: "模型版本需要更新。",
@@ -1202,7 +1209,20 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   const coverageWaiting = readiness.coverage_waiting ?? health.coverage_waiting;
   const evaluationWaiting =
     readiness.evaluation_waiting ?? health.evaluation_waiting;
-  if (provisional) {
+  const servingBlockers = [
+    ...(forecast?.serving?.serving_blockers ?? []),
+    ...(readiness.serving_blockers ?? []),
+    ...(health.serving_blockers ?? []),
+  ];
+  const sourceFreshnessBlocked = servingBlockers.some((blocker) =>
+    [
+      "required_outcome_source_not_fresh",
+      "exact_source_not_fresh",
+    ].includes(blocker)
+  );
+  if (sourceFreshnessBlocked) {
+    setStatus("error", "核心来源异常 · 预测已暂停");
+  } else if (provisional) {
     setStatus("warning", "试用模型 · 严格验证积累中");
   } else if (coverageWaiting || evaluationWaiting) {
     setStatus(

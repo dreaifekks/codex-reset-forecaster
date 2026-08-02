@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   parseRsshubXJsonFeed,
   RsshubXProvider,
+  RSSHUB_X_QUARANTINE_MEDIA_TYPE,
   rsshubXFeedUrl,
 } from "../src/providers/rsshub-x-provider.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
@@ -145,10 +146,11 @@ test("RSSHub JSON Feed collection keeps exact status lineage, strips quoted text
   const result = await provider.collect(store);
   assert.deepEqual(result, {
     provider: "rsshub_x_timeline",
-    format_version: "rsshub-x-json-feed/1",
+    format_version: "rsshub-x-json-feed/2",
     collected: 2,
     unchanged: 0,
     records: 2,
+    quarantined: 0,
     feeds: 1,
     coverage_created: false,
     health: { ok: true, delay_seconds: 0, error: null },
@@ -206,12 +208,14 @@ test("RSSHub JSON Feed collection keeps exact status lineage, strips quoted text
   assert.ok(done.data.content.raw_payload_ref);
 
   const state = await store.readState("rsshub-x-timeline-provider");
-  assert.equal(state.schema_version, "rsshub-x-provider-state/2");
+  assert.equal(state.schema_version, "rsshub-x-provider-state/3");
   assert.equal(state.provider, "rsshub_x_timeline");
   assert.equal(state.last_success_at, "2026-07-28T06:00:00.000Z");
   assert.equal(state.last_error, null);
   assert.equal(state.context_status, "fresh");
   assert.equal(state.feeds.thsottiaux.item_count, 2);
+  assert.equal(state.feeds.thsottiaux.quarantined_item_count, 0);
+  assert.equal(state.feeds.thsottiaux.format_version, "rsshub-x-json-feed/2");
   assert.equal(
     state.feeds.thsottiaux.newest_status_id,
     "2081940052154933696",
@@ -303,6 +307,162 @@ test("RSSHub reply items preserve the exact parent relation and wrapper text", (
     }),
     /multiple reply parents/,
   );
+});
+
+test("RSSHub collection quarantines one ambiguous relation without promoting it or failing the valid snapshot", async (t) => {
+  const store = await temporaryStore(t, "reset-rsshub-x-quarantine-");
+  const valid = post({
+    id: "2081899343091843463",
+    title: "I’m feeling like a limit reset.",
+    contentHtml:
+      "We’re celebrating the fast adoption of ChatGPT Work. " +
+      "I’m feeling like a limit reset. See you in a few hours.",
+    datePublished: "2026-07-28T00:27:37.000Z",
+  });
+  const ambiguous = post({
+    id: "2083331664420192388",
+    title:
+      "Re @theo They shipped it one day early. Thanks Theo. Let's keep learning together.",
+    contentHtml:
+      "Re @theo They shipped it one day early. Thanks Theo. " +
+      "Let's keep learning together.<hr>" +
+      "<div class=\"rsshub-quote\">OpenAI Developers: See what needs you next.</div>",
+    datePublished: "2026-07-31T23:19:09.000Z",
+    extra: {
+      links: [{
+        url: "https://x.com/OpenAIDevs/status/2083288643310133716",
+        type: "quote",
+        content_html:
+          "<div class=\"rsshub-quote\">OpenAI Developers: See what needs you next.</div>",
+      }],
+    },
+  });
+  let payload = feed([ambiguous, valid]);
+  let collectedAt = new Date("2026-08-01T03:10:00.000Z");
+  const provider = new RsshubXProvider({
+    config: providerConfig(),
+    fetchFn: async () => response(payload),
+    now: () => collectedAt,
+  });
+
+  const result = await provider.collect(store);
+  assert.deepEqual(result, {
+    provider: "rsshub_x_timeline",
+    format_version: "rsshub-x-json-feed/2",
+    collected: 2,
+    unchanged: 0,
+    records: 2,
+    quarantined: 1,
+    feeds: 1,
+    coverage_created: false,
+    health: { ok: true, delay_seconds: 0, error: null },
+  });
+
+  const quarantined = (await store.all("raw_observation"))
+    .find((record) =>
+      record.data.provider_item_id === "2083331664420192388"
+    );
+  assert.equal(
+    quarantined.data.content.media_type,
+    RSSHUB_X_QUARANTINE_MEDIA_TYPE,
+  );
+  assert.deepEqual(quarantined.data.selection_context, {
+    feature_eligible: false,
+    outcome_conditioned: false,
+    selection_method: "rsshub_x_relation_quarantine/1",
+  });
+  const quarantine = JSON.parse(quarantined.data.content.text);
+  assert.equal(quarantine.schema_version, "rsshub-x-relation-quarantine/1");
+  assert.equal(quarantine.reason_code, "ambiguous_reply_metadata");
+  assert.match(quarantine.source_text, /^Re @theo They shipped it one day early/);
+  assert.doesNotMatch(quarantine.source_text, /See what needs you next/);
+  assert.ok(quarantined.data.content.raw_payload_ref);
+  const healthObservation = (await store.all("raw_observation"))
+    .find((record) =>
+      record.data.content.media_type ===
+        "application/vnd.reset-provider-health+json"
+    );
+  assert.equal(
+    JSON.parse(healthObservation.data.content.text).quarantined_item_count,
+    1,
+  );
+
+  const state = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(state.last_error, null);
+  assert.equal(state.context_status, "fresh");
+  assert.equal(state.current_quarantined_item_count, 1);
+  assert.deepEqual(state.current_quarantined_status_ids, [
+    "2083331664420192388",
+  ]);
+  assert.match(state.last_warning, /1 RSSHub item/);
+
+  const runConfig = await loadConfig();
+  await processRecords(store, runConfig, { now: collectedAt });
+  const signals = await store.all("normalized_signal", { latestOnly: false });
+  assert.equal(
+    signals.some((signal) =>
+      signal.data.observation_refs.some((reference) =>
+        reference.record_id === quarantined.record_id
+      )
+    ),
+    false,
+    "a quarantined relation must not enter extraction or outcome adjudication",
+  );
+
+  const corrected = structuredClone(ambiguous);
+  corrected._extra.links.push({
+    url: "https://x.com/theo/status/2083287127865885060",
+    type: "reply",
+  });
+  payload = feed([corrected, valid]);
+  collectedAt = new Date("2026-08-01T03:20:00.000Z");
+  const correctedResult = await provider.collect(store);
+  assert.equal(correctedResult.collected, 1);
+  assert.equal(correctedResult.unchanged, 1);
+  assert.equal(correctedResult.quarantined, 0);
+
+  const correctedObservation = (await store.all("raw_observation"))
+    .find((record) =>
+      record.data.provider_item_id === "2083331664420192388"
+    );
+  assert.equal(correctedObservation.revision, 2);
+  assert.equal(correctedObservation.supersedes.record_id, quarantined.record_id);
+  assert.equal(correctedObservation.supersedes.revision, 1);
+  assert.equal(correctedObservation.data.first_seen_at, "2026-08-01T03:10:00.000Z");
+  assert.equal(correctedObservation.data.fetched_at, "2026-08-01T03:20:00.000Z");
+  assert.equal(correctedObservation.data.content.media_type, "text/plain");
+  assert.equal(correctedObservation.data.selection_context.feature_eligible, true);
+  assert.deepEqual(
+    correctedObservation.data.native_relations.map((relation) => relation.type).sort(),
+    ["quotes", "reply"],
+  );
+  const correctedState = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(correctedState.current_quarantined_item_count, 0);
+  assert.deepEqual(correctedState.current_quarantined_status_ids, []);
+  assert.equal(correctedState.last_warning, null);
+});
+
+test("RSSHub collection still fails closed when every feed item has ambiguous relation metadata", async (t) => {
+  const store = await temporaryStore(t, "reset-rsshub-x-quarantine-only-");
+  const ambiguous = post({
+    id: "2083331664420192388",
+    title: "Re @theo A relation without an exact reply parent",
+    contentHtml: "Re @theo A relation without an exact reply parent",
+    datePublished: "2026-07-31T23:19:09.000Z",
+  });
+  const provider = new RsshubXProvider({
+    config: providerConfig(),
+    fetchFn: async () => response(feed([ambiguous])),
+    now: () => new Date("2026-08-01T03:10:00.000Z"),
+  });
+
+  await assert.rejects(
+    provider.collect(store),
+    /too few valid items after relation quarantine/,
+  );
+  const state = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(state.context_status, "error");
+  assert.match(state.last_error, /too few valid items/);
 });
 
 test("RSSHub reposts use the wrapper snowflake time and require an exact repost relation", () => {

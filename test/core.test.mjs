@@ -79,10 +79,10 @@ test("demo seed and demo server share one explicit model contract", async () => 
   );
 });
 
-function observation(text = "Example") {
+function observation(text = "Example", providerItemId = "1") {
   return rawObservationFromItem({
-    provider_item_id: "1",
-    canonical_url: "https://x.com/example/status/1",
+    provider_item_id: providerItemId,
+    canonical_url: `https://x.com/example/status/${providerItemId}`,
     published_at: "2026-01-01T00:00:00Z",
     author: {
       provider_author_id: "author-1",
@@ -176,6 +176,84 @@ test("JSONL store streams records whose lines cross file-read chunks", async (t)
     [1, 2],
   );
   assert.equal((await store.all("raw_observation")).at(0).revision, 2);
+});
+
+test("JSONL store resolves exact refs without filling the full-record cache", async (t) => {
+  const store = await temporaryStore(t);
+  const first = observation("first", "11");
+  const second = observation("second", "12");
+  const third = observation("third", "13");
+  await fs.writeFile(
+    store.recordPath("raw_observation"),
+    `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`,
+    "utf8",
+  );
+
+  const selected = await store.allByRefs("raw_observation", [
+    recordRef(second),
+    { record_id: "obs_missing", revision: 1 },
+    recordRef(first),
+  ]);
+  assert.deepEqual(selected.map((record) => record.record_id), [
+    second.record_id,
+    first.record_id,
+  ]);
+  assert.deepEqual(
+    await store.allByRefs("raw_observation", [recordRef(third)]),
+    [],
+  );
+
+  await fs.appendFile(
+    store.recordPath("raw_observation"),
+    `${JSON.stringify(third)}\n`,
+    "utf8",
+  );
+  assert.deepEqual(
+    (await store.allByRefs("raw_observation", [recordRef(third)]))
+      .map((record) => record.record_id),
+    [third.record_id],
+  );
+  assert.equal(
+    (await store.all("raw_observation", { latestOnly: false })).length,
+    3,
+  );
+});
+
+test("JSONL store reuses deterministic first revisions with a bounded scan", async (t) => {
+  const store = await temporaryStore(t);
+  const first = observation("first", "21");
+  const second = observation("second", "22");
+  const inserted = await store.appendOrReuseMany([first, second]);
+  assert.deepEqual(inserted.map((result) => result.inserted), [true, true]);
+
+  const regeneratedFirst = observation("regenerated content", "21");
+  const reused = await store.appendOrReuseMany([regeneratedFirst]);
+  assert.equal(reused[0].inserted, false);
+  assert.deepEqual(reused[0].record, first);
+
+  const correction = createRecord({
+    recordType: "raw_observation",
+    naturalKey: "x:21",
+    createdAt: "2026-01-01T01:00:00Z",
+    revision: 2,
+    supersedes: recordRef(first),
+    producer: producer("test", "1"),
+    data: {
+      ...first.data,
+      fetched_at: "2026-01-01T01:00:00.000Z",
+    },
+  });
+  await fs.appendFile(
+    store.recordPath("raw_observation"),
+    `${JSON.stringify(correction)}\n`,
+    "utf8",
+  );
+  const correctedReuse = await store.appendOrReuseMany([regeneratedFirst]);
+  assert.deepEqual(correctedReuse[0].record, correction);
+  assert.equal(
+    (await store.all("raw_observation", { latestOnly: false })).length,
+    3,
+  );
 });
 
 test("model aliases retain an immutable artifact that historical predictions can replay", async (t) => {

@@ -53,6 +53,16 @@ native reply/quote/repost relations. The source is exact evidence for items it
 carries, not a completeness assertion: an empty or finite RSSHub feed never
 creates coverage, a negative label, or an outcome by itself.
 
+If one RSSHub item has a reply or repost marker but lacks the matching exact
+native relation, the adapter stores an auditable quarantine revision with media
+type `application/vnd.reset-provider-quarantine+json` and
+`feature_eligible=false`. Its source text may remain visible in the raw timeline,
+but it is not normalized, cannot become a `primary_statement`, and cannot settle
+an outcome. The rest of the snapshot remains usable only when it still contains
+the configured minimum number of fully verified items. If the upstream later
+supplies the exact relation, the normal observation is appended as a new revision
+that supersedes the quarantine record.
+
 `availability_attestation` never replaces collection timestamps. It may establish
 an earlier model-usable time for an archive replay only when the adapter records all
 of the following: the attested UTC time, a constrained basis, the attestor URL, the

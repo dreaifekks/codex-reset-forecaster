@@ -112,6 +112,28 @@ function latestRevisions(records, identity = (record) => record.record_id) {
   return [...latest.values()];
 }
 
+function latestPredictionFromRevisions(predictions) {
+  return latestRevisions(predictions)
+    .sort((left, right) => left.data.issued_at.localeCompare(right.data.issued_at))
+    .at(-1) ?? null;
+}
+
+async function referencedFeatureSnapshots(store, predictions) {
+  const prediction = latestPredictionFromRevisions(predictions);
+  const refs = prediction?.data?.feature_snapshot_refs;
+  if (!Array.isArray(refs)) return [];
+  if (typeof store.allByRefs === "function") {
+    return store.allByRefs("feature_snapshot", refs);
+  }
+  const snapshots = await store.all("feature_snapshot", { latestOnly: false });
+  const snapshotsByRef = new Map(
+    snapshots.map((snapshot) => [exactRevisionKey(snapshot), snapshot]),
+  );
+  return refs
+    .map((ref) => snapshotsByRef.get(exactRevisionKey(ref)))
+    .filter(Boolean);
+}
+
 function normalizedSnapshotEntries(entries) {
   return [...(entries ?? [])]
     .map((entry) => ({
@@ -700,6 +722,10 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   const challengerRead = store.readModel("challenger")
     .then((model) => ({ model, error: null }))
     .catch((error) => ({ model: null, error }));
+  const predictionsRead = store.all("prediction", { latestOnly: false });
+  const featureSnapshotsRead = predictionsRead.then((predictions) =>
+    referencedFeatureSnapshots(store, predictions)
+  );
   const [
     observationRevisions,
     signals,
@@ -721,8 +747,8 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
     store.all("raw_observation", { latestOnly: false }),
     store.all("normalized_signal"),
     store.all("reset_outcome", { latestOnly: false }),
-    store.all("prediction", { latestOnly: false }),
-    store.all("feature_snapshot", { latestOnly: false }),
+    predictionsRead,
+    featureSnapshotsRead,
     store.all("prediction_settlement", { latestOnly: false }),
     adequateCoverageIntervals(
       store,
@@ -931,9 +957,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
       .filter(([, provider]) => provider && typeof provider === "object")
       .map(([name, provider]) => [name, Boolean(provider.enabled)]),
   );
-  const latestPrediction = [...currentPredictions]
-    .sort((left, right) => left.data.issued_at.localeCompare(right.data.issued_at))
-    .at(-1) ?? null;
+  const latestPrediction = latestPredictionFromRevisions(currentPredictions);
   const currentForecast = assessPredictionFreshness(latestPrediction, config, now);
   const predictionValidationStatus =
     latestPrediction?.data?.model?.validation_status ?? null;
