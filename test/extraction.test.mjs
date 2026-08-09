@@ -28,6 +28,9 @@ import {
 
 const config = await loadConfig();
 const authorityConfig = await loadConfig({ overrides: {
+  extractor: {
+    authority_reply_identity_ids: ["person_tibo_sottiaux"],
+  },
   outcome_definition: {
     version: "authority-announced-platform-reset/2",
     event_semantics: "qualifying_authority_completion_statement",
@@ -42,11 +45,14 @@ function observationForConfig(text, id, runConfig, {
   handle = "thsottiaux",
   nativeRelations = [],
   mediaType = "text/plain",
+  publishedAt = "2026-07-18T03:28:00Z",
+  firstSeenAt = "2026-07-18T03:29:00Z",
+  fetchedAt = firstSeenAt,
 } = {}) {
   return rawObservationFromItem({
     provider_item_id: id,
     canonical_url: `https://x.com/${handle}/status/${id}`,
-    published_at: "2026-07-18T03:28:00Z",
+    published_at: publishedAt,
     author: {
       provider_author_id: `${handle}-x-id`,
       identity_id: identityId,
@@ -58,8 +64,8 @@ function observationForConfig(text, id, runConfig, {
     providerName: "x",
     providerVersion: "test",
     config: runConfig.providers.x,
-    firstSeenAt: "2026-07-18T03:29:00Z",
-    fetchedAt: "2026-07-18T03:29:00Z",
+    firstSeenAt,
+    fetchedAt,
   });
 }
 
@@ -503,6 +509,267 @@ test("a self-contained authority reply remains its own primary statement", () =>
     signal.data.provenance.root_evidence_id,
     "x_post:2081000000000000022",
   );
+});
+
+test("Tibo's own future reset reply uses parent scope without inheriting parent phase", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reset-authority-reply-commitment-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const runConfig = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+    overrides: { runtime: { data_dir: directory } },
+  });
+  const store = await new JsonlStore(directory).init();
+  const childId = "2086189414292865249";
+  const parentId = "2086188425691140496";
+  const childText = "I'll do another performative reset on Monday";
+  const parent = observationForConfig(
+    "This is just performative at this point. The weekly reset was yesterday.\n" +
+      "Tibo: I have reset usage limits for all paid users of ChatGPT Work and Codex.",
+    parentId,
+    runConfig,
+    {
+      identityId: "x_rxmphai",
+      handle: "rxmphai",
+      mediaType: "application/vnd.reset-reply-context+text",
+      publishedAt: "2026-08-08T20:30:54.000Z",
+      firstSeenAt: "2026-08-09T10:45:00.000Z",
+    },
+  );
+  const child = observationForConfig(childText, childId, runConfig, {
+    nativeRelations: [{
+      type: "reply",
+      provider_item_id: parentId,
+      url: `https://x.com/rxmphai/status/${parentId}`,
+    }],
+    publishedAt: "2026-08-08T20:34:50.549Z",
+    firstSeenAt: "2026-08-08T20:40:08.351Z",
+  });
+  await store.appendMany([child, parent]);
+
+  const normalized = await normalizeNewObservations(store, runConfig, {
+    now: new Date("2026-08-09T10:46:00.000Z"),
+  });
+  assert.equal(normalized.records.length, 1);
+  const [signal] = normalized.records;
+  assert.equal(signal.data.claim.event_type, "quota_reset");
+  assert.equal(signal.data.claim.phase, "scheduled");
+  assert.equal(signal.data.claim.stance, "supports");
+  assert.equal(signal.data.claim.scope.product, "codex");
+  assert.equal(signal.data.claim.scope.population, "platform");
+  assert.deepEqual(signal.data.claim.asserted_time_range, {
+    start: "2026-08-10T00:00:00.000Z",
+    end: "2026-08-11T00:00:00.000Z",
+    boundary: "[start,end)",
+    precision: "day",
+    timezone_basis: "UTC",
+    original_text: "on Monday",
+  });
+  assert.equal(signal.data.available_at, "2026-08-09T10:45:00.000Z");
+  assert.equal(
+    signal.data.provenance.root_evidence_id,
+    `x_post:${childId}`,
+  );
+  assert.equal(signal.data.provenance.derivation, "primary_statement");
+  assert.equal(signal.data.provenance.feature_eligible, true);
+  assert.equal(signal.data.extraction.relevance.basis, "self");
+  assert.equal(
+    signal.data.extraction.relevance.reason_code,
+    "authority_reply_reset_commitment",
+  );
+  assert.deepEqual(signal.data.extraction.relevance.matched_segments, [childText]);
+  assert.deepEqual(signal.data.extraction.relevance.context_refs, [recordRef(parent)]);
+  assert.deepEqual(signal.data.observation_refs, [recordRef(child), recordRef(parent)]);
+
+  await linkEventCandidates(store, runConfig, {
+    asOf: new Date("2026-08-09T10:47:00.000Z"),
+  });
+  await adjudicateOutcomes(store, runConfig, {
+    now: new Date("2026-08-09T10:48:00.000Z"),
+  });
+  assert.deepEqual(await store.all("reset_outcome"), []);
+});
+
+test("a same-day authority reply weekday range cannot precede publication", () => {
+  const parentId = "2086188425691140496";
+  const publishedAt = "2026-08-10T12:34:56.000Z";
+  const observation = observationForConfig(
+    "I'll do another performative reset on Monday",
+    "2086189414292865256",
+    authorityConfig,
+    {
+      nativeRelations: [{
+        type: "reply",
+        provider_item_id: parentId,
+        url: `https://x.com/rxmphai/status/${parentId}`,
+      }],
+      publishedAt,
+    },
+  );
+  const signal = extractSignal(observation, authorityConfig, {
+    contexts: [{
+      relation_type: "reply",
+      text: "Codex usage limits were reset for all paid users.",
+      observation_ref: { record_id: "obs_parent", revision: 1 },
+      available_at: publishedAt,
+    }],
+  });
+
+  assert.ok(signal);
+  assert.deepEqual(signal.data.claim.asserted_time_range, {
+    start: publishedAt,
+    end: "2026-08-11T00:00:00.000Z",
+    boundary: "[start,end)",
+    precision: "day",
+    timezone_basis: "UTC",
+    original_text: "on Monday",
+  });
+});
+
+test("authority reply adaptation fails closed outside the exact identity and relation", () => {
+  const parentId = "2086188425691140496";
+  const text = "I'll do another performative reset on Monday";
+  const relation = [{
+    type: "reply",
+    provider_item_id: parentId,
+    url: `https://x.com/rxmphai/status/${parentId}`,
+  }];
+  const contexts = [{
+    relation_type: "reply",
+    text: "Tibo: I have reset usage limits for all paid users of Codex.",
+    observation_ref: { record_id: "obs_parent", revision: 1 },
+    available_at: "2026-08-09T10:45:00.000Z",
+  }];
+
+  const nonAuthority = observationForConfig(text, "2086189414292865250", authorityConfig, {
+    identityId: "community_member",
+    handle: "thsottiaux",
+    nativeRelations: relation,
+    publishedAt: "2026-08-08T20:34:50.549Z",
+  });
+  assert.equal(extractSignal(nonAuthority, authorityConfig, { contexts }), null);
+
+  const noReplyAllowlist = structuredClone(authorityConfig);
+  noReplyAllowlist.extractor.authority_reply_identity_ids = [];
+  const notAllowlisted = observationForConfig(
+    text,
+    "2086189414292865254",
+    noReplyAllowlist,
+    {
+      nativeRelations: relation,
+      publishedAt: "2026-08-08T20:34:50.549Z",
+    },
+  );
+  assert.equal(
+    extractSignal(notAllowlisted, noReplyAllowlist, { contexts }),
+    null,
+  );
+
+  const standalone = observationForConfig(text, "2086189414292865251", authorityConfig, {
+    publishedAt: "2026-08-08T20:34:50.549Z",
+  });
+  assert.equal(extractSignal(standalone, authorityConfig, { contexts }), null);
+
+  const unresolved = observationForConfig(text, "2086189414292865252", authorityConfig, {
+    nativeRelations: relation,
+    publishedAt: "2026-08-08T20:34:50.549Z",
+  });
+  assert.equal(
+    extractSignal(unresolved, authorityConfig, { hasUnresolvedContext: true }),
+    null,
+  );
+
+  const unrelatedParent = observationForConfig(text, "2086189414292865253", authorityConfig, {
+    nativeRelations: relation,
+    publishedAt: "2026-08-08T20:34:50.549Z",
+  });
+  assert.equal(extractSignal(unrelatedParent, authorityConfig, {
+    contexts: [{ ...contexts[0], text: "A conversation about Monday weather." }],
+  }), null);
+
+  for (const parentText of [
+    "My Codex usage was reset yesterday.",
+    "Codex usage limits were reset for Pro users.",
+    "ChatGPT Work usage limits were reset for all paid users.",
+    "Codex usage limits were reset for all users in the EU.",
+    "Codex usage limits were reset for all users in Canada.",
+    "Codex usage limits were reset for all users on Pro.",
+  ]) {
+    assert.equal(extractSignal(unrelatedParent, authorityConfig, {
+      contexts: [{ ...contexts[0], text: parentText }],
+    }), null, parentText);
+  }
+
+  const mismatchedRelation = observationForConfig(
+    text,
+    "2086189414292865255",
+    authorityConfig,
+    {
+      nativeRelations: [{
+        type: "reply",
+        provider_item_id: parentId,
+        url: "https://x.com/rxmphai/status/2086188425691140497",
+      }],
+      publishedAt: "2026-08-08T20:34:50.549Z",
+    },
+  );
+  assert.equal(
+    extractSignal(mismatchedRelation, authorityConfig, { contexts }),
+    null,
+  );
+
+  for (const uncertain of [
+    "Maybe I'll do another reset on Monday",
+    "Will I do another reset on Monday?",
+    "I'll cancel another reset on Monday",
+    "I'll prevent another reset on Monday",
+    "I'll wait for another reset on Monday",
+    "I'll ask the team to do another reset on Monday",
+    "I'll reset expectations on Monday",
+    "I'll reset my quota on Monday",
+    "I'll reset your quota on Monday",
+    "I'll reset one user's quota on Monday",
+    "I'll reset Pro quota on Monday",
+    "I'll reset quota for me on Monday",
+    "I'll reset quota for Pro on Monday",
+    "I'll reset my five-hour limit on Monday",
+    "I'll reset Codex usage for EU users on Monday",
+    "I think I'll do another performative reset on Monday",
+    "I guess I'll do another performative reset on Monday",
+    "I suppose I'll do another performative reset on Monday",
+    "Looks like I'll do another performative reset on Monday",
+    "I'll do another performative reset on Monday. Cancelled.",
+    "I'll do another performative reset on Monday. Canceled.",
+    "I'll do another performative reset on Monday. Called off.",
+    "I'll do another performative reset on Monday. Scratch that.",
+    "I'll do another performative reset on Monday. Never mind.",
+    "I'll do another performative reset on Monday. I won't.",
+    "I'll do another performative reset on Monday. It is not happening.",
+    "I'll do another performative reset on Monday. Delayed.",
+    "I'll do another performative reset on Monday. We did a hard reset yesterday.",
+  ]) {
+    const observation = observationForConfig(
+      uncertain,
+      `uncertain-${uncertain.length}`,
+      authorityConfig,
+      { nativeRelations: relation },
+    );
+    const signal = extractSignal(observation, authorityConfig, { contexts });
+    if (!signal) continue;
+    assert.notEqual(
+      signal.data.extraction.relevance.reason_code,
+      "authority_reply_reset_commitment",
+      uncertain,
+    );
+    assert.equal(signal.data.claim.asserted_time_range, null, uncertain);
+    assert.equal(
+      signal.data.claim.scope.population === "platform" &&
+        signal.data.provenance.feature_eligible === true,
+      false,
+      uncertain,
+    );
+  }
 });
 
 test("extractor keeps Codex, ChatGPT Work, unknown, and multi-product scopes distinct", () => {
@@ -1015,6 +1282,14 @@ test("banked-only and non-completed authority resets stay out of immediate outco
   );
   assert.equal(scheduled.data.claim.phase, "scheduled");
   assert.equal(scheduled.data.claim.scope.population, "platform");
+
+  const standaloneWeekday = signalForConfig(
+    "We will reset Codex usage limits for all paid users on Monday.",
+    "authority-standalone-weekday",
+    authorityConfig,
+  );
+  assert.equal(standaloneWeekday.data.claim.phase, "scheduled");
+  assert.equal(standaloneWeekday.data.claim.asserted_time_range, null);
 });
 
 test("relative reset intent keeps a conservative future range and incidents remain context", () => {

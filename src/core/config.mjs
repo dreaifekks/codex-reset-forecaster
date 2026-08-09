@@ -6,6 +6,7 @@ import { assertHistoricalDailyLedgerAttestation } from "./coverage-contract.mjs"
 import {
   AUTHORITY_TIMING_POLICY_VERSION,
   AUTHORITY_TIMING_RELIABILITY_BASIS,
+  AUTHORITY_TIMING_WITHIN_WINDOW_MASS_BASIS,
 } from "../model/authority-timing.mjs";
 import {
   assertPostOutcomeRefractoryPolicy,
@@ -234,6 +235,11 @@ function validateAuthorityTiming(config) {
     policy?.version !== AUTHORITY_TIMING_POLICY_VERSION ||
     typeof policy.enabled !== "boolean" ||
     policy.reliability_basis !== AUTHORITY_TIMING_RELIABILITY_BASIS ||
+    policy.within_window_mass_basis !==
+      AUTHORITY_TIMING_WITHIN_WINDOW_MASS_BASIS ||
+    !Number.isFinite(policy.within_window_baseline_power) ||
+    policy.within_window_baseline_power < 0 ||
+    policy.within_window_baseline_power > 1 ||
     !reliabilities ||
     !["scheduled", "expected", "started"].every((phase) =>
       Number.isFinite(reliabilities[phase]) &&

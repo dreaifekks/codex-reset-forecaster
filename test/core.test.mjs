@@ -64,18 +64,26 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
-  assert.equal(live.config_version, "provider-config/0.3.3");
+  assert.equal(live.config_version, "provider-config/0.3.5");
   assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.1");
   assert.equal(live.feature_schema_version, "reset-features/0.3.1");
   assert.equal(live.deduplication_version, "reset-dedup/0.2.3");
-  assert.equal(live.extractor.model_version, "0.3.2");
+  assert.equal(live.extractor.model_version, "0.3.3");
   assert.equal(
     live.extractor.prompt_version,
-    "reset-extract/rules-0.3.2",
+    "reset-extract/rules-0.3.3",
   );
   assert.equal(
     live.model.coefficient_priors.renewal_periodic_kernel ?? 0,
     0,
+  );
+  assert.equal(
+    live.model.authority_timing.version,
+    "authority-timing-first-event-mixture/2",
+  );
+  assert.equal(
+    live.model.authority_timing.within_window_baseline_power,
+    0.5,
   );
 });
 
@@ -383,6 +391,36 @@ test("canonical predictions bind their full horizon, feature snapshots, and trai
     },
   });
   assert.doesNotThrow(() => assertCanonicalRecord(prediction));
+  const authorityV1Prediction = structuredClone(prediction);
+  authorityV1Prediction.data.authority_conditioning = {
+    policy_version: "authority-timing-first-event-mixture/1",
+    applied: false,
+    reliability_basis: "versioned_prior_non_exhaustive_statement_history",
+    phase: null,
+    prior_reliability: null,
+    signal_ref: null,
+    asserted_time_range: null,
+    base_horizon_probability: 0.1,
+    conditioned_horizon_probability: 0.1,
+  };
+  assert.doesNotThrow(
+    () => assertCanonicalRecord(authorityV1Prediction),
+    "append-only predictions retain the historical authority policy contract",
+  );
+  const authorityV2Prediction = structuredClone(authorityV1Prediction);
+  authorityV2Prediction.data.authority_conditioning = {
+    ...authorityV2Prediction.data.authority_conditioning,
+    policy_version: "authority-timing-first-event-mixture/2",
+    within_window_mass_basis: "tempered_baseline_first_event_mass",
+    within_window_baseline_power: 0.5,
+  };
+  assert.doesNotThrow(() => assertCanonicalRecord(authorityV2Prediction));
+  delete authorityV2Prediction.data.authority_conditioning
+    .within_window_baseline_power;
+  assert.throws(
+    () => assertCanonicalRecord(authorityV2Prediction),
+    /baseline power invalid/,
+  );
   const legacyPrediction = structuredClone(prediction);
   legacyPrediction.producer = {
     name: "reset-forecaster",
@@ -529,6 +567,7 @@ test("renewal-periodic baseline uses only outcomes known by the cutoff", () => {
       model: "deterministic-rules",
       model_version: "test",
       prompt_version: "rules/test",
+      authority_reply_identity_ids: [],
     },
     providers: {
       x: {

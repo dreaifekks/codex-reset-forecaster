@@ -138,11 +138,32 @@ small event history from fitting dozens of weak context fields.
 
 An exact primary statement from a configured confirmation identity may carry
 stronger timing semantics than an ordinary learned feature. Version
-`authority-timing-first-event-mixture/1` first computes the model's baseline
+`authority-timing-first-event-mixture/2` first computes the model's baseline
 first-event masses `b_t` and no-reset mass `b_inf`. For the one latest active,
 independent authority statement, it distributes an authority mass `q_t` over the
-remaining portion of the asserted half-open interval. The published distribution
-is:
+complete remaining portion `R` of the asserted half-open interval. A statement
+that names only a day changes the probability assigned to that day; it does not
+assert that every hour within the day is equally likely.
+
+For each hourly slot, `u_t` is its overlap duration divided by `|R|`. The
+baseline conditional hazard is exposure-adjusted for a partial first or last
+slot, then converted to a first-event mass within `R` and normalized as `s_t`.
+The configured power `a` tempers the baseline density relative to the duration
+prior:
+
+```text
+e_t = 1 - (1 - h_t) ^ overlap_fraction_t
+w_t = survival_within_R_t * e_t
+s_t = w_t / sum(w)
+q_t = normalize(u_t * (s_t / u_t) ^ a)
+```
+
+The default `within_window_baseline_power` is `0.5`: `0` is duration-uniform,
+`1` preserves the complete baseline first-event shape, and the midpoint keeps
+historical peaks and troughs while shrinking them toward uniform. If the
+baseline has effectively zero mass, or the allocation basis cannot cover all of
+`R`, the policy fails safely to duration-uniform allocation. The published
+distribution remains:
 
 ```text
 m_t   = (1 - r) * b_t   + r * q_t
@@ -150,9 +171,11 @@ m_inf = (1 - r) * b_inf + r * q_inf
 ```
 
 It then converts `m_t` back to conditional hourly hazards before deriving the
-rolling four-hour values. This moves first-reset probability into the asserted
-window and reduces first-reset mass outside it while preserving a distribution
-that sums to one. A confirmed reset consumes the old statement and becomes the
+rolling four-hour values. Reliability `r` controls how much total probability
+the statement moves into its window; `a` controls only the relative timing
+inside that window. This reduces first-reset mass outside the interval while
+preserving a distribution that sums to one. A confirmed reset consumes the old
+statement and becomes the
 explicit recurrence anchor of the next first-reset forecast; model parameters do
 not need to be retrained for that re-anchoring.
 
@@ -174,13 +197,24 @@ uses the same lifecycle, so pre-reset evidence cannot keep probability elevated
 after the reset. The default phase priors are `0.80` for scheduled, `0.55` for
 expected, and `0.90` for started.
 
-These values are deliberately recorded as
+The sole context-dependent exception is a direct future reset commitment from an
+identity in the versioned `extractor.authority_reply_identity_ids` allowlist. Its
+exact reply parent may establish only target-product and platform scope. The child
+keeps its own primary root and supplies the scheduled phase and asserted time; the
+parent cannot supply authority, phase, timing, or outcome semantics. Indirect,
+uncertain, negative, mixed-phase, personal-scope, and unresolved-parent cases fail
+closed.
+
+These values and the within-window allocation basis are deliberately recorded as
 `versioned_prior_non_exhaustive_statement_history`, not learned reliability.
 Recent-author exports and the completed-outcome ledger do not prove that every
 timed statement was collected, so unmatched statements cannot yet provide an
 unbiased failure denominator. Walk-forward evaluation applies the same
 conditioner; a future learned reliability artifact must first bind exhaustive
 statement coverage, exact evidence revisions, and out-of-sample evaluation.
+Walk-forward scoring constructs the same complete remaining `R` allocation
+basis before projecting its mass into each four-hour scoring window; it must not
+renormalize the shape independently inside each four-hour block.
 
 ### Completed-cycle carry-over and refractory recovery
 

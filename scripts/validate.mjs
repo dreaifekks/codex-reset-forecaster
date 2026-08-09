@@ -204,7 +204,9 @@ if (
   !providerSchema.$defs?.xOutcomeExhaustivenessAttestation ||
   !providerSchema.$defs?.historicalDailyLedgerAttestation ||
   !providerSchema.$defs?.outcomeDefinition ||
-  !providerSchema.$defs?.impactTrackingPolicy
+  !providerSchema.$defs?.extractorPolicy ||
+  !providerSchema.$defs?.impactTrackingPolicy ||
+  !providerSchema.$defs?.authorityTimingPolicy
 ) {
   fail("schemas/provider-config.schema.json is missing an outcome coverage contract");
 }
@@ -230,8 +232,20 @@ if (
     .includes("compatibility") ||
   schema.$defs.impactEpisode.properties.policy_version?.const !==
     "impact-episode-policy/1" ||
+  !schema.$defs.prediction.properties.authority_conditioning.properties
+    ?.policy_version?.enum?.includes(
+      "authority-timing-first-event-mixture/2",
+    ) ||
+  schema.$defs.prediction.properties.authority_conditioning.properties
+    ?.within_window_mass_basis?.const !==
+      "tempered_baseline_first_event_mass" ||
   providerSchema.$defs?.impactTrackingPolicy?.properties?.version?.const !==
     "impact-episode-policy/1" ||
+  providerSchema.$defs?.authorityTimingPolicy?.properties?.version?.const !==
+    "authority-timing-first-event-mixture/2" ||
+  providerSchema.$defs?.authorityTimingPolicy?.properties
+    ?.within_window_mass_basis?.const !==
+      "tempered_baseline_first_event_mass" ||
   providerSchema.$defs?.postOutcomeRefractoryPolicy?.properties?.version
     ?.const !==
       "post-outcome-refractory-piecewise-hazard-multiplier/1" ||
@@ -247,14 +261,21 @@ if (
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
 const defaultExtractor = extractorContract(defaultConfig);
 if (
-  defaultConfig.config_version !== "provider-config/0.3.3" ||
+  defaultConfig.config_version !== "provider-config/0.3.5" ||
   defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.1" ||
   defaultConfig.feature_schema_version !== "reset-features/0.3.1" ||
   defaultConfig.deduplication_version !== "reset-dedup/0.2.3" ||
-  defaultExtractor.model_version !== "0.3.2" ||
-  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.2" ||
-  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/4" ||
+  defaultExtractor.model_version !== "0.3.3" ||
+  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.3" ||
+  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/5" ||
+  !Array.isArray(defaultConfig.extractor?.authority_reply_identity_ids) ||
+  defaultConfig.extractor.authority_reply_identity_ids.length !== 0 ||
   defaultConfig.model?.standardized_feature_clip !== 3 ||
+  defaultConfig.model?.authority_timing?.version !==
+    "authority-timing-first-event-mixture/2" ||
+  defaultConfig.model?.authority_timing?.within_window_mass_basis !==
+    "tempered_baseline_first_event_mass" ||
+  defaultConfig.model?.authority_timing?.within_window_baseline_power !== 0.5 ||
   defaultConfig.model?.evidence_carryover?.version !==
     "post-outcome-evidence-carryover/1" ||
   defaultConfig.model?.feature_support?.version !==

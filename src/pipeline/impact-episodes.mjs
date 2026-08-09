@@ -562,10 +562,13 @@ function affectedScopeRank(impact) {
   return SCOPE_WEIGHT[impact.affected_scope] ?? 0;
 }
 
-function peakImpact(entries) {
+function peakImpact(entries, category = null) {
+  const impacts = entries.map((entry) => entry.signal.data.claim.impact);
+  const categoryImpacts = category === null
+    ? impacts
+    : impacts.filter((impact) => impact.category === category);
   return structuredClone(
-    [...entries]
-      .map((entry) => entry.signal.data.claim.impact)
+    [...(categoryImpacts.length > 0 ? categoryImpacts : impacts)]
       .sort(
         (left, right) =>
           severityRank(right) - severityRank(left) ||
@@ -602,7 +605,10 @@ function pressureAt(entries, atMs, policy) {
   ).size;
   const state = timelineState(visible);
   const current = visible.at(-1).signal.data.claim.impact;
-  const peak = peakImpact(visible);
+  const peak = peakImpact(
+    visible,
+    visible[0].signal.data.claim.impact.category,
+  );
   const lastUpdateMs = visible.at(-1).observedAtMs;
   const activeSpell = currentActiveSpell(visible, atMs);
   const activeDurationHours = Math.max(
@@ -876,10 +882,11 @@ function buildEpisodeData({
 }) {
   const entries = cluster.entries;
   const timeline = timelineEntries(entries, asOfMs);
+  const category = entries[0].anchorSignal.data.claim.impact.category;
   const current = structuredClone(
     timeline.at(-1).signal.data.claim.impact,
   );
-  const peak = peakImpact(timeline);
+  const peak = peakImpact(timeline, category);
   const pressure = pressureAt(entries, asOfMs, policy);
   const timestamps = episodeTimestamps(timeline);
   const evidence = episodeEvidence(entries);
@@ -898,7 +905,7 @@ function buildEpisodeData({
     as_of: new Date(asOfMs).toISOString(),
     episode_id: episodeId,
     topic_key: prior?.data.topic_key ?? clusterTopicKey(cluster),
-    category: entries[0].anchorSignal.data.claim.impact.category,
+    category,
     episode_interval: {
       start: new Date(cluster.firstObservedAtMs).toISOString(),
       end: new Date(intervalEndMs).toISOString(),

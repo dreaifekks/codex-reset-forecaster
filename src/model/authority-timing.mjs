@@ -26,9 +26,17 @@ import {
 const EPSILON = 1e-12;
 
 export const AUTHORITY_TIMING_POLICY_VERSION =
-  "authority-timing-first-event-mixture/1";
+  "authority-timing-first-event-mixture/2";
 export const AUTHORITY_TIMING_RELIABILITY_BASIS =
   "versioned_prior_non_exhaustive_statement_history";
+export const AUTHORITY_TIMING_WITHIN_WINDOW_MASS_BASIS =
+  "tempered_baseline_first_event_mass";
+export const DEFAULT_AUTHORITY_TIMING_WITHIN_WINDOW_BASELINE_POWER = 0.5;
+
+function withinWindowBaselinePower(config) {
+  return config.model?.authority_timing?.within_window_baseline_power ??
+    DEFAULT_AUTHORITY_TIMING_WITHIN_WINDOW_BASELINE_POWER;
+}
 
 function exactRefKey(reference) {
   return `${reference.record_id}@${reference.revision}`;
@@ -245,7 +253,120 @@ function hazardsFromFirstEventMass(hazardEntries, masses) {
   });
 }
 
-function authorityMass(hazardEntries, assertedRange) {
+function overlapWithRange(entry, rangeStart, rangeEnd) {
+  const entryStart = Date.parse(entry.start);
+  const entryEnd = Date.parse(entry.end);
+  const start = Math.max(entryStart, rangeStart);
+  const end = Math.min(entryEnd, rangeEnd);
+  return {
+    entryStart,
+    entryEnd,
+    start,
+    end,
+    duration: Math.max(0, end - start),
+  };
+}
+
+function durationUniformMass(hazardEntries, rangeStart, rangeEnd) {
+  const duration = rangeEnd - rangeStart;
+  return hazardEntries.map((entry) =>
+    overlapWithRange(entry, rangeStart, rangeEnd).duration / duration
+  );
+}
+
+function exposureHazard(hazard, exposureFraction) {
+  const value = clamp(hazard, 0, 1);
+  if (value >= 1) return exposureFraction > 0 ? 1 : 0;
+  return clamp(
+    -Math.expm1(exposureFraction * Math.log1p(-value)),
+    0,
+    1,
+  );
+}
+
+function completeAllocationIntervals(entries, rangeStart, rangeEnd) {
+  const intervals = entries
+    .map((entry) => ({
+      entry,
+      ...overlapWithRange(entry, rangeStart, rangeEnd),
+    }))
+    .filter((interval) => interval.duration > 0)
+    .sort((left, right) =>
+      left.start - right.start || left.end - right.end
+    );
+  let cursor = rangeStart;
+  for (const interval of intervals) {
+    if (
+      interval.entryEnd <= interval.entryStart ||
+      interval.start !== cursor
+    ) {
+      return null;
+    }
+    cursor = interval.end;
+  }
+  return cursor === rangeEnd ? intervals : null;
+}
+
+function temperedAllocationMass(
+  intervals,
+  rangeStart,
+  rangeEnd,
+  baselinePower,
+) {
+  const duration = rangeEnd - rangeStart;
+  let survival = 1;
+  const weighted = intervals.map((interval) => {
+    const fraction = interval.duration /
+      (interval.entryEnd - interval.entryStart);
+    const effectiveHazard = exposureHazard(
+      interval.entry.hazard,
+      fraction,
+    );
+    const baselineMass = survival * effectiveHazard;
+    survival = Math.max(0, survival - baselineMass);
+    return {
+      ...interval,
+      uniformMass: interval.duration / duration,
+      baselineMass,
+    };
+  });
+  const baselineTotal = weighted.reduce(
+    (sum, entry) => sum + entry.baselineMass,
+    0,
+  );
+  if (baselineTotal <= EPSILON) {
+    return weighted.map((entry) => ({
+      ...entry,
+      authorityMass: entry.uniformMass,
+    }));
+  }
+  const rawWeights = weighted.map((entry) => {
+    const baselineShare = entry.baselineMass / baselineTotal;
+    const densityRatio = baselineShare / entry.uniformMass;
+    return entry.uniformMass * Math.pow(
+      Math.max(EPSILON, densityRatio),
+      baselinePower,
+    );
+  });
+  const rawTotal = rawWeights.reduce((sum, value) => sum + value, 0);
+  if (rawTotal <= EPSILON) {
+    return weighted.map((entry) => ({
+      ...entry,
+      authorityMass: entry.uniformMass,
+    }));
+  }
+  return weighted.map((entry, index) => ({
+    ...entry,
+    authorityMass: rawWeights[index] / rawTotal,
+  }));
+}
+
+function authorityMass(
+  hazardEntries,
+  allocationHazardEntries,
+  assertedRange,
+  baselinePower,
+) {
   const horizonStart = Date.parse(hazardEntries[0].start);
   const remainingStart = Math.max(
     horizonStart,
@@ -259,23 +380,60 @@ function authorityMass(hazardEntries, assertedRange) {
       noReset: 1,
     };
   }
-  const mass = hazardEntries.map((entry) => {
-    const overlapStart = Math.max(Date.parse(entry.start), remainingStart);
-    const overlapEnd = Math.min(Date.parse(entry.end), remainingEnd);
-    return Math.max(0, overlapEnd - overlapStart) / duration;
-  });
-  return {
-    mass,
-    noReset: clamp(
-      1 - mass.reduce((sum, value) => sum + value, 0),
+  const uniformMass = durationUniformMass(
+    hazardEntries,
+    remainingStart,
+    remainingEnd,
+  );
+  const allocationIntervals = completeAllocationIntervals(
+    allocationHazardEntries,
+    remainingStart,
+    remainingEnd,
+  );
+  if (allocationIntervals === null) {
+    const coveredMass = clamp(
+      uniformMass.reduce((sum, value) => sum + value, 0),
       0,
       1,
-    ),
+    );
+    return {
+      mass: uniformMass,
+      noReset: clamp(1 - coveredMass, 0, 1),
+    };
+  }
+  const allocationMass = temperedAllocationMass(
+    allocationIntervals,
+    remainingStart,
+    remainingEnd,
+    baselinePower,
+  );
+  const mass = hazardEntries.map((entry) => {
+    const output = overlapWithRange(entry, remainingStart, remainingEnd);
+    if (output.duration <= 0) return 0;
+    return allocationMass.reduce((sum, allocation) => {
+      const overlap = Math.max(
+        0,
+        Math.min(output.end, allocation.end) -
+          Math.max(output.start, allocation.start),
+      );
+      return sum + allocation.authorityMass *
+        overlap / allocation.duration;
+    }, 0);
+  });
+  const coveredMass = clamp(
+    mass.reduce((sum, value) => sum + value, 0),
+    0,
+    1,
+  );
+  return {
+    mass,
+    noReset: clamp(1 - coveredMass, 0, 1),
   };
 }
 
 export function conditionAuthorityTimingHazards({
   hazardEntries,
+  allocationHazardEntries = hazardEntries,
   signals = [],
   observations = [],
   outcomes = [],
@@ -308,6 +466,10 @@ export function conditionAuthorityTimingHazards({
         policy_version: AUTHORITY_TIMING_POLICY_VERSION,
         applied: false,
         reliability_basis: AUTHORITY_TIMING_RELIABILITY_BASIS,
+        within_window_mass_basis:
+          AUTHORITY_TIMING_WITHIN_WINDOW_MASS_BASIS,
+        within_window_baseline_power:
+          withinWindowBaselinePower(config),
         phase: null,
         prior_reliability: null,
         signal_ref: null,
@@ -320,7 +482,9 @@ export function conditionAuthorityTimingHazards({
 
   const authority = authorityMass(
     hazardEntries,
+    allocationHazardEntries,
     selected.data.claim.asserted_time_range,
+    withinWindowBaselinePower(config),
   );
   const reliability = config.model.authority_timing.phase_reliability[
     selected.data.claim.phase
@@ -348,6 +512,10 @@ export function conditionAuthorityTimingHazards({
       policy_version: AUTHORITY_TIMING_POLICY_VERSION,
       applied: true,
       reliability_basis: AUTHORITY_TIMING_RELIABILITY_BASIS,
+      within_window_mass_basis:
+        AUTHORITY_TIMING_WITHIN_WINDOW_MASS_BASIS,
+      within_window_baseline_power:
+        withinWindowBaselinePower(config),
       phase: selected.data.claim.phase,
       prior_reliability: reliability,
       signal_ref: recordRef(selected),

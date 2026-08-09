@@ -120,6 +120,13 @@ binds the parent reference/root, and normalized provenance uses the non-primary
 `derivation: "reply"`. Such a context-only reply may remain auditable context but
 cannot adjudicate an outcome or enter the exact-authority timing conditioner.
 
+One configured exception covers direct future reset commitments from identities
+in `extractor.authority_reply_identity_ids`. If the exact reply parent establishes
+the target product and platform-wide scope, the child remains self-basis with its
+own primary root and supplies the scheduled phase and time. Parent text is a
+scope-only dependency and can never contribute phase, timing, authority, or
+outcome evidence.
+
 The rule/LLM extractor then converts relevant text into a small taxonomy:
 
 - event type;
@@ -248,8 +255,14 @@ keeps full weight.
 
 After that step, a versioned exact-authority timing conditioner may
 mix first-event mass into one active asserted interval, then invert that mass back
-to hourly hazards. It uses only as-of-visible primary evidence, never a summary or
-extraction confidence, and the walk-forward evaluator runs the same path. Until
+to hourly hazards. The interval's total authority mass follows the statement's
+phase reliability, while its hourly allocation follows a tempered version of the
+model's complete within-window baseline shape; a day-only statement therefore
+does not create a uniform-hour assumption. Partial boundary hours use
+exposure-adjusted hazards, with a duration-uniform fallback when no usable
+baseline mass exists. It uses only as-of-visible primary evidence, never a summary or
+extraction confidence, and the walk-forward evaluator builds the same complete
+asserted-range allocation basis before scoring a four-hour slice. Until
 timed-statement collection has an exhaustive denominator, its phase reliability
 is exposed as a semantic prior rather than described as learned accuracy. A newly
 confirmed compatible reset consumes the old assertion and re-anchors the next

@@ -31,10 +31,10 @@
     "deduplication_version": "reset-dedup/0.2.3",
     "extractor_contract": {
       "model": "deterministic-rules",
-      "model_version": "0.3.2",
-      "prompt_version": "reset-extract/rules-0.3.2",
-      "topic_relevance_policy_version": "reset-topic-relevance/4",
-      "semantic_policy_hash": "sha256:26bc2a4fabb83ce8e3350404c5ceb990e0261f58692caba3c6168b475893181b"
+      "model_version": "0.3.3",
+      "prompt_version": "reset-extract/rules-0.3.3",
+      "topic_relevance_policy_version": "reset-topic-relevance/5",
+      "semantic_policy_hash": "sha256:8396b4ff8373aa134a07452f81e97e11570e448e1a46b113849711eae8b2fbe2"
     },
     "scope": {
       "vendor": "openai",

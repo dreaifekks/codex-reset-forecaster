@@ -1,4 +1,5 @@
 import { hashLabel } from "../core/hash.mjs";
+import { isFirstPersonFutureResetReply } from "../core/authority-reply.mjs";
 import {
   appendRawObservationRevision,
   canonicalXStatusUrl,
@@ -9,13 +10,20 @@ import {
 } from "./raw.mjs";
 
 const PROVIDER_NAME = "rsshub_x_timeline";
-const PROVIDER_VERSION = "0.3.0";
-const STATE_VERSION = "rsshub-x-provider-state/3";
-const FORMAT_VERSION = "rsshub-x-json-feed/2";
+const PROVIDER_VERSION = "0.3.1";
+const STATE_VERSION = "rsshub-x-provider-state/4";
+const FORMAT_VERSION = "rsshub-x-json-feed/3";
 const SELECTION_METHOD = "rsshub_x_user_timeline_with_replies/1";
 const QUARANTINE_SELECTION_METHOD = "rsshub_x_relation_quarantine/1";
 const QUARANTINE_MEDIA_TYPE = "application/vnd.reset-provider-quarantine+json";
 const QUARANTINE_VERSION = "rsshub-x-relation-quarantine/1";
+const REPLY_CONTEXT_PROVIDER_NAME = "rsshub_x_reply_context";
+const REPLY_CONTEXT_MEDIA_TYPE =
+  "application/vnd.reset-authority-reply-context+text";
+const REPLY_CONTEXT_SELECTION_METHOD =
+  "rsshub_x_authority_reply_parent_context/1";
+const REPLY_CONTEXT_MAX_ATTEMPTS = 3;
+const REPLY_CONTEXT_MAX_PER_COLLECTION = 4;
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const X_HANDLE = /^[A-Za-z0-9_]{1,15}$/;
@@ -604,6 +612,164 @@ export function rsshubXFeedUrl(baseUrl, username, {
   return base;
 }
 
+function rsshubXReplyContextUrl(baseUrl, parentHandle, parentStatusId) {
+  const base = new URL(baseUrl);
+  if (
+    base.protocol !== "https:" ||
+    base.username ||
+    base.password ||
+    base.search ||
+    base.hash
+  ) {
+    throw new TypeError(
+      "RSSHub X base_url must be an HTTPS origin without credentials, query, or fragment",
+    );
+  }
+  const handle = normalizedHandle(parentHandle, "RSSHub X reply parent");
+  const statusId = xStatusIdentity(parentStatusId);
+  if (!statusId) {
+    throw new TypeError("RSSHub X reply parent has an invalid status id");
+  }
+  const prefix = base.pathname.replace(/\/+$/, "");
+  base.pathname = `${prefix}/twitter/tweet/${encodeURIComponent(handle)}/status/${statusId}`;
+  base.searchParams.set("format", "json");
+  return base;
+}
+
+function exactReplyParentItem(payload, {
+  parentHandle,
+  parentStatusId,
+  identityId = null,
+}) {
+  const handle = normalizedHandle(parentHandle, "RSSHub X reply parent");
+  const statusId = xStatusIdentity(parentStatusId);
+  if (!statusId) {
+    throw new TypeError("RSSHub X reply parent has an invalid status id");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("RSSHub X reply parent response must be a JSON Feed object");
+  }
+  if (!JSON_FEED_VERSIONS.has(payload.version) || !Array.isArray(payload.items)) {
+    throw new TypeError("RSSHub X reply parent response is not a supported JSON Feed");
+  }
+  const home = statusParts(payload.home_page_url);
+  if (
+    !home ||
+    home.statusId !== statusId ||
+    home.handle.toLowerCase() !== handle.toLowerCase()
+  ) {
+    throw new TypeError("RSSHub X reply parent feed does not match the requested status");
+  }
+
+  const matching = payload.items.filter((item) => {
+    const itemUrl = statusParts(item?.url);
+    const itemId = statusParts(item?.id);
+    const authorHandle = profileHandle(item?.authors?.[0]?.url);
+    return itemUrl?.statusId === statusId &&
+      itemId?.statusId === statusId &&
+      itemUrl.handle.toLowerCase() === handle.toLowerCase() &&
+      itemId.handle.toLowerCase() === handle.toLowerCase() &&
+      authorHandle?.toLowerCase() === handle.toLowerCase();
+  });
+  if (matching.length === 0) {
+    throw new Error(
+      `RSSHub X reply parent feed omitted exact status ${statusId} by @${handle}`,
+    );
+  }
+
+  const parsed = matching.map((rawItem) => {
+    const item = rawItem._extra === null
+      ? Object.fromEntries(
+          Object.entries(rawItem).filter(([key]) => key !== "_extra"),
+        )
+      : rawItem;
+    const context = feedItemContext(item, {
+      username: handle,
+      identityId,
+    });
+    assertFeedItemPublicationTime(context);
+    const text = htmlToPlainText(item.content_html ?? item.content_text);
+    if (!text) {
+      throw new TypeError(`RSSHub X reply parent ${statusId} has no rendered text`);
+    }
+    return feedObservation(context, {
+      content: {
+        media_type: REPLY_CONTEXT_MEDIA_TYPE,
+        text,
+        language: item.language ?? null,
+      },
+      selectionContext: {
+        feature_eligible: false,
+        outcome_conditioned: false,
+        selection_method: REPLY_CONTEXT_SELECTION_METHOD,
+      },
+      availabilityBasis:
+        "rsshub_json_feed_item+status_snowflake+authority_reply_parent_context",
+    });
+  });
+  const first = parsed[0];
+  const firstHash = rawObservationMaterialHash(first);
+  if (parsed.some((item) => rawObservationMaterialHash(item) !== firstHash)) {
+    throw new TypeError(
+      `RSSHub X reply parent feed has conflicting copies of status ${statusId}`,
+    );
+  }
+  first.raw = matching[0];
+  return first;
+}
+
+function exactAuthorityReplyCandidates(observations, identities) {
+  const confirmationByIdentity = new Map(
+    identities
+      .filter((identity) => identity.kind === "confirmation")
+      .map((identity) => [identity.identity_id, identity]),
+  );
+  return observations.flatMap((observation) => {
+    if (
+      observation.data.ingest_provider !== PROVIDER_NAME ||
+      observation.data.content.media_type !== "text/plain"
+    ) return [];
+    const identity = confirmationByIdentity.get(
+      observation.data.author.identity_id,
+    );
+    if (
+      !identity ||
+      observation.data.author.provider_author_id?.toLowerCase() !==
+        identity.username.toLowerCase()
+    ) return [];
+    const child = statusParts(observation.data.canonical_url);
+    if (
+      !child ||
+      child.statusId !== String(observation.data.provider_item_id) ||
+      child.handle.toLowerCase() !== identity.username.toLowerCase() ||
+      !isFirstPersonFutureResetReply({
+        text: observation.data.content.text,
+        nativeRelations: observation.data.native_relations,
+      })
+    ) return [];
+    const relation = observation.data.native_relations.find((item) =>
+      item.type === "reply"
+    );
+    const parent = statusParts(relation?.url);
+    const relatedStatusId = xStatusIdentity(relation?.provider_item_id);
+    if (
+      !parent ||
+      !relatedStatusId ||
+      parent.statusId !== relatedStatusId
+    ) return [];
+    return [{
+      childRecord: observation,
+      childStatusId: child.statusId,
+      parentHandle: parent.handle,
+      parentStatusId: parent.statusId,
+    }];
+  }).sort((left, right) =>
+    left.childRecord.data.first_seen_at.localeCompare(
+      right.childRecord.data.first_seen_at,
+    ) || left.childStatusId.localeCompare(right.childStatusId)
+  );
+}
+
 function boundedDelaySeconds(startedAt, finishedAt) {
   return Math.max(
     0,
@@ -826,6 +992,271 @@ export class RsshubXProvider {
     };
   }
 
+  async fetchReplyParent(candidate) {
+    const url = rsshubXReplyContextUrl(
+      this.config.base_url,
+      candidate.parentHandle,
+      candidate.parentStatusId,
+    );
+    const response = await this.fetch(url, {
+      headers: {
+        accept: "application/feed+json, application/json;q=0.9",
+      },
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        `RSSHub X reply parent ${candidate.parentStatusId} returned ` +
+          `${response.status}: ${body.slice(0, 300)}`,
+      );
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (
+      !contentType.toLowerCase().includes("application/feed+json") &&
+      !contentType.toLowerCase().includes("application/json")
+    ) {
+      throw new Error(
+        `RSSHub X reply parent ${candidate.parentStatusId} returned non-JSON content`,
+      );
+    }
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (
+      Number.isFinite(declaredLength) &&
+      declaredLength > this.maximumResponseBytes
+    ) {
+      throw new RangeError(
+        `RSSHub X reply parent ${candidate.parentStatusId} exceeds the response limit`,
+      );
+    }
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > this.maximumResponseBytes) {
+      throw new RangeError(
+        `RSSHub X reply parent ${candidate.parentStatusId} exceeds the response limit`,
+      );
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `RSSHub X reply parent ${candidate.parentStatusId} returned invalid JSON`,
+      );
+    }
+    const route = response.headers.get("x-rsshub-route");
+    if (route && route !== "/twitter/tweet/:id/status/:status/:original?") {
+      throw new Error(
+        `RSSHub X reply parent ${candidate.parentStatusId} matched an unexpected route`,
+      );
+    }
+    const parentIdentity = this.identities.find((identity) =>
+      identity.username.toLowerCase() === candidate.parentHandle.toLowerCase()
+    );
+    return exactReplyParentItem(payload, {
+      parentHandle: candidate.parentHandle,
+      parentStatusId: candidate.parentStatusId,
+      identityId: parentIdentity?.identity_id ?? null,
+    });
+  }
+
+  async resolveReplyContexts(store, priorReplyContexts = {}) {
+    const observations = await store.all("raw_observation");
+    const candidates = exactAuthorityReplyCandidates(
+      observations,
+      this.identities,
+    );
+    const existingContexts = new Map(
+      observations
+        .filter((observation) =>
+          observation.data.ingest_provider === REPLY_CONTEXT_PROVIDER_NAME &&
+          observation.data.content.media_type === REPLY_CONTEXT_MEDIA_TYPE
+        )
+        .map((observation) => {
+          const status = statusParts(observation.data.canonical_url);
+          return [
+            status?.statusId === String(observation.data.provider_item_id)
+              ? `${status.handle.toLowerCase()}:${status.statusId}`
+              : null,
+            observation,
+          ];
+        })
+        .filter(([key]) => key !== null),
+    );
+    const previous = priorReplyContexts &&
+        typeof priorReplyContexts === "object" &&
+        !Array.isArray(priorReplyContexts)
+      ? priorReplyContexts
+      : {};
+    const next = { ...previous };
+    const stateFor = (candidate) => {
+      const prior = previous[candidate.childStatusId];
+      if (
+        !prior ||
+        prior.parent_status_id !== candidate.parentStatusId ||
+        prior.parent_handle?.toLowerCase() !==
+          candidate.parentHandle.toLowerCase()
+      ) {
+        return { attempts: 0, status: "retryable" };
+      }
+      return prior;
+    };
+    const contextKey = (candidate) =>
+      `${candidate.parentHandle.toLowerCase()}:${candidate.parentStatusId}`;
+    const resolvedEntry = (candidate, context, current, resolvedAt) => ({
+      child_observation_ref: {
+        record_id: candidate.childRecord.record_id,
+        revision: candidate.childRecord.revision,
+      },
+      parent_handle: candidate.parentHandle,
+      parent_status_id: candidate.parentStatusId,
+      status: "resolved",
+      attempts: current.attempts ?? 0,
+      last_attempt_at: current.last_attempt_at ?? null,
+      resolved_at: resolvedAt,
+      terminal_at: null,
+      last_error: null,
+      context_observation_ref: {
+        record_id: context.record_id,
+        revision: context.revision,
+      },
+    });
+
+    for (const candidate of candidates) {
+      const current = stateFor(candidate);
+      next[candidate.childStatusId] = {
+        child_observation_ref: {
+          record_id: candidate.childRecord.record_id,
+          revision: candidate.childRecord.revision,
+        },
+        parent_handle: candidate.parentHandle,
+        parent_status_id: candidate.parentStatusId,
+        status: current.status ?? "retryable",
+        attempts: Number(current.attempts ?? 0),
+        last_attempt_at: current.last_attempt_at ?? null,
+        resolved_at: current.resolved_at ?? null,
+        terminal_at: current.terminal_at ?? null,
+        last_error: current.last_error ?? null,
+        context_observation_ref: current.context_observation_ref ?? null,
+      };
+      const context = existingContexts.get(contextKey(candidate));
+      if (!context) continue;
+      next[candidate.childStatusId] = resolvedEntry(
+        candidate,
+        context,
+        current,
+        current.resolved_at ?? context.data.first_seen_at,
+      );
+    }
+
+    const pending = candidates
+      .filter((candidate) => {
+        const status = next[candidate.childStatusId] ?? stateFor(candidate);
+        return status.status !== "resolved" &&
+          status.status !== "terminal" &&
+          Number(status.attempts ?? 0) < REPLY_CONTEXT_MAX_ATTEMPTS;
+      })
+      .sort((left, right) => {
+        const leftAttempts = Number(
+          (next[left.childStatusId] ?? stateFor(left)).attempts ?? 0,
+        );
+        const rightAttempts = Number(
+          (next[right.childStatusId] ?? stateFor(right)).attempts ?? 0,
+        );
+        return leftAttempts - rightAttempts ||
+          left.childRecord.data.first_seen_at.localeCompare(
+            right.childRecord.data.first_seen_at,
+          ) || left.childStatusId.localeCompare(right.childStatusId);
+      })
+      .slice(0, REPLY_CONTEXT_MAX_PER_COLLECTION);
+
+    let attempted = 0;
+    let resolved = 0;
+    const errors = [];
+    for (const candidate of pending) {
+      const current = next[candidate.childStatusId] ?? stateFor(candidate);
+      const existing = existingContexts.get(contextKey(candidate));
+      if (existing) {
+        next[candidate.childStatusId] = resolvedEntry(
+          candidate,
+          existing,
+          current,
+          current.resolved_at ?? existing.data.first_seen_at,
+        );
+        continue;
+      }
+      attempted += 1;
+      const attemptAt = new Date(this.now());
+      const attempts = Number(current.attempts ?? 0) + 1;
+      try {
+        const fetchedParent = await this.fetchReplyParent(candidate);
+        const fetchedAt = new Date(this.now());
+        const parent = {
+          ...fetchedParent,
+          source_timing: {
+            ...fetchedParent.source_timing,
+            provider_observed_at: fetchedAt.toISOString(),
+          },
+        };
+        const append = await appendRawObservationRevision(store, parent, {
+          providerName: REPLY_CONTEXT_PROVIDER_NAME,
+          providerVersion: PROVIDER_VERSION,
+          config: {
+            format_version: FORMAT_VERSION,
+            selection_method: REPLY_CONTEXT_SELECTION_METHOD,
+            source: this.config,
+          },
+          firstSeenAt: fetchedAt,
+          fetchedAt,
+          rawPayload: parent.raw,
+        });
+        existingContexts.set(contextKey(candidate), append.record);
+        next[candidate.childStatusId] = resolvedEntry(
+          candidate,
+          append.record,
+          {
+            ...current,
+            attempts,
+            last_attempt_at: attemptAt.toISOString(),
+          },
+          fetchedAt.toISOString(),
+        );
+        resolved += 1;
+      } catch (error) {
+        const failedAt = new Date(this.now());
+        const errorMessage = String(error?.message ?? error).slice(0, 500);
+        const terminal = attempts >= REPLY_CONTEXT_MAX_ATTEMPTS;
+        next[candidate.childStatusId] = {
+          child_observation_ref: {
+            record_id: candidate.childRecord.record_id,
+            revision: candidate.childRecord.revision,
+          },
+          parent_handle: candidate.parentHandle,
+          parent_status_id: candidate.parentStatusId,
+          status: terminal ? "terminal" : "retryable",
+          attempts,
+          last_attempt_at: attemptAt.toISOString(),
+          resolved_at: null,
+          terminal_at: terminal ? failedAt.toISOString() : null,
+          last_error: errorMessage,
+          context_observation_ref: null,
+        };
+        errors.push(`${candidate.parentStatusId}: ${errorMessage}`);
+      }
+    }
+
+    const statuses = candidates.map((candidate) =>
+      next[candidate.childStatusId] ?? stateFor(candidate)
+    );
+    return {
+      entries: next,
+      attempted,
+      resolved,
+      retryable: statuses.filter((state) => state.status === "retryable").length,
+      terminal: statuses.filter((state) => state.status === "terminal").length,
+      errors,
+    };
+  }
+
   async collect(store) {
     const startedAt = new Date(this.now());
     const priorState = await store.readState(this.stateKey, {
@@ -865,14 +1296,19 @@ export class RsshubXProvider {
           else unchanged += 1;
         }
       }
+      const replyContexts = await this.resolveReplyContexts(
+        store,
+        priorState.reply_contexts ?? {},
+      );
+      const completedAt = new Date(this.now());
       const health = {
         ok: true,
-        delay_seconds: boundedDelaySeconds(startedAt, fetchedAt),
+        delay_seconds: boundedDelaySeconds(startedAt, completedAt),
         error: null,
       };
       await store.append(this.healthObservation({
         ...health,
-        at: fetchedAt,
+        at: completedAt,
         feedCount: feeds.length,
         itemCount: records,
         quarantinedItemCount: quarantined,
@@ -883,36 +1319,74 @@ export class RsshubXProvider {
         nextFeeds[key] = {
           ...(nextFeeds[key] ?? {}),
           ...feed.cursor,
-          last_success_at: fetchedAt.toISOString(),
+          last_success_at: completedAt.toISOString(),
           last_not_modified_at: feed.notModified
-            ? fetchedAt.toISOString()
+            ? completedAt.toISOString()
             : nextFeeds[key]?.last_not_modified_at ?? null,
         };
       }
+      const warnings = [];
+      if (quarantined > 0) {
+        warnings.push(
+          `${quarantined} RSSHub item(s) quarantined because exact relation metadata was ambiguous`,
+        );
+      }
+      if (replyContexts.errors.length > 0) {
+        warnings.push(
+          `${replyContexts.errors.length} authority reply parent context request(s) failed without failing the timeline`,
+        );
+      }
+      if (
+        replyContexts.terminal > 0 &&
+        replyContexts.errors.length === 0
+      ) {
+        warnings.push(
+          `${replyContexts.terminal} authority reply parent context request(s) remain terminal`,
+        );
+      }
+      const unresolvedReplyContextErrors = Object.values(
+        replyContexts.entries,
+      )
+        .filter((entry) => entry.status !== "resolved" && entry.last_error)
+        .map((entry) => entry.last_error);
+      const contextDegraded =
+        replyContexts.retryable > 0 || replyContexts.terminal > 0;
       await store.writeState(this.stateKey, {
         ...priorState,
         schema_version: STATE_VERSION,
         provider: this.providerName,
         format_version: FORMAT_VERSION,
         feeds: nextFeeds,
-        last_success_at: fetchedAt.toISOString(),
+        reply_contexts: replyContexts.entries,
+        reply_context_resolution: {
+          max_attempts: REPLY_CONTEXT_MAX_ATTEMPTS,
+          max_per_collection: REPLY_CONTEXT_MAX_PER_COLLECTION,
+          attempted: replyContexts.attempted,
+          resolved: replyContexts.resolved,
+          retryable: replyContexts.retryable,
+          terminal: replyContexts.terminal,
+          last_run_at: completedAt.toISOString(),
+        },
+        last_success_at: completedAt.toISOString(),
         last_failure_at: null,
         last_error: null,
-        last_warning: quarantined > 0
-          ? `${quarantined} RSSHub item(s) quarantined because exact relation metadata was ambiguous`
-          : null,
+        last_warning: warnings.length > 0 ? warnings.join("; ") : null,
         last_quarantine_at: quarantined > 0
-          ? fetchedAt.toISOString()
+          ? completedAt.toISOString()
           : priorState.last_quarantine_at ?? null,
         current_quarantined_item_count: quarantined,
         current_quarantined_status_ids: feeds
           .flatMap((feed) => feed.quarantinedStatusIds)
           .filter((statusId, index, all) => all.indexOf(statusId) === index)
           .sort(),
-        context_status: "fresh",
-        last_context_success_at: fetchedAt.toISOString(),
-        last_context_failure_at: null,
-        last_context_error: null,
+        context_status: contextDegraded ? "degraded" : "fresh",
+        last_context_success_at: completedAt.toISOString(),
+        last_context_failure_at: replyContexts.errors.length > 0
+          ? completedAt.toISOString()
+          : priorState.last_context_failure_at ?? null,
+        last_context_error: unresolvedReplyContextErrors.length > 0
+          ? [...new Set(unresolvedReplyContextErrors)].join("; ")
+          : null,
       });
       return {
         provider: this.providerName,
@@ -960,4 +1434,6 @@ export {
   PROVIDER_VERSION as RSSHUB_X_PROVIDER_VERSION,
   QUARANTINE_MEDIA_TYPE as RSSHUB_X_QUARANTINE_MEDIA_TYPE,
   QUARANTINE_SELECTION_METHOD as RSSHUB_X_QUARANTINE_SELECTION_METHOD,
+  REPLY_CONTEXT_MEDIA_TYPE as RSSHUB_X_REPLY_CONTEXT_MEDIA_TYPE,
+  REPLY_CONTEXT_PROVIDER_NAME as RSSHUB_X_REPLY_CONTEXT_PROVIDER_NAME,
 };

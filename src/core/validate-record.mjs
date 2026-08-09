@@ -539,8 +539,10 @@ function validatePrediction(record) {
   if (data.authority_conditioning !== undefined) {
     const conditioning = data.authority_conditioning;
     invariant(
-      conditioning?.policy_version ===
+      [
         "authority-timing-first-event-mixture/1",
+        "authority-timing-first-event-mixture/2",
+      ].includes(conditioning?.policy_version),
       "prediction authority timing policy mismatch",
     );
     invariant(
@@ -548,6 +550,23 @@ function validatePrediction(record) {
         "versioned_prior_non_exhaustive_statement_history",
       "prediction authority timing reliability basis mismatch",
     );
+    if (
+      conditioning.policy_version ===
+        "authority-timing-first-event-mixture/2"
+    ) {
+      invariant(
+        conditioning.within_window_mass_basis ===
+          "tempered_baseline_first_event_mass",
+        "prediction authority timing within-window mass basis mismatch",
+      );
+      invariant(
+        typeof conditioning.within_window_baseline_power === "number" &&
+        Number.isFinite(conditioning.within_window_baseline_power) &&
+        conditioning.within_window_baseline_power >= 0 &&
+        conditioning.within_window_baseline_power <= 1,
+        "prediction authority timing baseline power invalid",
+      );
+    }
     invariant(
       typeof conditioning.applied === "boolean",
       "prediction authority timing applied flag missing",

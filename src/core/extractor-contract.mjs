@@ -4,7 +4,7 @@ import { canonicalSourceIdentityPolicy } from "./sources.mjs";
 export const AUTHORITY_SCOPE_POLICY =
   "explicit-platform-or-authority-general-codex/1";
 export const DEFAULT_TOPIC_RELEVANCE_POLICY_VERSION =
-  "reset-topic-relevance/4";
+  "reset-topic-relevance/5";
 
 function normalizedTarget(target) {
   return {
@@ -30,10 +30,13 @@ function normalizedAuthorityScopePolicy(outcomeDefinition) {
 
 export function extractionSemanticPolicy(config) {
   return {
-    version: "extractor-semantic-policy/4",
+    version: "extractor-semantic-policy/5",
     target: normalizedTarget(config?.target),
     source_identity_policy: canonicalSourceIdentityPolicy(config),
     authority_scope_policy: normalizedAuthorityScopePolicy(config?.outcome_definition),
+    authority_reply_identity_ids: [
+      ...(config?.extractor?.authority_reply_identity_ids ?? []),
+    ].sort(),
     topic_relevance_policy_version:
       config?.extractor?.topic_relevance_policy_version ??
       DEFAULT_TOPIC_RELEVANCE_POLICY_VERSION,
@@ -46,6 +49,19 @@ export function extractorContract(config) {
     if (typeof contract?.[field] !== "string" || contract[field].trim().length === 0) {
       throw new TypeError(`Extractor contract requires config.extractor.${field}`);
     }
+  }
+  const authorityReplyIdentityIds =
+    contract.authority_reply_identity_ids ?? [];
+  if (
+    !Array.isArray(authorityReplyIdentityIds) ||
+    authorityReplyIdentityIds.some((identityId) =>
+      typeof identityId !== "string" || identityId.trim().length === 0
+    ) ||
+    new Set(authorityReplyIdentityIds).size !== authorityReplyIdentityIds.length
+  ) {
+    throw new TypeError(
+      "Extractor contract requires unique config.extractor.authority_reply_identity_ids",
+    );
   }
   return {
     model: contract.model,

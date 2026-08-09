@@ -428,6 +428,45 @@ test("mitigation, sparse recovery wording, and reopening remain one episode", as
   assert.equal(reopened.data.evidence.at(-1).relation, "reopens");
 });
 
+test("a generic lifecycle follow-up cannot replace the episode category at peak", async (t) => {
+  const store = await temporaryStore(t);
+  await appendImpactSignals(store, [
+    {
+      id: "low-tool-issue",
+      availableAt: "2026-07-29T00:00:00Z",
+      group: "ind_low_tool_issue",
+      category: "tool_execution",
+      severity: "low",
+      affectedScope: "individual",
+      surfaces: ["mcp"],
+      text: "Codex MCP tool execution hangs",
+    },
+    {
+      id: "generic-platform-recovery",
+      availableAt: "2026-07-29T02:00:00Z",
+      group: "ind_generic_recovery",
+      eventType: "experience_recovery",
+      category: "other",
+      severity: "critical",
+      lifecycle: "resolved",
+      affectedScope: "platform",
+      surfaces: ["unknown"],
+      evidenceBasis: "official_incident",
+      sourceRole: "official",
+      text: "Codex is fixed now",
+    },
+  ]);
+
+  await buildImpactEpisodes(store, CONFIG, {
+    asOf: new Date("2026-07-29T02:00:00Z"),
+  });
+  const [episode] = await store.all("impact_episode");
+  assert.equal(episode.data.state, "resolved");
+  assert.equal(episode.data.current_impact.category, "other");
+  assert.equal(episode.data.category, "tool_execution");
+  assert.equal(episode.data.peak_impact.category, "tool_execution");
+});
+
 test("the temporal cluster gap starts a distinct episode after 72 hours", async (t) => {
   const store = await temporaryStore(t);
   await appendImpactSignals(store, [

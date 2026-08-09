@@ -1160,13 +1160,42 @@
             "base_horizon_probability",
             "conditioned_horizon_probability"
           ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "policy_version": {
+                    "const": "authority-timing-first-event-mixture/2"
+                  }
+                },
+                "required": ["policy_version"]
+              },
+              "then": {
+                "required": [
+                  "within_window_mass_basis",
+                  "within_window_baseline_power"
+                ]
+              }
+            }
+          ],
           "properties": {
             "policy_version": {
-              "const": "authority-timing-first-event-mixture/1"
+              "enum": [
+                "authority-timing-first-event-mixture/1",
+                "authority-timing-first-event-mixture/2"
+              ]
             },
             "applied": { "type": "boolean" },
             "reliability_basis": {
               "const": "versioned_prior_non_exhaustive_statement_history"
+            },
+            "within_window_mass_basis": {
+              "const": "tempered_baseline_first_event_mass"
+            },
+            "within_window_baseline_power": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             },
             "phase": {
               "enum": ["scheduled", "expected", "started", null]
