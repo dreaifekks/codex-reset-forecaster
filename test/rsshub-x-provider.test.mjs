@@ -7,6 +7,8 @@ import {
   parseRsshubXJsonFeed,
   RsshubXProvider,
   RSSHUB_X_QUARANTINE_MEDIA_TYPE,
+  RSSHUB_X_REPLY_CONTEXT_MEDIA_TYPE,
+  RSSHUB_X_REPLY_CONTEXT_PROVIDER_NAME,
   rsshubXFeedUrl,
 } from "../src/providers/rsshub-x-provider.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
@@ -21,13 +23,20 @@ const TIBO = {
   source_role: "product_lead",
 };
 
-function feed(items) {
+function feedFor(username, items, {
+  title = `Twitter @${username}`,
+  homePageUrl = `https://x.com/${username}`,
+} = {}) {
   return {
     version: "https://jsonfeed.org/version/1.1",
-    title: "Twitter @Tibo",
-    home_page_url: "https://x.com/thsottiaux",
+    title,
+    home_page_url: homePageUrl,
     items,
   };
+}
+
+function feed(items) {
+  return feedFor("thsottiaux", items, { title: "Twitter @Tibo" });
 }
 
 function post({
@@ -51,6 +60,29 @@ function post({
   };
 }
 
+function postBy({
+  username,
+  name = username,
+  id,
+  title,
+  contentHtml,
+  datePublished,
+  extra,
+}) {
+  return {
+    id: `https://twitter.com/${username}/status/${id}`,
+    url: `https://x.com/${username}/status/${id}`,
+    title,
+    content_html: contentHtml,
+    date_published: datePublished,
+    authors: [{
+      name,
+      url: `https://x.com/${username}`,
+    }],
+    ...(extra !== undefined ? { _extra: extra } : {}),
+  };
+}
+
 function response(payload, headers = {}) {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -63,6 +95,13 @@ function response(payload, headers = {}) {
       "x-rsshub-route": "/twitter/user/:id/:routeParams?",
       ...headers,
     },
+  });
+}
+
+function conversationResponse(payload, headers = {}) {
+  return response(payload, {
+    "x-rsshub-route": "/twitter/tweet/:id/status/:status/:original?",
+    ...headers,
   });
 }
 
@@ -146,7 +185,7 @@ test("RSSHub JSON Feed collection keeps exact status lineage, strips quoted text
   const result = await provider.collect(store);
   assert.deepEqual(result, {
     provider: "rsshub_x_timeline",
-    format_version: "rsshub-x-json-feed/2",
+    format_version: "rsshub-x-json-feed/3",
     collected: 2,
     unchanged: 0,
     records: 2,
@@ -208,14 +247,14 @@ test("RSSHub JSON Feed collection keeps exact status lineage, strips quoted text
   assert.ok(done.data.content.raw_payload_ref);
 
   const state = await store.readState("rsshub-x-timeline-provider");
-  assert.equal(state.schema_version, "rsshub-x-provider-state/3");
+  assert.equal(state.schema_version, "rsshub-x-provider-state/4");
   assert.equal(state.provider, "rsshub_x_timeline");
   assert.equal(state.last_success_at, "2026-07-28T06:00:00.000Z");
   assert.equal(state.last_error, null);
   assert.equal(state.context_status, "fresh");
   assert.equal(state.feeds.thsottiaux.item_count, 2);
   assert.equal(state.feeds.thsottiaux.quarantined_item_count, 0);
-  assert.equal(state.feeds.thsottiaux.format_version, "rsshub-x-json-feed/2");
+  assert.equal(state.feeds.thsottiaux.format_version, "rsshub-x-json-feed/3");
   assert.equal(
     state.feeds.thsottiaux.newest_status_id,
     "2081940052154933696",
@@ -309,6 +348,297 @@ test("RSSHub reply items preserve the exact parent relation and wrapper text", (
   );
 });
 
+test("RSSHub resolves an exact authority reply parent from a noisy conversation feed as context-only raw evidence", async (t) => {
+  const store = await temporaryStore(t, "reset-rsshub-x-reply-context-");
+  const childStatusId = "2086189414292865249";
+  const parentStatusId = "2086188425691140496";
+  const child = post({
+    id: childStatusId,
+    title: "Re @rxmphai I'll do another performative reset on Monday",
+    contentHtml: "Re @rxmphai I'll do another performative reset on Monday",
+    datePublished: "2026-08-08T20:34:50.000Z",
+    extra: {
+      links: [{
+        url: `https://x.com/rxmphai/status/${parentStatusId}`,
+        type: "reply",
+      }],
+    },
+  });
+  const parent = postBy({
+    username: "rxmphai",
+    name: "Rumph",
+    id: parentStatusId,
+    title: "This is just performative at this point. The weekly reset was yesterday",
+    contentHtml:
+      "This is just performative at this point. The weekly reset was yesterday" +
+      "<hr><div class=\"rsshub-quote\">Tibo: I have reset usage limits " +
+      "for all paid users of ChatGPT Work and Codex.</div>",
+    datePublished: "2026-08-08T20:30:54.000Z",
+    extra: {
+      links: [{
+        url: "https://x.com/thsottiaux/status/2086188036493344823",
+        type: "quote",
+        content_html:
+          "<div class=\"rsshub-quote\">Tibo: I have reset usage limits " +
+          "for all paid users of ChatGPT Work and Codex.</div>",
+      }],
+    },
+  });
+  const unrelated = postBy({
+    username: "Nalfur",
+    id: "2086368644229984274",
+    title: "Re @rxmphai This reset was more confusing than useful",
+    contentHtml: "Re @rxmphai This reset was more confusing than useful",
+    datePublished: "2026-08-09T08:27:02.000Z",
+    extra: {
+      links: [{
+        url: `https://x.com/rxmphai/status/${parentStatusId}`,
+        type: "reply",
+      }],
+    },
+  });
+  const wrongAuthorSameId = postBy({
+    username: "not_rxmphai",
+    id: parentStatusId,
+    title: "Malicious same-id wrapper",
+    contentHtml: "Malicious same-id wrapper",
+    datePublished: "2026-08-08T20:30:54.000Z",
+  });
+  const conversation = feedFor("rxmphai", [
+    unrelated,
+    wrongAuthorSameId,
+    parent,
+  ], {
+    homePageUrl: `https://x.com/rxmphai/status/${parentStatusId}`,
+  });
+  const calls = [];
+  const times = [
+    "2026-08-08T20:40:00.000Z",
+    "2026-08-08T20:40:01.000Z",
+    "2026-08-08T20:40:02.000Z",
+    "2026-08-08T20:40:03.000Z",
+    "2026-08-08T20:40:04.000Z",
+  ];
+  let timeIndex = 0;
+  const provider = new RsshubXProvider({
+    config: providerConfig(),
+    fetchFn: async (url) => {
+      calls.push(url.toString());
+      return url.pathname.includes("/twitter/tweet/")
+        ? conversationResponse(conversation)
+        : response(feed([child]));
+    },
+    now: () => new Date(times[Math.min(timeIndex++, times.length - 1)]),
+  });
+
+  const result = await provider.collect(store);
+  assert.equal(result.health.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[1],
+    `https://rss.example.test/twitter/tweet/rxmphai/status/${parentStatusId}?format=json`,
+  );
+
+  const observations = await store.all("raw_observation");
+  const context = observations.find((record) =>
+    record.data.ingest_provider === RSSHUB_X_REPLY_CONTEXT_PROVIDER_NAME
+  );
+  assert.ok(context);
+  assert.equal(context.data.provider_item_id, parentStatusId);
+  assert.equal(context.data.author.provider_author_id, "rxmphai");
+  assert.equal(context.data.author.identity_id, null);
+  assert.equal(context.data.content.media_type, RSSHUB_X_REPLY_CONTEXT_MEDIA_TYPE);
+  assert.match(context.data.content.text, /weekly reset was yesterday/);
+  assert.match(context.data.content.text, /ChatGPT Work and Codex/);
+  assert.doesNotMatch(context.data.content.text, /Malicious same-id wrapper/);
+  assert.deepEqual(context.data.selection_context, {
+    feature_eligible: false,
+    outcome_conditioned: false,
+    selection_method: "rsshub_x_authority_reply_parent_context/1",
+  });
+  assert.equal(context.data.first_seen_at, "2026-08-08T20:40:03.000Z");
+  assert.equal(context.data.fetched_at, "2026-08-08T20:40:03.000Z");
+  assert.equal(
+    context.data.source_timing.provider_observed_at,
+    "2026-08-08T20:40:03.000Z",
+  );
+  assert.deepEqual(context.data.native_relations, [{
+    type: "quotes",
+    provider_item_id: "2086188036493344823",
+    url: "https://x.com/thsottiaux/status/2086188036493344823",
+  }]);
+
+  const state = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(state.reply_contexts[childStatusId].status, "resolved");
+  assert.equal(state.reply_contexts[childStatusId].attempts, 1);
+  assert.equal(
+    state.reply_contexts[childStatusId].context_observation_ref.record_id,
+    context.record_id,
+  );
+  assert.equal(state.reply_context_resolution.max_per_collection, 4);
+
+  const runConfig = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+  });
+  await processRecords(store, runConfig, {
+    now: new Date("2026-08-09T10:46:00.000Z"),
+  });
+  const childObservation = observations.find((record) =>
+    record.data.provider_item_id === childStatusId
+  );
+  const signal = selectCurrentSignals(
+    await store.all("normalized_signal", { latestOnly: false }),
+  ).find((record) =>
+    record.data.observation_refs[0].record_id === childObservation.record_id
+  );
+  assert.ok(signal);
+  assert.equal(signal.data.claim.event_type, "quota_reset");
+  assert.equal(signal.data.claim.phase, "scheduled");
+  assert.equal(signal.data.claim.scope.product, "codex");
+  assert.equal(signal.data.claim.scope.population, "platform");
+  assert.deepEqual(signal.data.claim.asserted_time_range, {
+    start: "2026-08-10T00:00:00.000Z",
+    end: "2026-08-11T00:00:00.000Z",
+    boundary: "[start,end)",
+    precision: "day",
+    timezone_basis: "UTC",
+    original_text: "on Monday",
+  });
+  assert.equal(signal.data.provenance.derivation, "primary_statement");
+  assert.equal(signal.data.provenance.feature_eligible, true);
+  assert.equal(
+    signal.data.extraction.relevance.reason_code,
+    "authority_reply_reset_commitment",
+  );
+  assert.deepEqual(signal.data.extraction.relevance.context_refs, [{
+    record_id: context.record_id,
+    revision: context.revision,
+  }]);
+  assert.deepEqual(await store.all("reset_outcome"), []);
+});
+
+test("RSSHub does not resolve future-reset replies from a context identity", async (t) => {
+  const store = await temporaryStore(t, "reset-rsshub-x-non-authority-reply-");
+  const contextIdentity = {
+    username: "rxmphai",
+    identity_id: "person_rumph",
+    source_role: "community",
+  };
+  const parentStatusId = "2086188036493344823";
+  const contextReply = postBy({
+    username: contextIdentity.username,
+    id: "2086188425691140496",
+    title: "Re @thsottiaux I'll do another reset on Monday",
+    contentHtml: "Re @thsottiaux I'll do another reset on Monday",
+    datePublished: "2026-08-08T20:30:54.000Z",
+    extra: {
+      links: [{
+        url: `https://x.com/thsottiaux/status/${parentStatusId}`,
+        type: "reply",
+      }],
+    },
+  });
+  const tiboPost = post({
+    id: "2086189414292865249",
+    title: "A normal update",
+    contentHtml: "A normal update",
+    datePublished: "2026-08-08T20:34:50.000Z",
+  });
+  const calls = [];
+  await new RsshubXProvider({
+    config: providerConfig({ context_identities: [contextIdentity] }),
+    fetchFn: async (url) => {
+      calls.push(url.toString());
+      if (url.pathname.includes("/twitter/tweet/")) {
+        throw new Error("a context identity must not trigger parent fetch");
+      }
+      return url.pathname.includes("/twitter/user/rxmphai/")
+        ? response(feedFor("rxmphai", [contextReply]))
+        : response(feed([tiboPost]));
+    },
+    now: () => new Date("2026-08-08T20:40:00.000Z"),
+  }).collect(store);
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls.some((url) => url.includes("/twitter/tweet/")), false);
+  assert.equal(
+    (await store.all("raw_observation")).some((record) =>
+      record.data.ingest_provider === RSSHUB_X_REPLY_CONTEXT_PROVIDER_NAME
+    ),
+    false,
+  );
+});
+
+test("RSSHub reply-parent failures degrade independently, retry old children after 304, and stop after a finite limit", async (t) => {
+  const store = await temporaryStore(t, "reset-rsshub-x-reply-retry-");
+  const childStatusId = "2086189414292865249";
+  const parentStatusId = "2086188425691140496";
+  const child = post({
+    id: childStatusId,
+    title: "Re @rxmphai I’ll do another reset on Monday",
+    contentHtml: "Re @rxmphai I’ll do another reset on Monday",
+    datePublished: "2026-08-08T20:34:50.000Z",
+    extra: {
+      links: [{
+        url: `https://x.com/rxmphai/status/${parentStatusId}`,
+        type: "reply",
+      }],
+    },
+  });
+  let timelineRequests = 0;
+  let parentRequests = 0;
+  let nowOffsetSeconds = 0;
+  const provider = new RsshubXProvider({
+    config: providerConfig(),
+    fetchFn: async (url) => {
+      if (url.pathname.includes("/twitter/tweet/")) {
+        parentRequests += 1;
+        return new Response("temporary upstream failure", { status: 503 });
+      }
+      timelineRequests += 1;
+      if (timelineRequests === 1) return response(feed([child]));
+      return new Response(null, {
+        status: 304,
+        headers: { etag: "W/\"test-feed\"" },
+      });
+    },
+    now: () => new Date(
+      Date.parse("2026-08-08T20:40:00.000Z") + nowOffsetSeconds++ * 1_000,
+    ),
+  });
+
+  const first = await provider.collect(store);
+  assert.equal(first.health.ok, true, "parent failure must not fail the timeline");
+  let state = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(state.reply_contexts[childStatusId].status, "retryable");
+  assert.equal(state.reply_contexts[childStatusId].attempts, 1);
+  assert.equal(state.context_status, "degraded");
+  assert.match(state.last_context_error, /503/);
+  assert.match(state.last_warning, /failed without failing the timeline/);
+
+  await provider.collect(store);
+  state = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(state.reply_contexts[childStatusId].status, "retryable");
+  assert.equal(state.reply_contexts[childStatusId].attempts, 2);
+
+  await provider.collect(store);
+  state = await store.readState("rsshub-x-timeline-provider");
+  assert.equal(state.reply_contexts[childStatusId].status, "terminal");
+  assert.equal(state.reply_contexts[childStatusId].attempts, 3);
+  assert.equal(state.reply_context_resolution.terminal, 1);
+  assert.equal(state.context_status, "degraded");
+
+  await provider.collect(store);
+  assert.equal(parentRequests, 3, "terminal parents must not be retried forever");
+  assert.equal(timelineRequests, 4, "the primary feed remains healthy under 304s");
+  assert.equal(
+    (await store.all("raw_observation")).some((record) =>
+      record.data.ingest_provider === RSSHUB_X_REPLY_CONTEXT_PROVIDER_NAME
+    ),
+    false,
+  );
+});
+
 test("RSSHub collection quarantines one ambiguous relation without promoting it or failing the valid snapshot", async (t) => {
   const store = await temporaryStore(t, "reset-rsshub-x-quarantine-");
   const valid = post({
@@ -348,7 +678,7 @@ test("RSSHub collection quarantines one ambiguous relation without promoting it 
   const result = await provider.collect(store);
   assert.deepEqual(result, {
     provider: "rsshub_x_timeline",
-    format_version: "rsshub-x-json-feed/2",
+    format_version: "rsshub-x-json-feed/3",
     collected: 2,
     unchanged: 0,
     records: 2,

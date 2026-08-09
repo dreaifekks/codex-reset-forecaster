@@ -67,6 +67,12 @@ or activate authority timing. Only an adjudicated qualifying completion statemen
 can settle a positive outcome. The finite feed cannot prove absence, so RSSHub
 never provides outcome coverage or negative labels.
 
+For identities explicitly listed in the versioned authority-reply allowlist, the
+adapter may resolve one exact parent for a direct first-person future reset
+commitment. That parent can establish only Codex/platform scope; the child keeps
+its own primary evidence root and supplies the scheduled phase and asserted time.
+The parent and the scheduled child remain unable to confirm an outcome.
+
 For development-time outcome discovery, the historical-monitor adapter may import
 an external daily archive only after it verifies the configured author, exact
 source ID, and publication timestamp against the direct X representation. This is

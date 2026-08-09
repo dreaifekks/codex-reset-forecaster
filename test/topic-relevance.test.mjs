@@ -4,6 +4,9 @@ import {
   assessTopicRelevance,
   TOPIC_RELEVANCE_POLICY_VERSION,
 } from "../src/pipeline/topic-relevance.mjs";
+import {
+  authorityReplyCommitmentSegment,
+} from "../src/core/authority-reply.mjs";
 
 const relevantParent = {
   relation_type: "reply",
@@ -17,8 +20,135 @@ const relevantParent = {
 test("topic relevance policy exposes a stable version", () => {
   assert.equal(
     TOPIC_RELEVANCE_POLICY_VERSION,
-    "reset-topic-relevance/4",
+    "reset-topic-relevance/5",
   );
+});
+
+test("a configured authority reply commitment uses parent context for scope only", () => {
+  const text = "I'll do another performative reset on Monday";
+  const parentRef = {
+    record_id: "obs_parent_reset_context",
+    revision: 1,
+  };
+  const assessed = assessTopicRelevance({
+    text,
+    sourceRole: "product_lead",
+    authorityReplyCommitment: authorityReplyCommitmentSegment(text),
+    authorityReplyTargetProduct: "codex",
+    contexts: [{
+      relation_type: "reply",
+      text:
+        "This is just performative at this point. The weekly reset was yesterday.\n" +
+        "Tibo: I have reset usage limits for all paid users of ChatGPT Work and Codex.",
+      observation_ref: parentRef,
+      available_at: "2026-08-09T10:45:00.000Z",
+    }],
+  });
+
+  assert.deepEqual(assessed, {
+    decision: "relevant",
+    reason_code: "authority_reply_reset_commitment",
+    basis: "self",
+    matched_segments: [text],
+    context_refs: [parentRef],
+  });
+
+  for (const entry of [
+    {
+      name: "non-authority role",
+      sourceRole: "community",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "Codex usage limits were reset for all paid users.",
+    },
+    {
+      name: "unrelated parent",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "The weather was good yesterday.",
+    },
+    {
+      name: "personal parent",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "My Codex usage was reset yesterday.",
+    },
+    {
+      name: "narrow-plan parent",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "Codex usage limits were reset for Pro users.",
+    },
+    {
+      name: "other-product parent",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "ChatGPT Work usage limits were reset for all paid users.",
+    },
+    {
+      name: "region-qualified parent",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "Codex usage limits were reset for all users in the EU.",
+    },
+    {
+      name: "plan-qualified all-users parent",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment(text),
+      contextText: "Codex usage limits were reset for all users on Pro.",
+    },
+    {
+      name: "no own commitment",
+      sourceRole: "product_lead",
+      commitment: authorityReplyCommitmentSegment("Same here."),
+      contextText: "Codex usage limits were reset for all paid users.",
+    },
+  ]) {
+    const rejected = assessTopicRelevance({
+      text: entry.name === "no own commitment" ? "Same here." : text,
+      sourceRole: entry.sourceRole,
+      authorityReplyCommitment: entry.commitment,
+      authorityReplyTargetProduct: "codex",
+      contexts: [{
+        relation_type: "reply",
+        text: entry.contextText,
+        observation_ref: parentRef,
+        available_at: "2026-08-09T10:45:00.000Z",
+      }],
+    });
+    assert.notEqual(rejected.reason_code, "authority_reply_reset_commitment", entry.name);
+  }
+
+  for (const entry of [
+    {
+      name: "missing exact context ref",
+      context: {
+        relation_type: "reply",
+        text: "Codex usage limits were reset for all paid users.",
+        available_at: "2026-08-09T10:45:00.000Z",
+      },
+    },
+    {
+      name: "missing context availability",
+      context: {
+        relation_type: "reply",
+        text: "Codex usage limits were reset for all paid users.",
+        observation_ref: parentRef,
+      },
+    },
+  ]) {
+    const rejected = assessTopicRelevance({
+      text,
+      sourceRole: "product_lead",
+      authorityReplyCommitment: authorityReplyCommitmentSegment(text),
+      authorityReplyTargetProduct: "codex",
+      contexts: [entry.context],
+    });
+    assert.notEqual(
+      rejected.reason_code,
+      "authority_reply_reset_commitment",
+      entry.name,
+    );
+  }
 });
 
 test("real gateway false positives and reset requests are rejected", () => {

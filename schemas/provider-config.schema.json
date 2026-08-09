@@ -5,6 +5,7 @@
   "type": "object",
   "required": [
     "config_version",
+    "extractor",
     "outcome_definition",
     "target",
     "providers",
@@ -12,6 +13,7 @@
   ],
   "properties": {
     "config_version": { "type": "string", "minLength": 1 },
+    "extractor": { "$ref": "#/$defs/extractorPolicy" },
     "outcome_definition": { "$ref": "#/$defs/outcomeDefinition" },
     "target": { "$ref": "#/$defs/scope" },
     "providers": {
@@ -125,6 +127,9 @@
     "model": {
       "type": "object",
       "properties": {
+        "authority_timing": {
+          "$ref": "#/$defs/authorityTimingPolicy"
+        },
         "post_outcome_refractory": {
           "$ref": "#/$defs/postOutcomeRefractoryPolicy"
         },
@@ -141,6 +146,31 @@
     }
   },
   "$defs": {
+    "extractorPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "model_version",
+        "prompt_version",
+        "topic_relevance_policy_version",
+        "authority_reply_identity_ids"
+      ],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "model_version": { "type": "string", "minLength": 1 },
+        "prompt_version": { "type": "string", "minLength": 1 },
+        "topic_relevance_policy_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authority_reply_identity_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
     "xSearchGatewayProvider": {
       "type": "object",
       "additionalProperties": false,
@@ -265,6 +295,59 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 336
+        }
+      }
+    },
+    "authorityTimingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "enabled",
+        "reliability_basis",
+        "within_window_mass_basis",
+        "within_window_baseline_power",
+        "phase_reliability",
+        "eligible_source_roles",
+        "maximum_asserted_duration_hours"
+      ],
+      "properties": {
+        "version": {
+          "const": "authority-timing-first-event-mixture/2"
+        },
+        "enabled": { "type": "boolean" },
+        "reliability_basis": {
+          "const": "versioned_prior_non_exhaustive_statement_history"
+        },
+        "within_window_mass_basis": {
+          "const": "tempered_baseline_first_event_mass"
+        },
+        "within_window_baseline_power": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "phase_reliability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scheduled", "expected", "started"],
+          "properties": {
+            "scheduled": { "type": "number", "minimum": 0, "maximum": 1 },
+            "expected": { "type": "number", "minimum": 0, "maximum": 1 },
+            "started": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "eligible_source_roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["official", "product_lead", "product_team_member"]
+          }
+        },
+        "maximum_asserted_duration_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     },

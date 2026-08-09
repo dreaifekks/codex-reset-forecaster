@@ -9,6 +9,10 @@ import {
 import { canonicalXStatusUrl, xStatusIdentity } from "../providers/raw.mjs";
 import { MULTI_PRODUCT, UNKNOWN_PRODUCT } from "../core/product-scope.mjs";
 import {
+  authorityReplyCommitmentSegment,
+  isFirstPersonFutureResetReply,
+} from "../core/authority-reply.mjs";
+import {
   assessTopicRelevance,
   TOPIC_RELEVANCE_POLICY_VERSION,
 } from "./topic-relevance.mjs";
@@ -164,6 +168,42 @@ function policyAllowsAuthorityGenericScope({
   return productScope.product === "codex" ||
     productScope.products?.includes("codex") === true;
 }
+
+function configuredAuthorityReplyCommitment({
+  observation,
+  config,
+  text,
+  role,
+}) {
+  const outcomeDefinition = config.outcome_definition;
+  const identityId = observation.data.author.identity_id;
+  const replyIdentityIds = new Set(
+    config.extractor?.authority_reply_identity_ids ?? [],
+  );
+  const reply = observation.data.native_relations.filter((relation) =>
+    relation.type === "reply"
+  )[0];
+  if (
+    observation.data.content.media_type !== "text/plain" ||
+    outcomeDefinition?.event_semantics !==
+      "qualifying_authority_completion_statement" ||
+    outcomeDefinition?.scope_policy !== AUTHORITY_SCOPE_POLICY ||
+    !replyIdentityIds.has(identityId) ||
+    !new Set(outcomeDefinition.authority_identity_ids ?? []).has(identityId) ||
+    !confirmationIdentityIds(config).has(identityId) ||
+    !["official", "product_lead", "product_team_member"].includes(role) ||
+    observation.data.selection_context?.feature_eligible === false ||
+    !isFirstPersonFutureResetReply({
+      text,
+      nativeRelations: observation.data.native_relations,
+    }) ||
+    !(xStatusIdentity(reply?.provider_item_id) ?? xStatusIdentity(reply?.url))
+  ) {
+    return null;
+  }
+  return authorityReplyCommitmentSegment(text);
+}
+
 function sourceRole(observation, config) {
   if (observation.data.content.media_type === "application/vnd.x-search-summary+text") {
     return "aggregator";
@@ -461,7 +501,7 @@ function classifyPhase(text, eventType) {
 
 function resetTimingText(text) {
   const timingTerms =
-    /\b(?:next|within|over|in|later|tomorrow|tonight|evening|morning|minutes?|hours?|soon|incoming|in a bit)\b/i;
+    /\b(?:next|within|over|in|later|tomorrow|tonight|evening|morning|monday|tuesday|wednesday|thursday|friday|saturday|sunday|minutes?|hours?|soon|incoming|in a bit)\b/i;
   const timingActions =
     /\b(?:lands?|arriv(?:e|es|ing)|coming|showing|back|return(?:s|ed|ing)?|give us)\b/i;
   const segments = text
@@ -477,7 +517,9 @@ function resetTimingText(text) {
   return relevant.length > 0 ? relevant.join("\n") : text;
 }
 
-function assertedRange(text, publishedAt, phase) {
+function assertedRange(text, publishedAt, phase, {
+  allowNamedWeekday = false,
+} = {}) {
   if (!publishedAt) return null;
   const published = new Date(publishedAt);
   const timingText = resetTimingText(text);
@@ -551,6 +593,30 @@ function assertedRange(text, publishedAt, phase) {
         published.getUTCDate() + 1,
       ));
       return halfOpenRange(published, end, "part_of_day", "later today");
+    }
+    const namedWeekday = timingText.match(
+      /\bon\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+    );
+    if (allowNamedWeekday && namedWeekday) {
+      const weekdayByName = new Map([
+        ["sunday", 0],
+        ["monday", 1],
+        ["tuesday", 2],
+        ["wednesday", 3],
+        ["thursday", 4],
+        ["friday", 5],
+        ["saturday", 6],
+      ]);
+      const targetDay = weekdayByName.get(namedWeekday[1].toLowerCase());
+      const daysAhead = (targetDay - published.getUTCDay() + 7) % 7;
+      const dayStart = new Date(Date.UTC(
+        published.getUTCFullYear(),
+        published.getUTCMonth(),
+        published.getUTCDate() + daysAhead,
+      ));
+      const start = daysAhead === 0 ? published : dayStart;
+      const end = new Date(dayStart.getTime() + 24 * 60 * 60 * 1_000);
+      return halfOpenRange(start, end, "day", namedWeekday[0]);
     }
     if (/\b(?:reset incoming|in a bit)\b/i.test(timingText)) {
       return halfOpenRange(published, addHours(published, 6), "hour", "near-term intent");
@@ -746,19 +812,39 @@ export function extractSignal(observation, config, {
     );
   }
   const role = sourceRole(observation, config);
+  const authorityReplyCommitment = configuredAuthorityReplyCommitment({
+    observation,
+    config,
+    text,
+    role,
+  });
   const relevance = assessTopicRelevance({
     text,
     sourceRole: role,
     contexts,
     hasUnresolvedContext,
+    authorityReplyCommitment,
+    authorityReplyTargetProduct: config.target.product,
   });
-  const claimText = relevance.basis === "self"
-    ? text
-    : relevance.matched_segments.join("\n");
-  const eventType = classifyEvent(claimText);
+  const authorityReplyClaim =
+    relevance.reason_code === "authority_reply_reset_commitment";
+  const claimText = authorityReplyClaim
+    ? relevance.matched_segments.join("\n")
+    : relevance.basis === "self"
+      ? text
+      : relevance.matched_segments.join("\n");
+  const eventType = classifyEvent(claimText) ?? (
+    authorityReplyClaim
+      ? (/\brefill/i.test(claimText) ? "quota_refill" : "quota_reset")
+      : null
+  );
   if (!eventType) return null;
-  const phase = classifyPhase(claimText, eventType);
-  const productScope = classifyProductScope(claimText, config);
+  const phase = authorityReplyClaim
+    ? "scheduled"
+    : classifyPhase(claimText, eventType);
+  const productScope = authorityReplyClaim
+    ? { vendor: config.target.vendor, product: config.target.product }
+    : classifyProductScope(claimText, config);
   const impact = classifyImpact(claimText, eventType, role);
   const competitiveContext = classifyCompetitiveContext(claimText, eventType);
   let root = evidenceRootOverride ?? evidenceRoot(observation, role);
@@ -860,6 +946,7 @@ export function extractSignal(observation, config, {
           claimText,
           observation.data.published_at,
           phase,
+          { allowNamedWeekday: authorityReplyClaim },
         ),
         author_certainty: explicit ? "explicit" : phase === "expected" ? "probable" : "possible",
         impact,

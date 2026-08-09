@@ -24,6 +24,7 @@ import {
   featuresToArray,
 } from "../src/model/features.mjs";
 import { deriveProbabilitySlots } from "../src/model/forecast.mjs";
+import { modelContractHash } from "../src/model/contract.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
 import {
   isResetTimingSignalActiveAt,
@@ -36,6 +37,7 @@ function observation(config, {
   publishedAt,
   fetchedAt,
   mediaType = "text/plain",
+  nativeRelations = [],
 }) {
   return rawObservationFromItem({
     provider_item_id: id,
@@ -46,7 +48,7 @@ function observation(config, {
       identity_id: "person_tibo_sottiaux",
       display_handle: "@thsottiaux",
     },
-    native_relations: [],
+    native_relations: nativeRelations,
     content: {
       media_type: mediaType,
       text,
@@ -76,6 +78,34 @@ function hazards(start, count, hazard = 0.01) {
       interval80: [hazard / 2, hazard * 2],
     };
   });
+}
+
+function hazardsForMasses(start, masses) {
+  let remaining = 1;
+  return masses.map((mass, index) => {
+    const slotStart = new Date(Date.parse(start) + index * 3_600_000);
+    const hazard = mass / remaining;
+    remaining -= mass;
+    return {
+      start: slotStart.toISOString(),
+      end: new Date(slotStart.getTime() + 3_600_000).toISOString(),
+      hazard,
+      interval80: [hazard / 2, Math.min(1, hazard * 2)],
+    };
+  });
+}
+
+function firstMasses(entries) {
+  return deriveProbabilitySlots(entries).slots.map((slot) =>
+    slot.first_reset_probability
+  );
+}
+
+function assertClose(actual, expected, tolerance = 1e-10) {
+  assert.ok(
+    Math.abs(actual - expected) <= tolerance,
+    `expected ${actual} to be within ${tolerance} of ${expected}`,
+  );
 }
 
 test("exact Tibo timing contracts first-event mass into the asserted interval", async () => {
@@ -131,6 +161,190 @@ test("exact Tibo timing contracts first-event mass into the asserted interval", 
   assert.ok(
     conditioned.hazardEntries.every((entry) => entry.interval80 === null),
   );
+});
+
+test("tempered intraday allocation keeps complete-window baseline shape across a shorter scoring horizon", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "20796091579348869751",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:20:00Z",
+    fetchedAt: "2026-07-21T16:21:00Z",
+  });
+  const signal = extractSignal(source, config);
+  signal.data.claim.asserted_time_range = {
+    start: "2026-07-21T17:00:00.000Z",
+    end: "2026-07-21T21:00:00.000Z",
+    boundary: "[start,end)",
+  };
+  const completeEntries = hazardsForMasses(
+    "2026-07-21T17:00:00.000Z",
+    [0.1, 0.3, 0.05, 0.15],
+  );
+  const shortEntries = completeEntries.slice(0, 2);
+  const common = {
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-07-21T16:30:00.000Z",
+  };
+  const complete = conditionAuthorityTimingHazards({
+    ...common,
+    hazardEntries: completeEntries,
+  });
+  const short = conditionAuthorityTimingHazards({
+    ...common,
+    hazardEntries: shortEntries,
+    allocationHazardEntries: completeEntries,
+  });
+  const incompleteBasis = conditionAuthorityTimingHazards({
+    ...common,
+    hazardEntries: shortEntries,
+  });
+  const completeMass = firstMasses(complete.hazardEntries);
+  const shortMass = firstMasses(short.hazardEntries);
+  const recoveredAuthorityMass = completeMass.map((mass, index) =>
+    (mass - 0.2 * [0.1, 0.3, 0.05, 0.15][index]) / 0.8
+  );
+  const expectedAuthorityMass = [
+    0.21441271736383577,
+    0.3713737202630692,
+    0.15161268642060285,
+    0.26260087595249215,
+  ];
+
+  expectedAuthorityMass.forEach((expected, index) =>
+    assertClose(recoveredAuthorityMass[index], expected)
+  );
+  assert.ok(recoveredAuthorityMass[1] > recoveredAuthorityMass[0]);
+  assert.ok(recoveredAuthorityMass[0] > recoveredAuthorityMass[2]);
+  assertClose(shortMass[0], completeMass[0]);
+  assertClose(shortMass[1], completeMass[1]);
+  assertClose(
+    short.metadata.conditioned_horizon_probability,
+    completeMass[0] + completeMass[1],
+  );
+  assertClose(
+    complete.metadata.conditioned_horizon_probability,
+    0.92,
+  );
+  assertClose(
+    incompleteBasis.metadata.conditioned_horizon_probability,
+    0.48,
+  );
+  assert.equal(
+    complete.metadata.within_window_mass_basis,
+    "tempered_baseline_first_event_mass",
+  );
+  assert.equal(complete.metadata.within_window_baseline_power, 0.5);
+  assert.ok(
+    complete.hazardEntries.every((entry) =>
+      Number.isFinite(entry.hazard) &&
+      entry.hazard >= 0 &&
+      entry.hazard <= 1 &&
+      entry.interval80 === null
+    ),
+  );
+});
+
+test("tempered intraday allocation uses exposure-weighted fractional boundary slots", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "20796091579348869752",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:20:00Z",
+    fetchedAt: "2026-07-21T16:21:00Z",
+  });
+  const signal = extractSignal(source, config);
+  signal.data.claim.asserted_time_range = {
+    start: "2026-07-21T17:30:00.000Z",
+    end: "2026-07-21T19:00:00.000Z",
+    boundary: "[start,end)",
+  };
+  const baseEntries = hazardsForMasses(
+    "2026-07-21T17:00:00.000Z",
+    [0.1, 0.3, 0.05],
+  );
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: baseEntries,
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-07-21T16:30:00.000Z",
+  });
+  const mixedMass = firstMasses(conditioned.hazardEntries);
+  const recoveredAuthorityMass = mixedMass.map((mass, index) =>
+    (mass - 0.2 * [0.1, 0.3, 0.05][index]) / 0.8
+  );
+
+  assertClose(recoveredAuthorityMass[0], 0.22169829477897748);
+  assertClose(recoveredAuthorityMass[1], 0.7783017052210226);
+  assertClose(recoveredAuthorityMass[2], 0);
+  assertClose(conditioned.metadata.conditioned_horizon_probability, 0.89);
+});
+
+test("zero baseline mass falls back to duration-uniform authority allocation", async () => {
+  const config = await loadConfig();
+  const source = observation(config, {
+    id: "20796091579348869753",
+    text:
+      "We will reset Codex usage limits for all paid users in the next 2 hours.",
+    publishedAt: "2026-07-21T16:20:00Z",
+    fetchedAt: "2026-07-21T16:21:00Z",
+  });
+  const signal = extractSignal(source, config);
+  signal.data.claim.asserted_time_range = {
+    start: "2026-07-21T17:00:00.000Z",
+    end: "2026-07-21T19:00:00.000Z",
+    boundary: "[start,end)",
+  };
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: hazards("2026-07-21T17:00:00.000Z", 3, 0),
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-07-21T16:30:00.000Z",
+  });
+  const mass = firstMasses(conditioned.hazardEntries);
+
+  assertClose(mass[0], 0.4);
+  assertClose(mass[1], 0.4);
+  assertClose(mass[2], 0);
+  assertClose(conditioned.metadata.conditioned_horizon_probability, 0.8);
+  assert.ok(conditioned.hazardEntries.every((entry) =>
+    Number.isFinite(entry.hazard) && entry.hazard >= 0 && entry.hazard <= 1
+  ));
+});
+
+test("within-window baseline power is validated and bound into the model contract", async () => {
+  const uniform = await loadConfig({
+    overrides: {
+      model: { authority_timing: { within_window_baseline_power: 0 } },
+    },
+  });
+  const baseline = await loadConfig({
+    overrides: {
+      model: { authority_timing: { within_window_baseline_power: 1 } },
+    },
+  });
+  assert.notEqual(modelContractHash(uniform), modelContractHash(baseline));
+  for (const invalid of [-0.01, 1.01, Number.NaN, "0.5"]) {
+    await assert.rejects(
+      loadConfig({
+        overrides: {
+          model: {
+            authority_timing: { within_window_baseline_power: invalid },
+          },
+        },
+      }),
+      /supported first-event mixture policy/,
+    );
+  }
 });
 
 test("a later compatible completion consumes an old plan even outside its asserted window", async () => {
@@ -313,6 +527,93 @@ test("real Tibo mode aliases activate a three-hour scheduled authority window", 
   assert.ok(
     result.slots[3].first_reset_probability <
       base.slots[3].first_reset_probability,
+  );
+});
+
+test("Tibo's Monday reply conditions only after its parent scope context is available", async () => {
+  const config = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+  });
+  const parentId = "2086188425691140496";
+  const parentRef = {
+    record_id: "obs_parent_scope_context",
+    revision: 1,
+  };
+  const source = observation(config, {
+    id: "2086189414292865249",
+    text: "I'll do another performative reset on Monday",
+    publishedAt: "2026-08-08T20:34:50.549Z",
+    fetchedAt: "2026-08-08T20:40:08.351Z",
+    nativeRelations: [{
+      type: "reply",
+      provider_item_id: parentId,
+      url: `https://x.com/rxmphai/status/${parentId}`,
+    }],
+  });
+  const signal = extractSignal(source, config, {
+    contexts: [{
+      relation_type: "reply",
+      text:
+        "This is just performative at this point. The weekly reset was yesterday.\n" +
+        "Tibo: I have reset usage limits for all paid users of ChatGPT Work and Codex.",
+      observation_ref: parentRef,
+      available_at: "2026-08-09T10:45:00.000Z",
+    }],
+  });
+  assert.ok(signal);
+  assert.equal(signal.data.available_at, "2026-08-09T10:45:00.000Z");
+  assert.equal(signal.data.claim.phase, "scheduled");
+  assert.deepEqual(signal.data.claim.asserted_time_range, {
+    start: "2026-08-10T00:00:00.000Z",
+    end: "2026-08-11T00:00:00.000Z",
+    boundary: "[start,end)",
+    precision: "day",
+    timezone_basis: "UTC",
+    original_text: "on Monday",
+  });
+
+  const baseEntries = hazards("2026-08-09T11:00:00.000Z", 72);
+  const hidden = conditionAuthorityTimingHazards({
+    hazardEntries: baseEntries,
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-08-09T10:44:59.999Z",
+  });
+  assert.equal(hidden.metadata.applied, false);
+  assert.equal(hidden.hazardEntries, baseEntries);
+
+  const conditioned = conditionAuthorityTimingHazards({
+    hazardEntries: baseEntries,
+    signals: [signal],
+    observations: [source],
+    outcomes: [],
+    config,
+    knowledgeCutoff: "2026-08-09T10:45:00.000Z",
+  });
+  assert.equal(conditioned.metadata.applied, true);
+  assert.equal(conditioned.metadata.phase, "scheduled");
+  assert.equal(conditioned.metadata.signal_ref.record_id, signal.record_id);
+  assert.deepEqual(
+    conditioned.metadata.asserted_time_range,
+    signal.data.claim.asserted_time_range,
+  );
+
+  const base = deriveProbabilitySlots(baseEntries).slots;
+  const adjusted = deriveProbabilitySlots(conditioned.hazardEntries).slots;
+  const mondayMass = (slots) => slots
+    .filter((slot) =>
+      slot.start >= "2026-08-10T00:00:00.000Z" &&
+      slot.start < "2026-08-11T00:00:00.000Z"
+    )
+    .reduce((sum, slot) => sum + slot.first_reset_probability, 0);
+  assert.ok(mondayMass(adjusted) > mondayMass(base));
+  assert.ok(
+    adjusted.find((slot) => slot.start === "2026-08-11T00:00:00.000Z")
+      .first_reset_probability <
+      base.find((slot) => slot.start === "2026-08-11T00:00:00.000Z")
+        .first_reset_probability,
   );
 });
 

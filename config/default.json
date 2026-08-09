@@ -1,14 +1,15 @@
 {
-  "config_version": "provider-config/0.3.3",
+  "config_version": "provider-config/0.3.5",
   "taxonomy_version": "reset-taxonomy/0.3.1",
   "feature_schema_version": "reset-features/0.3.1",
   "deduplication_version": "reset-dedup/0.2.3",
   "timezone_database_version": "system",
   "extractor": {
     "model": "deterministic-rules",
-    "model_version": "0.3.2",
-    "prompt_version": "reset-extract/rules-0.3.2",
-    "topic_relevance_policy_version": "reset-topic-relevance/4"
+    "model_version": "0.3.3",
+    "prompt_version": "reset-extract/rules-0.3.3",
+    "topic_relevance_policy_version": "reset-topic-relevance/5",
+    "authority_reply_identity_ids": []
   },
   "outcome_definition": {
     "version": "actual-platform-reset/1",
@@ -173,9 +174,11 @@
       "nonzero_epsilon": 1e-12
     },
     "authority_timing": {
-      "version": "authority-timing-first-event-mixture/1",
+      "version": "authority-timing-first-event-mixture/2",
       "enabled": true,
       "reliability_basis": "versioned_prior_non_exhaustive_statement_history",
+      "within_window_mass_basis": "tempered_baseline_first_event_mass",
+      "within_window_baseline_power": 0.5,
       "phase_reliability": {
         "scheduled": 0.8,
         "expected": 0.55,

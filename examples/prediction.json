@@ -89,9 +89,11 @@
       "conditioned_horizon_probability": 0.3439
     },
     "authority_conditioning": {
-      "policy_version": "authority-timing-first-event-mixture/1",
+      "policy_version": "authority-timing-first-event-mixture/2",
       "applied": false,
       "reliability_basis": "versioned_prior_non_exhaustive_statement_history",
+      "within_window_mass_basis": "tempered_baseline_first_event_mass",
+      "within_window_baseline_power": 0.5,
       "phase": null,
       "prior_reliability": null,
       "signal_ref": null,

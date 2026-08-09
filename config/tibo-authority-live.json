@@ -1,4 +1,7 @@
 {
+  "extractor": {
+    "authority_reply_identity_ids": ["person_tibo_sottiaux"]
+  },
   "outcome_definition": {
     "version": "authority-announced-platform-reset/2",
     "event_semantics": "qualifying_authority_completion_statement",

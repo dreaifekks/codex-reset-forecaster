@@ -1,6 +1,10 @@
-export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/4";
+import { hasNarrowAuthorityResetScope } from "../core/authority-reply.mjs";
+
+export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/5";
 
 const TARGET_PRODUCT_TERMS = /\b(?:codex(?:er|ers)?|chatgpt\s+work)\b/i;
+const CODEX_PRODUCT_TERMS = /\bcodex(?:er|ers)?\b/i;
+const CHATGPT_WORK_PRODUCT_TERMS = /\bchatgpt\s+work\b/i;
 const ECOSYSTEM_PRODUCT_TERMS =
   /\b(?:anthropic|claude(?:\s+code)?|gemini|google\s+ai|xai|grok|deepseek|mistral)\b/i;
 const NAMED_PRODUCT_PATTERN = String.raw`(?:codex(?:er|ers)?|chatgpt\s+work|anthropic|claude(?:\s+code)?|gemini|google\s+ai|xai|grok|deepseek|mistral)`;
@@ -259,6 +263,48 @@ function operationalMatches(segments) {
     .filter(Boolean);
 }
 
+function targetProductTerms(targetProduct) {
+  if (targetProduct === "codex") return CODEX_PRODUCT_TERMS;
+  if (targetProduct === "chatgpt_work") return CHATGPT_WORK_PRODUCT_TERMS;
+  return null;
+}
+
+function validContextReference(context) {
+  const reference = contextReference(context);
+  return reference &&
+    typeof reference.record_id === "string" &&
+    reference.record_id.trim().length > 0 &&
+    Number.isInteger(reference.revision) &&
+    reference.revision >= 1;
+}
+
+function validContextAvailability(context) {
+  const availableAt = context?.available_at ?? null;
+  return typeof availableAt === "string" &&
+    Number.isFinite(Date.parse(availableAt));
+}
+
+function targetResetContextMatches(contexts, targetProduct) {
+  const targetTerms = targetProductTerms(targetProduct);
+  if (!targetTerms) return [];
+  return (Array.isArray(contexts) ? contexts : [])
+    .filter((context) =>
+      contextRelation(context) === "reply_parent" &&
+      validContextReference(context) &&
+      validContextAvailability(context)
+    )
+    .flatMap((context) =>
+      operationalMatches(splitSegments(contextText(context)))
+        .filter((match) =>
+          targetTerms.test(match.segment) &&
+          RESET_ACTION.test(match.segment) &&
+          PLATFORM_SCOPE_TERMS.test(match.segment) &&
+          !hasNarrowAuthorityResetScope(match.segment)
+        )
+        .map((match) => ({ context, match }))
+    );
+}
+
 function contextRelation(context) {
   const value = String(
     context?.relation_type ?? context?.relation ?? context?.type ?? "",
@@ -315,6 +361,8 @@ export function assessTopicRelevance({
   sourceRole = "unknown",
   contexts = [],
   hasUnresolvedContext = false,
+  authorityReplyCommitment = null,
+  authorityReplyTargetProduct = null,
 } = {}) {
   const segments = splitSegments(text);
   const selfMatches = operationalMatches(segments);
@@ -329,6 +377,25 @@ export function assessTopicRelevance({
   const selfTerminalReason = terminalReason(segments);
   if (selfTerminalReason) {
     return result("irrelevant", selfTerminalReason, "self");
+  }
+
+  const authorityReplyContext = targetResetContextMatches(
+    contexts,
+    authorityReplyTargetProduct,
+  );
+  if (
+    typeof authorityReplyCommitment === "string" &&
+    authorityReplyCommitment.trim().length > 0 &&
+    ["official", "product_lead", "product_team_member"].includes(sourceRole) &&
+    authorityReplyContext.length > 0
+  ) {
+    return result(
+      "relevant",
+      "authority_reply_reset_commitment",
+      "self",
+      [authorityReplyCommitment.trim()],
+      authorityReplyContext.map(({ context }) => contextReference(context)),
+    );
   }
 
   if (

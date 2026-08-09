@@ -132,6 +132,15 @@ non-primary `derivation: "reply"`; it cannot confirm an outcome or activate
 authority timing. If the parent is missing, the reply remains `pending_context`
 instead of inheriting meaning from a query or feed title.
 
+For an identity in the versioned authority-reply allowlist, the adapter may resolve one exact reply
+parent when the reply's own text contains a first-person future reset commitment.
+The parent is stored as feature-ineligible context and may establish only the
+Codex/platform subject. It cannot supply the reply's phase or asserted time, and
+it cannot become outcome evidence. A weekday such as `on Monday` is interpreted
+as that UTC calendar day's half-open range, clipped at publication time when the
+statement is made on that same weekday; the newly resolved context's actual fetch
+time remains the signal availability boundary.
+
 This is the exact positive-observation path, not an outcome-coverage path. A
 present exact completion statement may become outcome evidence only after the
 normal target/source/phase adjudication. Scheduled, expected, or started

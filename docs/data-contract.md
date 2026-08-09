@@ -137,8 +137,11 @@ multiplier that consumes the completed cycle's near-term expectation, then
 recovers monotonically to one. It is a prediction conditioner, never a negative
 training label. New predictions also record
 `authority_conditioning`: the versioned policy, exact signal revision and asserted
-range when applied, its explicitly prior-only reliability basis, and baseline
-versus conditioned horizon probability. `recurrence_anchor` points to the exact
+range when applied, its explicitly prior-only reliability basis, the configured
+within-window mass basis and baseline power, and baseline versus conditioned
+horizon probability. Policy `/2` retains historical intraday shape through a
+tempered complete-range first-event allocation instead of interpreting a
+day-level assertion as 24 equally likely hours. `recurrence_anchor` points to the exact
 latest confirmed outcome revision used to start the current next-reset cycle.
 Refractory conditioning runs before authority timing, so a genuinely new authority
 statement after completion can raise the forecast again.
@@ -292,11 +295,20 @@ parent root, and records `derivation: "reply"`. A context-only reply cannot conf
 an outcome or activate exact-authority conditioning even when its author is a
 configured authority.
 
+There is one versioned, fail-closed exception for identities explicitly listed in
+`extractor.authority_reply_identity_ids`. When such an identity makes exactly one
+direct first-person future reset commitment in a native reply, and the exact
+parent context establishes both the target product and platform-wide scope, the
+child remains `basis: "self"` with its own `primary_statement` root. The parent is
+only a scope and availability dependency: it cannot provide the child phase,
+asserted time, authority, or outcome semantics. This special claim is always
+scheduled and can never itself confirm a completed reset.
+
 The configured extractor contract binds `model`, `model_version`,
 `prompt_version`, topic-relevance policy version, and
 `semantic_policy_hash`. The semantic policy hash is computed from the normalized
 forecast target plus the provider-neutral identity, source-role,
-confirmation/context, and topic-relevance policies. Provider order and
+confirmation/context, authority-reply allowlist, and topic-relevance policies. Provider order and
 plan/region array order do not affect it. When any bound value changes,
 normalization reprocesses every stored raw-observation revision, not only the
 latest revision.

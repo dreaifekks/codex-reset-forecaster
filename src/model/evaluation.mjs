@@ -46,7 +46,10 @@ import {
   adequateCoverageAssertionsAsOf,
   coverageAssertionRevisions,
 } from "./coverage-as-of.mjs";
-import { conditionAuthorityTimingHazards } from "./authority-timing.mjs";
+import {
+  conditionAuthorityTimingHazards,
+  selectAuthorityTimingSignalAsOf,
+} from "./authority-timing.mjs";
 import {
   conditionPostOutcomeRefractoryHazards,
 } from "./post-outcome-refractory.mjs";
@@ -163,6 +166,7 @@ function calibration(rows) {
 
 function rollingPrediction(model, featureRows, {
   anchor,
+  authorityAllocation = null,
   signals,
   observations,
   outcomes,
@@ -191,8 +195,37 @@ function rollingPrediction(model, featureRows, {
     excludedSourceRecordIds,
     excludedIndependenceGroupIds,
   });
+  let allocationHazardEntries;
+  if (authorityAllocation !== null) {
+    const rawAllocationHazards = authorityAllocation.featureRows.map(
+      (row, index) => {
+        const start = addHours(
+          anchor,
+          authorityAllocation.startOffset + index,
+        );
+        return {
+          start: toUtcIso(start),
+          end: toUtcIso(addHours(start, 1)),
+          hazard: predictHazard(model, row).probability,
+          interval80: null,
+        };
+      },
+    );
+    allocationHazardEntries = conditionPostOutcomeRefractoryHazards({
+      hazardEntries: rawAllocationHazards,
+      signals,
+      observations,
+      outcomes,
+      config,
+      knowledgeCutoff: anchor,
+      asOfMode,
+      excludedSourceRecordIds,
+      excludedIndependenceGroupIds,
+    }).hazardEntries;
+  }
   const conditioned = conditionAuthorityTimingHazards({
     hazardEntries: refractory.hazardEntries,
+    allocationHazardEntries,
     signals,
     observations,
     outcomes,
@@ -210,6 +243,26 @@ function rollingPrediction(model, featureRows, {
     conditioning: conditioned.metadata,
     refractory: refractory.metadata,
   };
+}
+
+function authorityAllocationOffsets(signal, anchor) {
+  if (!signal?.data?.claim?.asserted_time_range) return null;
+  const hourMs = 3_600_000;
+  const anchorMs = Date.parse(anchor);
+  const rangeStart = Math.max(
+    anchorMs,
+    Date.parse(signal.data.claim.asserted_time_range.start),
+  );
+  const rangeEnd = Date.parse(signal.data.claim.asserted_time_range.end);
+  if (!(rangeEnd > rangeStart)) return null;
+  const startOffset = Math.max(
+    0,
+    Math.floor((rangeStart - anchorMs) / hourMs),
+  );
+  const endOffset = Math.ceil((rangeEnd - anchorMs) / hourMs);
+  return endOffset > startOffset
+    ? { startOffset, endOffset }
+    : null;
 }
 
 function sortByProbability(rows) {
@@ -1057,9 +1110,13 @@ export async function evaluateWalkForward(store, config, {
           assertion,
         );
       }
-      const featureRows = Array.from({ length: 4 }, (_, offset) => {
+      const featureRowsByOffset = new Map();
+      const featureRowAtOffset = (offset) => {
+        if (featureRowsByOffset.has(offset)) {
+          return featureRowsByOffset.get(offset);
+        }
         const target = addHours(anchor, offset);
-        return featuresToArray(featureVectorAt({
+        const row = featuresToArray(featureVectorAt({
           targetTime: target,
           knowledgeCutoff: anchor,
           signals,
@@ -1078,9 +1135,46 @@ export async function evaluateWalkForward(store, config, {
           asOfMode,
           coverageAsOfMode,
         }).features);
+        featureRowsByOffset.set(offset, row);
+        return row;
+      };
+      const featureRows = Array.from(
+        { length: 4 },
+        (_, offset) => featureRowAtOffset(offset),
+      );
+      const authoritySignal = selectAuthorityTimingSignalAsOf({
+        signals,
+        observations,
+        outcomes,
+        config,
+        knowledgeCutoff: anchor,
+        horizonStart: anchor,
+        asOfMode,
+        excludedSourceRecordIds: exclusions.recordIds,
+        excludedIndependenceGroupIds: exclusions.independenceGroupIds,
       });
+      const allocationOffsets = authorityAllocationOffsets(
+        authoritySignal,
+        anchor,
+      );
+      const authorityAllocation = allocationOffsets === null
+        ? null
+        : {
+            startOffset: allocationOffsets.startOffset,
+            featureRows: Array.from(
+              {
+                length:
+                  allocationOffsets.endOffset -
+                  allocationOffsets.startOffset,
+              },
+              (_, index) => featureRowAtOffset(
+                allocationOffsets.startOffset + index,
+              ),
+            ),
+          };
       const challengerPrediction = rollingPrediction(model, featureRows, {
         anchor,
+        authorityAllocation,
         signals,
         observations,
         outcomes,
@@ -1092,6 +1186,7 @@ export async function evaluateWalkForward(store, config, {
       const championPrediction = pairedChampionModel
         ? rollingPrediction(pairedChampionModel, featureRows, {
             anchor,
+            authorityAllocation,
             signals,
             observations,
             outcomes,
@@ -1111,6 +1206,7 @@ export async function evaluateWalkForward(store, config, {
         baseline_probability: baseline4h,
         features_hash: hashLabel({
           feature_rows: featureRows,
+          authority_allocation: authorityAllocation,
           post_outcome_refractory: {
             policy_version:
               challengerPrediction.refractory.policy_version,
@@ -1130,6 +1226,11 @@ export async function evaluateWalkForward(store, config, {
             policy_version:
               challengerPrediction.conditioning.policy_version,
             applied: challengerPrediction.conditioning.applied,
+            within_window_mass_basis:
+              challengerPrediction.conditioning.within_window_mass_basis,
+            within_window_baseline_power:
+              challengerPrediction.conditioning
+                .within_window_baseline_power,
             phase: challengerPrediction.conditioning.phase,
             prior_reliability:
               challengerPrediction.conditioning.prior_reliability,
