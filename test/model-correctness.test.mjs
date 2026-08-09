@@ -7,6 +7,7 @@ import {
   OUTCOME_LABEL_POLICY_VERSION,
 } from "../src/core/outcome-contract.mjs";
 import { hashLabel, sha256, stableStringify } from "../src/core/hash.mjs";
+import { addHours } from "../src/core/time.mjs";
 import {
   FEATURE_NAMES,
   featureVectorAt,
@@ -16,6 +17,7 @@ import {
 import { deriveProbabilitySlots, issueForecast } from "../src/model/forecast.mjs";
 import {
   baselineOutcomesAt,
+  buildIssuedEvaluationReportingView,
   evaluateIssuedForecasts,
   selectLatestPredictionPerWindow,
   verifyIssuedEvaluationArtifact,
@@ -899,6 +901,92 @@ test("as-issued metrics deduplicate a window to its latest pre-start issuance an
     summary.provenance.row_sample_hash,
     withoutAdditionalFutureCoverage.provenance.row_sample_hash,
   );
+});
+
+test("issued reporting view excludes earlier model releases and reranks the fixed policy", () => {
+  const row = ({ id, start, probability, label, modelVersion }) => ({
+    prediction_ref: { record_id: id, revision: 1 },
+    settlement_ref: { record_id: `settlement-${id}`, revision: 1 },
+    issued_at: start,
+    knowledge_cutoff: start,
+    window_start: start,
+    window_end: addHours(new Date(start), 4).toISOString(),
+    probability,
+    baseline_probability: 0.02,
+    label,
+    model_version: modelVersion,
+  });
+  const artifact = {
+    artifact_version: "reset-issued-evaluation-rows/0.1.0",
+    alert_policy: {
+      type: "fixed_top_n_per_calendar_week",
+      budget: 2,
+      tie_breaker: "probability_desc_then_window_start",
+    },
+    thresholds: {
+      minimum_event_window_recall: 0.8,
+      require_brier_skill_above: 0,
+      maximum_expected_calibration_error: 0.1,
+    },
+    duplicate_predictions_excluded_count: 0,
+    rows: [
+      row({
+        id: "old-release",
+        start: "2026-07-27T05:00:00.000Z",
+        probability: 0.99,
+        label: 0,
+        modelVersion: "reset-model/0.3.1-oldhash",
+      }),
+      row({
+        id: "current-negative",
+        start: "2026-07-27T00:00:00.000Z",
+        probability: 0.49,
+        label: 0,
+        modelVersion: "reset-model/0.3.2-fit-a",
+      }),
+      row({
+        id: "current-positive",
+        start: "2026-07-27T10:00:00.000Z",
+        probability: 0.4,
+        label: 1,
+        modelVersion: "reset-model/0.3.2-fit-b",
+      }),
+    ],
+    alerts: [],
+    events: [{
+      outcome_ref: { record_id: "outcome-current", revision: 1 },
+      occurred_time_range: {
+        start: "2026-07-27T12:00:00.000Z",
+        end: "2026-07-27T13:00:00.000Z",
+        precision: "hour",
+      },
+    }],
+  };
+
+  const view = buildIssuedEvaluationReportingView(artifact, {
+    sourceEvaluationArtifactHash: "sha256:source",
+  });
+  assert.equal(view.status, "available");
+  assert.equal(view.model_release, "reset-model/0.3.2");
+  assert.deepEqual(view.model_versions, [
+    "reset-model/0.3.2-fit-a",
+    "reset-model/0.3.2-fit-b",
+  ]);
+  assert.equal(view.metrics.evaluated_windows, 2);
+  assert.equal(view.metrics.evaluated_events, 1);
+  assert.equal(view.metrics.event_window_recall, 1);
+  assert.equal(view.metrics.false_probability_ge_0_5_windows, 0);
+  assert.equal(view.metrics.false_alerts_top_n_policy, 1);
+  assert.equal(view.false_alerts.policy_selected_episodes, 2);
+  assert.equal(view.false_alerts.policy_selected_non_event_episodes, 1);
+  assert.equal(view.events[0].hit, true);
+  assert.equal(view.audit_context.excluded_earlier_release_windows, 1);
+  assert.equal(view.source_evaluation_artifact_hash, "sha256:source");
+
+  const waiting = buildIssuedEvaluationReportingView(artifact, {
+    modelRelease: "reset-model/0.4.0",
+  });
+  assert.equal(waiting.status, "waiting_for_mature_rows");
 });
 
 test("issued baseline numerator uses the same covered maximum-age risk window as its denominator", () => {

@@ -9,8 +9,8 @@ completion statement from the configured Tibo identity; it is not a claim about
 every physical backend reset.
 
 The initial product is a website with current 4-hour, 24-hour, and seven-day
-heatmaps plus a historical forecast-evaluation page. Personal quota and voucher
-optimization is deferred.
+heatmaps plus a confirmed reset-history page. Model evaluation remains an internal
+promotion and audit surface. Personal quota and voucher optimization is deferred.
 
 The forecaster is provider-neutral. An existing reset watchdog can be referenced or
 wrapped as one provider, but its state or notification behavior is not the system of
@@ -371,3 +371,11 @@ compatibility gates; provisional use does not weaken those gates.
 - In the background: accumulate causal walk-forward and immutable as-issued
   evidence until the original validated gate is met.
 - Continuously: retain the last stable champion as the rollback target.
+
+The hourly slots are the forecast target resolution, not the serving-cache
+lifetime. Two successful 10-minute runs can use the same fitted model while
+producing different immutable predictions because their knowledge cutoffs differ.
+Serving clients therefore identify a forecast by its exact
+`record_id@revision`, never by model version alone. The snapshot keeps canonical
+RFC 3339 UTC slot boundaries; browser time-zone formatting is a presentation-only
+projection and does not create another forecast variant.

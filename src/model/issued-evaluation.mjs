@@ -31,6 +31,10 @@ import {
   adequateCoverageAssertionsAsOf,
   coverageAssertionRevisions,
 } from "./coverage-as-of.mjs";
+import {
+  MODEL_VERSION_PREFIX,
+  modelReleaseFromVersion,
+} from "./model-version.mjs";
 
 function mean(values) {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -145,6 +149,125 @@ export function selectLatestPredictionPerWindow(predictions) {
 const FROZEN_ISSUED_EVALUATION_VERSION =
   "reset-issued-evaluation-rows/0.1.0";
 
+function fixedPolicyAlerts(rows, budget) {
+  const alerts = [];
+  for (const weekRows of Map.groupBy(
+    rows,
+    (row) => weekKey(row.window_start),
+  ).values()) {
+    alerts.push(...[...weekRows]
+      .sort((left, right) =>
+        right.probability - left.probability ||
+        left.window_start.localeCompare(right.window_start)
+      )
+      .slice(0, Math.min(budget, weekRows.length)));
+  }
+  return alerts;
+}
+
+function fixedPolicyAlertEpisodeCounts(alerts) {
+  const episodes = [];
+  for (const row of [...alerts].sort((left, right) =>
+    left.window_start.localeCompare(right.window_start) ||
+    left.window_end.localeCompare(right.window_end)
+  )) {
+    const previous = episodes.at(-1);
+    if (
+      previous &&
+      Date.parse(row.window_start) < Date.parse(previous.end)
+    ) {
+      if (Date.parse(row.window_end) > Date.parse(previous.end)) {
+        previous.end = row.window_end;
+      }
+      previous.has_event ||= row.label === 1;
+      continue;
+    }
+    episodes.push({
+      start: row.window_start,
+      end: row.window_end,
+      has_event: row.label === 1,
+    });
+  }
+  return {
+    selected: episodes.length,
+    non_event: episodes.filter((episode) => !episode.has_event).length,
+  };
+}
+
+const ISSUED_EVENT_SCORE_FIELDS = [
+  "hit",
+  "settlement",
+  "useful_lead_hours",
+  "maximum_prior_probability",
+  "forecast_issued_at",
+  "ranked_window",
+  "policy_peak_window",
+  "model_version",
+  "prediction_refs",
+];
+
+function scoreIssuedEvent(event, rows, alerts) {
+  const eventStart = Date.parse(event.occurred_time_range?.start);
+  if (!Number.isFinite(eventStart)) {
+    throw new Error("Frozen issued event time is invalid");
+  }
+  const matchingRows = rows.filter((row) =>
+    Date.parse(row.window_start) < eventStart &&
+    overlaps(
+      row.window_start,
+      row.window_end,
+      event.occurred_time_range,
+    )
+  );
+  const matchingAlerts = alerts.filter((row) =>
+    Date.parse(row.window_start) < eventStart &&
+    overlaps(
+      row.window_start,
+      row.window_end,
+      event.occurred_time_range,
+    )
+  );
+  const highestPrior = [...matchingRows]
+    .sort((left, right) =>
+      right.probability - left.probability ||
+      left.window_start.localeCompare(right.window_start)
+    )[0] ?? null;
+  const policyPeak = [...alerts]
+    .filter((row) =>
+      weekKey(row.window_start) ===
+        weekKey(event.occurred_time_range.start) &&
+      Date.parse(row.window_start) < eventStart
+    )
+    .sort((left, right) =>
+      right.probability - left.probability ||
+      left.window_start.localeCompare(right.window_start)
+    )[0] ?? null;
+  return {
+    ...event,
+    hit: matchingAlerts.length > 0,
+    settlement: matchingAlerts.length > 0 ? "hit" : "miss",
+    useful_lead_hours: matchingAlerts.length === 0
+      ? null
+      : Math.max(...matchingAlerts.map((row) =>
+        (eventStart - Date.parse(row.window_start)) / 3_600_000
+      )),
+    maximum_prior_probability: highestPrior?.probability ?? 0,
+    forecast_issued_at: highestPrior?.issued_at ?? null,
+    ranked_window: highestPrior ? {
+      start: highestPrior.window_start,
+      end: highestPrior.window_end,
+      probability: highestPrior.probability,
+    } : null,
+    policy_peak_window: policyPeak ? {
+      start: policyPeak.window_start,
+      end: policyPeak.window_end,
+      probability: policyPeak.probability,
+    } : null,
+    model_version: highestPrior?.model_version ?? null,
+    prediction_refs: matchingRows.map((row) => row.prediction_ref),
+  };
+}
+
 export function recomputeFrozenIssuedEvaluationArtifact(artifact) {
   if (artifact?.artifact_version !== FROZEN_ISSUED_EVALUATION_VERSION) {
     throw new Error("Unsupported frozen issued evaluation artifact version");
@@ -161,89 +284,28 @@ export function recomputeFrozenIssuedEvaluationArtifact(artifact) {
   if (!Number.isInteger(budget) || budget < 1) {
     throw new Error("Frozen issued evaluation alert budget is invalid");
   }
-  const expectedAlerts = [];
-  for (const weekRows of Map.groupBy(
-    artifact.rows,
-    (row) => weekKey(row.window_start),
-  ).values()) {
-    expectedAlerts.push(...[...weekRows]
-      .sort((left, right) =>
-        right.probability - left.probability ||
-        left.window_start.localeCompare(right.window_start)
-      )
-      .slice(0, Math.min(budget, weekRows.length)));
-  }
+  const expectedAlerts = fixedPolicyAlerts(artifact.rows, budget);
   if (hashLabel(expectedAlerts) !== hashLabel(artifact.alerts)) {
     throw new Error("Frozen issued alerts do not match the fixed policy");
   }
   const events = artifact.events.map((event) => {
-    const eventStart = Date.parse(event.occurred_time_range?.start);
-    if (!Number.isFinite(eventStart)) {
-      throw new Error("Frozen issued event time is invalid");
-    }
-    const matchingRows = artifact.rows.filter((row) =>
-      Date.parse(row.window_start) < eventStart &&
-      overlaps(
-        row.window_start,
-        row.window_end,
-        event.occurred_time_range,
-      )
+    const expectedEvent = scoreIssuedEvent(
+      event,
+      artifact.rows,
+      artifact.alerts,
     );
-    const matchingAlerts = artifact.alerts.filter((row) =>
-      Date.parse(row.window_start) < eventStart &&
-      overlaps(
-        row.window_start,
-        row.window_end,
-        event.occurred_time_range,
-      )
+    const expected = Object.fromEntries(
+      ISSUED_EVENT_SCORE_FIELDS.map((key) => [key, expectedEvent[key] ?? null]),
     );
-    const highestPrior = [...matchingRows]
-      .sort((left, right) =>
-        right.probability - left.probability ||
-        left.window_start.localeCompare(right.window_start)
-      )[0] ?? null;
-    const policyPeak = [...artifact.alerts]
-      .filter((row) =>
-        weekKey(row.window_start) ===
-          weekKey(event.occurred_time_range.start) &&
-        Date.parse(row.window_start) < eventStart
-      )
-      .sort((left, right) =>
-        right.probability - left.probability ||
-        left.window_start.localeCompare(right.window_start)
-      )[0] ?? null;
-    const expected = {
-      hit: matchingAlerts.length > 0,
-      settlement: matchingAlerts.length > 0 ? "hit" : "miss",
-      useful_lead_hours: matchingAlerts.length === 0
-        ? null
-        : Math.max(...matchingAlerts.map((row) =>
-          (eventStart - Date.parse(row.window_start)) / 3_600_000
-        )),
-      maximum_prior_probability: highestPrior?.probability ?? 0,
-      forecast_issued_at: highestPrior?.issued_at ?? null,
-      ranked_window: highestPrior ? {
-        start: highestPrior.window_start,
-        end: highestPrior.window_end,
-        probability: highestPrior.probability,
-      } : null,
-      policy_peak_window: policyPeak ? {
-        start: policyPeak.window_start,
-        end: policyPeak.window_end,
-        probability: policyPeak.probability,
-      } : null,
-      model_version: highestPrior?.model_version ?? null,
-      prediction_refs: matchingRows.map((row) => row.prediction_ref),
-    };
     const actual = Object.fromEntries(
-      Object.keys(expected).map((key) => [key, event[key] ?? null]),
+      ISSUED_EVENT_SCORE_FIELDS.map((key) => [key, event[key] ?? null]),
     );
     if (hashLabel(actual) !== hashLabel(expected)) {
       throw new Error(
         "Frozen issued event does not match rows and fixed alerts",
       );
     }
-    return { ...event, ...expected };
+    return expectedEvent;
   });
   const rows = artifact.rows;
   const brier = mean(rows.map((row) => (row.probability - row.label) ** 2));
@@ -316,6 +378,75 @@ export function recomputeFrozenIssuedEvaluationArtifact(artifact) {
     events,
     gate,
     row_content_hash: hashLabel(rows),
+  };
+}
+
+export function buildIssuedEvaluationReportingView(artifact, {
+  modelRelease = MODEL_VERSION_PREFIX,
+  sourceEvaluationArtifactHash = null,
+} = {}) {
+  if (artifact?.artifact_version !== FROZEN_ISSUED_EVALUATION_VERSION) {
+    throw new Error("Unsupported frozen issued evaluation artifact version");
+  }
+  const budget = artifact.alert_policy?.budget;
+  if (!Number.isInteger(budget) || budget < 1) {
+    throw new Error("Frozen issued evaluation alert budget is invalid");
+  }
+  const rows = (artifact.rows ?? []).filter((row) =>
+    modelReleaseFromVersion(row.model_version) === modelRelease
+  );
+  if (rows.length === 0) {
+    return {
+      status: "waiting_for_mature_rows",
+      scope: "current_model_release",
+      model_release: modelRelease,
+      source_evaluation_artifact_hash: sourceEvaluationArtifactHash,
+    };
+  }
+  const alerts = fixedPolicyAlerts(rows, budget);
+  const eventSeeds = (artifact.events ?? []).filter((event) =>
+    rows.some((row) => overlaps(
+      row.window_start,
+      row.window_end,
+      event.occurred_time_range,
+    ))
+  );
+  const events = eventSeeds.map((event) =>
+    scoreIssuedEvent(event, rows, alerts)
+  );
+  const cohortArtifact = {
+    ...artifact,
+    duplicate_predictions_excluded_count: null,
+    rows,
+    alerts,
+    events,
+  };
+  const recomputed = recomputeFrozenIssuedEvaluationArtifact(cohortArtifact);
+  const alertEpisodes = fixedPolicyAlertEpisodeCounts(alerts);
+  return {
+    status: "available",
+    scope: "current_model_release",
+    model_release: modelRelease,
+    model_versions: [...new Set(rows.map((row) => row.model_version))].sort(),
+    source_evaluation_artifact_hash: sourceEvaluationArtifactHash,
+    metrics: recomputed.metrics,
+    calibration: recomputed.calibration,
+    events: recomputed.events,
+    false_alerts: {
+      probability_threshold: 0.5,
+      high_probability_non_event_windows:
+        recomputed.metrics.false_probability_ge_0_5_windows,
+      policy_selected_non_event_windows:
+        recomputed.metrics.false_alerts_top_n_policy,
+      policy_selected_episodes: alertEpisodes.selected,
+      policy_selected_non_event_episodes: alertEpisodes.non_event,
+    },
+    audit_context: {
+      all_history_evaluated_windows: artifact.rows.length,
+      all_history_evaluated_events: artifact.events.length,
+      excluded_earlier_release_windows: artifact.rows.length - rows.length,
+      excluded_earlier_release_events: artifact.events.length - events.length,
+    },
   };
 }
 

@@ -119,9 +119,11 @@ refits after it has real counterfactual support.
 Provider coverage, delay, and health remain in the feature snapshot's data-quality
 metadata but are excluded from the probability vector. They describe whether the
 forecast is trustworthy; they must not become a proxy label for whether a reset
-occurred. The renewal-periodic kernel and competitor context start at a zero prior
-and remain fixed at zero until both positive and negative support thresholds are
-met.
+occurred. Product surfaces must distinguish current source health, historical-label
+maturity delay, and sample sufficiency; no single feature-quality score represents
+overall data or service health. The renewal-periodic kernel and competitor context
+start at a zero prior and remain fixed at zero until both positive and negative
+support thresholds are met.
 
 Version `winsorized-zscore/1` standardizes each feature with the training mean and
 scale, then clips the standardized value to `[-3, 3]` in both optimization and
@@ -423,21 +425,40 @@ These are views of one forecast, not separate prediction targets. An hourly cell
 primary color value is its `first_reset_probability`; the current-anchor
 `rolling_4h_probability` is shown as the next-four-hour summary.
 
-## Historical evaluation product
+## Historical results product and internal evaluation
 
-The website evaluation page is computed from immutable as-issued predictions and
-later settled outcomes. It includes rolling Brier score and baseline skill,
-calibration, confirmed-event recall within the highest-ranked windows, false
-high-probability alerts, and useful lead time. An event-level table retains the
-forecast issue time, ranked window, actual occurrence interval, settlement, score,
-and model version.
+The public historical page reads the latest eligible `reset_outcome` revisions and
+shows only confirmed facts: occurrence interval and precision, official-source
+publication time, confirmed status, and the exact official source reference. It
+does not read evaluation artifacts and does not expose model accuracy, probability
+scores, calibration, alert policy results, lead time, model version, or gate state.
+Evaluation invalidation or insufficient samples therefore cannot suppress valid
+historical results.
 
-Before enough issued forecasts and confirmed events have matured, the page may
-show the separately labeled walk-forward promotion evaluation beside a provisional
-forecast. A walk-forward or verified archive reconstruction is never labeled
-`as_issued`, and live accuracy never substitutes a forecast recomputed with later
-evidence. Incomplete strict validation does not block provisional use; it keeps the
-model status provisional.
+The operator evaluation APIs remain computed from immutable as-issued predictions
+and later settled outcomes. They retain rolling Brier score and baseline skill,
+calibration, confirmed-event recall within the highest-ranked windows, false-alert
+diagnostics, useful lead time, and event-level scoring for model promotion,
+publication readiness, and audit. A walk-forward or verified archive reconstruction
+is never labeled `as_issued`, and live evaluation never substitutes a forecast
+recomputed with later evidence.
+
+A compatible `as_issued` evaluation below 1,008 windows or 20 eligible events is
+preliminary only. The operator API may add a non-canonical `reporting_view`
+projected from a successfully verified frozen issued-evaluation artifact. The view
+selects rows by the versioned current model release, recomputes the fixed Top-N
+policy, event settlements, calibration, and metrics within that cohort, and retains
+the source evaluation artifact hash. Earlier releases remain available in the
+unchanged top-level audit evaluation. Neither the public history page nor any
+readiness, promotion, or publication code may consume `reporting_view` as a gate.
+
+`false_alerts_top_n_policy` counts selected non-event windows under a fixed ranking
+budget and is not a probability-threshold claim.
+`false_probability_ge_0_5_windows` counts non-event windows at or above the explicit
+50% threshold. The legacy `false_high_probability_alerts` field remains frozen for
+artifact compatibility. The reporting view may additionally merge overlapping
+selected windows into alert episodes; this presentation-only count does not replace
+the frozen window metric.
 
 Validated status requires at least 1,008 evaluated hourly windows and 20 eligible
 events by default. A lower training `minimum_outcomes` remains useful for

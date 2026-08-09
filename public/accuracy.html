@@ -3,83 +3,56 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="description" content="Codex 重置预测的历史回放精度与校准结果。">
-    <title>历史精度 · Codex 重置预测</title>
+    <meta name="description" content="Codex 已确认重置结果的历史记录。">
+    <title>历史结果 · Codex 重置预测</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=forecast-lazy-1">
     <script
       defer
       src="https://vibecafe.ai/telemetry/v1.js"
       data-vc-product-id="cms37qho500000bl2g4vpcf9b"
       data-vc-auth-key="vc_web__qNoqm01G9r2-8F-e7i7NC7xD4WmbnNBhsvDYfg59mk"
     ></script>
-    <script src="/accuracy.js" type="module"></script>
+    <script src="/accuracy.js?v=history-results-2" type="module"></script>
   </head>
   <body>
     <header class="site-header">
       <div class="header-inner">
         <a class="brand" href="/"><img class="brand-icon" src="/favicon.svg" alt=""><span>Codex 重置预测</span><span class="beta-badge">实验版</span></a>
-        <nav aria-label="主导航"><a href="/">预测</a><a class="active" href="/accuracy">历史精度</a></nav>
+        <nav aria-label="主导航"><a href="/">预测</a><a class="active" href="/accuracy">历史结果</a></nav>
       </div>
     </header>
     <main class="page-shell">
       <section class="page-heading">
         <div>
-          <p class="eyebrow" id="evaluation-mode">按当时信息评估</p>
-          <h1>历史预测精度</h1>
-          <p class="lede" id="evaluation-description">每次回放只使用当时可见的信息。</p>
+          <p class="eyebrow">已确认记录</p>
+          <h1>历史结果</h1>
+          <p class="lede">这里只列出已经确认发生的 Codex 重置结果。</p>
         </div>
         <div class="heading-meta">
           <div class="timezone-display" id="timezone-display">时区 · —</div>
-          <div class="status-pill" id="gate-status" role="status" aria-live="polite"><span aria-hidden="true"></span>正在加载评估</div>
         </div>
       </section>
 
-      <section class="panel" id="evaluation-waiting-panel" hidden>
-        <div class="empty-state">
-          <strong>模型已训练，评估进行中</strong>
-          <p>积累足够样本后显示精度结果。</p>
+      <section class="panel table-panel">
+        <div class="panel-heading compact">
+          <div>
+            <p class="eyebrow">确认历史</p>
+            <h2>重置结果</h2>
+            <p class="section-description" id="result-count">正在加载已确认记录…</p>
+          </div>
         </div>
-      </section>
-
-      <section class="summary-grid metrics evaluation-results" aria-label="评估指标">
-        <article class="summary-card emphasis"><p>历史事件召回率</p><strong id="event-recall">—</strong><small>目标 ≥ 80%</small></article>
-        <article class="summary-card"><p>概率误差</p><strong id="brier-score">—</strong><small>越低越好</small></article>
-        <article class="summary-card"><p>相对基线</p><strong id="brier-skill">—</strong><small>越高越好</small></article>
-        <article class="summary-card"><p>提前量中位数</p><strong id="lead-time">—</strong><small>相对已确认结果</small></article>
-      </section>
-
-      <section class="lower-grid accuracy-grid evaluation-results">
-        <article class="panel">
-          <div class="panel-heading compact"><div><p class="eyebrow">可靠性</p><h2>校准曲线</h2></div></div>
-          <div class="chart-wrap"><svg id="calibration-chart" viewBox="0 0 360 360" role="img" aria-labelledby="calibration-title calibration-description"><title id="calibration-title">预测概率校准曲线</title><desc id="calibration-description">横轴是平均预测概率，纵轴是实际发生频率；圆点大小表示样本数。</desc></svg></div>
-          <p class="hint">虚线代表理想校准：预测 30% 的事件应约有 30% 实际发生。</p>
-        </article>
-        <article class="panel">
-          <div class="panel-heading compact"><div><p class="eyebrow">评估覆盖</p><h2>滚动回测范围</h2></div></div>
-          <dl class="metadata" id="evaluation-metadata">
-            <div><dt>回测轮次</dt><dd>—</dd></div>
-            <div><dt>评估事件数</dt><dd>—</dd></div>
-            <div><dt>误报窗口数</dt><dd>—</dd></div>
-            <div><dt>校准误差</dt><dd>—</dd></div>
-          </dl>
-        </article>
-      </section>
-
-      <section class="panel table-panel evaluation-results">
-        <div class="panel-heading compact"><div><p class="eyebrow">已确认历史</p><h2>事件结果</h2><p class="section-description" id="ranking-policy">正在加载统一的窗口预算定义…</p></div></div>
         <div class="table-scroll">
           <table>
-            <caption class="sr-only">按确认事件列出的发布或回测起点、事件前重叠窗口分数、结果和模型版本</caption>
-            <thead><tr><th>确认发生时间</th><th id="event-origin-heading">预测发布</th><th>事件前最高预测窗口</th><th>概率</th><th>结果</th><th>提前量</th><th>模型</th><th>来源</th></tr></thead>
-            <tbody id="event-table"><tr><td colspan="8">正在加载事件…</td></tr></tbody>
+            <caption class="sr-only">按发生时间列出的已确认 Codex 重置结果</caption>
+            <thead><tr><th>确认发生时间</th><th>状态</th><th>官方确认时间</th><th>来源</th></tr></thead>
+            <tbody id="result-table"><tr><td colspan="4">正在加载历史结果…</td></tr></tbody>
           </table>
         </div>
       </section>
-      <p class="disclaimer evaluation-results" id="accuracy-disclaimer">发布门槛：历史事件召回率至少 80%，且概率表现优于历史基线。</p>
     </main>
   </body>
 </html>

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -108,6 +110,62 @@ function observation(text = "Example", providerItemId = "1") {
   });
 }
 
+function featureSnapshot(naturalKey, marker = "feature") {
+  return createRecord({
+    recordType: "feature_snapshot",
+    naturalKey,
+    createdAt: "2026-01-01T00:00:00Z",
+    producer: producer("feature-test", "1"),
+    data: {
+      knowledge_cutoff: "2026-01-01T00:00:00Z",
+      config_hash: `sha256:${"a".repeat(64)}`,
+      feature_schema_version: "reset-features/test",
+      taxonomy_version: "reset-taxonomy/test",
+      deduplication_version: "reset-dedup/test",
+      timezone_database_version: "tzdb/test",
+      extractor_model: "deterministic-rules",
+      extractor_model_version: "test",
+      extractor_prompt_version: "reset-extract/test",
+      extractor_semantic_policy_hash: `sha256:${"b".repeat(64)}`,
+      target: {
+        start: "2026-01-01T00:00:00Z",
+        end: "2026-01-01T01:00:00Z",
+        base_slot: "PT1H",
+        display_horizon: "PT4H",
+      },
+      features: { marker },
+      data_quality: {
+        provider_coverage: 1,
+        outcome_sample_count: 1,
+        sample_sufficiency: 0.05,
+        out_of_distribution: true,
+        max_delay_seconds: 0,
+      },
+      source_record_refs: [],
+      coverage_assertion_refs: [],
+    },
+  });
+}
+
+function trackCanonicalReadStreams(filePath) {
+  const originalCreateReadStream = nodeFs.createReadStream;
+  const calls = [];
+  nodeFs.createReadStream = (...args) => {
+    if (path.resolve(String(args[0])) === path.resolve(filePath)) {
+      calls.push(args[1] ?? {});
+    }
+    return originalCreateReadStream(...args);
+  };
+  syncBuiltinESMExports();
+  return {
+    calls,
+    restore() {
+      nodeFs.createReadStream = originalCreateReadStream;
+      syncBuiltinESMExports();
+    },
+  };
+}
+
 test("evaluation evidence mode is provider-neutral and follows time provenance", () => {
   const live = observation();
   const archived = structuredClone(live);
@@ -186,6 +244,72 @@ test("JSONL store streams records whose lines cross file-read chunks", async (t)
   assert.equal((await store.all("raw_observation")).at(0).revision, 2);
 });
 
+test("JSONL store singleflights cold type loads and clears failed loads", async (t) => {
+  const store = await temporaryStore(t);
+  const original = observation("singleflight", "10");
+  await fs.writeFile(
+    store.recordPath("raw_observation"),
+    `${JSON.stringify(original)}\n`,
+    "utf8",
+  );
+
+  const tracker = trackCanonicalReadStreams(
+    store.recordPath("raw_observation"),
+  );
+  let concurrent;
+  try {
+    concurrent = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        store.all("raw_observation", { latestOnly: false })
+      ),
+    );
+  } finally {
+    tracker.restore();
+  }
+  assert.equal(tracker.calls.length, 1);
+  for (const records of concurrent.slice(1)) {
+    assert.strictEqual(records[0], concurrent[0][0]);
+  }
+
+  const brokenStore = await temporaryStore(t);
+  await fs.writeFile(
+    brokenStore.recordPath("raw_observation"),
+    "{broken-json\n",
+    "utf8",
+  );
+  const brokenTracker = trackCanonicalReadStreams(
+    brokenStore.recordPath("raw_observation"),
+  );
+  try {
+    const failed = await Promise.allSettled(
+      Array.from({ length: 8 }, () =>
+        brokenStore.all("raw_observation", { latestOnly: false })
+      ),
+    );
+    assert.deepEqual(
+      failed.map((result) => result.status),
+      Array(8).fill("rejected"),
+    );
+    for (const result of failed.slice(1)) {
+      assert.strictEqual(result.reason, failed[0].reason);
+    }
+    assert.equal(brokenTracker.calls.length, 1);
+
+    await fs.writeFile(
+      brokenStore.recordPath("raw_observation"),
+      `${JSON.stringify(original)}\n`,
+      "utf8",
+    );
+    assert.deepEqual(
+      await brokenStore.all("raw_observation", { latestOnly: false }),
+      [original],
+    );
+  } finally {
+    brokenTracker.restore();
+  }
+  assert.equal(brokenTracker.calls.length, 2);
+});
+
 test("JSONL store resolves exact refs without filling the full-record cache", async (t) => {
   const store = await temporaryStore(t);
   const first = observation("first", "11");
@@ -261,6 +385,278 @@ test("JSONL store reuses deterministic first revisions with a bounded scan", asy
   assert.equal(
     (await store.all("raw_observation", { latestOnly: false })).length,
     3,
+  );
+});
+
+test("JSONL store uses the feature snapshot exact index without a full scan", async (t) => {
+  const store = await temporaryStore(t);
+  const first = featureSnapshot("slot:1", "first");
+  const second = featureSnapshot("slot:2", "缓存🙂");
+  assert.deepEqual(
+    (await store.appendOrReuseMany([first, second])).map(
+      (result) => result.inserted,
+    ),
+    [true, true],
+  );
+
+  const indexPath = path.join(
+    store.indexesDir,
+    "feature_snapshot.exact.jsonl",
+  );
+  const checkpointPath = path.join(
+    store.indexesDir,
+    "feature_snapshot.exact.checkpoint.json",
+  );
+  const initialEntries = (await fs.readFile(indexPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(
+    initialEntries[1].offset,
+    Buffer.byteLength(`${JSON.stringify(first)}\n`),
+  );
+  const canonical = await fs.readFile(store.recordPath("feature_snapshot"));
+  for (const entry of initialEntries) {
+    const serialized = canonical
+      .subarray(entry.offset, entry.offset + entry.length - 1)
+      .toString("utf8");
+    const record = JSON.parse(serialized);
+    assert.equal(record.record_id, entry.record_id);
+    assert.equal(record.revision, entry.revision);
+  }
+
+  const restarted = await new JsonlStore(store.root).init();
+  const tracker = trackCanonicalReadStreams(
+    restarted.recordPath("feature_snapshot"),
+  );
+  try {
+    const selected = await restarted.allByRefs("feature_snapshot", [
+      recordRef(second),
+      { record_id: "feat_missing", revision: 1 },
+      recordRef(first),
+    ]);
+    assert.deepEqual(selected, [second, first]);
+
+    const regeneratedSecond = featureSnapshot("slot:2", "regenerated");
+    const third = featureSnapshot("slot:3", "third");
+    const reused = await restarted.appendOrReuseMany([
+      regeneratedSecond,
+      third,
+    ]);
+    assert.deepEqual(reused.map((result) => result.inserted), [false, true]);
+    assert.deepEqual(reused[0].record, second);
+    assert.deepEqual(reused[1].record, third);
+  } finally {
+    tracker.restore();
+  }
+  assert.deepEqual(tracker.calls, []);
+
+  const checkpoint = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+  assert.equal(
+    checkpoint.canonical_bytes,
+    (await fs.stat(store.recordPath("feature_snapshot"))).size,
+  );
+  assert.equal(checkpoint.exact_entry_count, 3);
+});
+
+test("JSONL store recovers a canonical feature tail ahead of its index", async (t) => {
+  const store = await temporaryStore(t);
+  const first = featureSnapshot("recovery:1", "first");
+  await store.appendOrReuseMany([first]);
+  const checkpointPath = path.join(
+    store.indexesDir,
+    "feature_snapshot.exact.checkpoint.json",
+  );
+  const before = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+
+  const second = featureSnapshot("recovery:2", "canonical-tail🙂");
+  const correction = createRecord({
+    recordType: "feature_snapshot",
+    naturalKey: "recovery:2",
+    createdAt: "2026-01-01T01:00:00Z",
+    revision: 2,
+    supersedes: recordRef(second),
+    producer: producer("feature-test", "1"),
+    data: {
+      ...second.data,
+      features: { marker: "corrected-canonical-tail" },
+    },
+  });
+  await fs.appendFile(
+    store.recordPath("feature_snapshot"),
+    `${JSON.stringify(second)}\n${JSON.stringify(correction)}\n`,
+    "utf8",
+  );
+  const canonicalSize = (await fs.stat(
+    store.recordPath("feature_snapshot"),
+  )).size;
+
+  const restarted = await new JsonlStore(store.root).init();
+  const tracker = trackCanonicalReadStreams(
+    restarted.recordPath("feature_snapshot"),
+  );
+  let reused;
+  try {
+    reused = await restarted.appendOrReuseMany([
+      featureSnapshot("recovery:2", "regenerated"),
+    ]);
+  } finally {
+    tracker.restore();
+  }
+  assert.equal(reused[0].inserted, false);
+  assert.deepEqual(reused[0].record, correction);
+  assert.equal(
+    (await fs.stat(store.recordPath("feature_snapshot"))).size,
+    canonicalSize,
+  );
+  assert.equal(tracker.calls.length, 1);
+  assert.equal(tracker.calls[0].start, before.canonical_bytes);
+  assert.equal(tracker.calls[0].end, canonicalSize - 1);
+
+  const after = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+  assert.equal(after.canonical_bytes, canonicalSize);
+  assert.equal(after.exact_entry_count, 3);
+  const verified = await new JsonlStore(store.root).init();
+  assert.deepEqual(
+    await verified.allByRefs("feature_snapshot", [
+      recordRef(second),
+      recordRef(correction),
+    ]),
+    [second, correction],
+  );
+});
+
+test("feature snapshot index authenticates its committed content before reuse", async (t) => {
+  const store = await temporaryStore(t);
+  const first = featureSnapshot("index-bitflip:1", "first");
+  const second = featureSnapshot("index-bitflip:2", "second");
+  await store.appendOrReuseMany([first, second]);
+
+  const canonicalPath = store.recordPath("feature_snapshot");
+  const canonicalBefore = await fs.readFile(canonicalPath, "utf8");
+  const indexPath = path.join(
+    store.indexesDir,
+    "feature_snapshot.exact.jsonl",
+  );
+  const lines = (await fs.readFile(indexPath, "utf8")).trimEnd().split("\n");
+  const corrupted = JSON.parse(lines[0]);
+  const finalCharacter = corrupted.record_id.at(-1);
+  corrupted.record_id = `${corrupted.record_id.slice(0, -1)}${
+    finalCharacter === "a" ? "b" : "a"
+  }`;
+  const corruptedLine = JSON.stringify(corrupted);
+  assert.equal(Buffer.byteLength(corruptedLine), Buffer.byteLength(lines[0]));
+  lines[0] = corruptedLine;
+  await fs.writeFile(indexPath, `${lines.join("\n")}\n`, "utf8");
+
+  const restarted = await new JsonlStore(store.root).init();
+  const reused = await restarted.appendOrReuseMany([
+    featureSnapshot("index-bitflip:1", "regenerated"),
+  ]);
+  assert.equal(reused[0].inserted, false);
+  assert.deepEqual(reused[0].record, first);
+  assert.equal(await fs.readFile(canonicalPath, "utf8"), canonicalBefore);
+
+  const rebuiltEntries = (await fs.readFile(indexPath, "utf8"))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(
+    rebuiltEntries.map((entry) => entry.record_id),
+    [first.record_id, second.record_id],
+  );
+  const checkpoint = JSON.parse(await fs.readFile(
+    path.join(store.indexesDir, "feature_snapshot.exact.checkpoint.json"),
+    "utf8",
+  ));
+  assert.match(checkpoint.index_chain_sha256, /^[a-f0-9]{64}$/);
+});
+
+test("feature snapshot index collapses legacy created_at-only exact duplicates", async (t) => {
+  const store = await temporaryStore(t);
+  const firstCanonical = featureSnapshot("legacy-concurrent:1", "same");
+  const laterDuplicate = structuredClone(firstCanonical);
+  laterDuplicate.created_at = "2026-01-01T01:00:00.000Z";
+  const canonicalPath = store.recordPath("feature_snapshot");
+  const canonicalBefore = `${JSON.stringify(firstCanonical)}\n${
+    JSON.stringify(laterDuplicate)
+  }\n`;
+  await fs.writeFile(canonicalPath, canonicalBefore, "utf8");
+
+  const restarted = await new JsonlStore(store.root).init();
+  const regenerated = structuredClone(firstCanonical);
+  regenerated.created_at = "2026-01-01T02:00:00.000Z";
+  const reused = await restarted.appendOrReuseMany([regenerated]);
+  assert.equal(reused[0].inserted, false);
+  assert.deepEqual(reused[0].record, firstCanonical);
+  assert.equal(await fs.readFile(canonicalPath, "utf8"), canonicalBefore);
+  assert.deepEqual(
+    await restarted.allByRefs("feature_snapshot", [recordRef(firstCanonical)]),
+    [firstCanonical],
+  );
+
+  const indexEntries = (await fs.readFile(
+    path.join(store.indexesDir, "feature_snapshot.exact.jsonl"),
+    "utf8",
+  ))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(indexEntries.length, 1);
+  assert.equal(indexEntries[0].offset, 0);
+  const checkpoint = JSON.parse(await fs.readFile(
+    path.join(store.indexesDir, "feature_snapshot.exact.checkpoint.json"),
+    "utf8",
+  ));
+  assert.equal(checkpoint.canonical_bytes, Buffer.byteLength(canonicalBefore));
+  assert.equal(checkpoint.exact_entry_count, 1);
+});
+
+test("feature snapshot index rejects material exact-ref conflicts", async (t) => {
+  const store = await temporaryStore(t);
+  const first = featureSnapshot("legacy-conflict:1", "first");
+  const conflicting = structuredClone(first);
+  conflicting.created_at = "2026-01-01T01:00:00.000Z";
+  conflicting.data.features.marker = "materially-different";
+  const canonicalPath = store.recordPath("feature_snapshot");
+  const canonicalBefore = `${JSON.stringify(first)}\n${JSON.stringify(
+    conflicting,
+  )}\n`;
+  await fs.writeFile(canonicalPath, canonicalBefore, "utf8");
+
+  const restarted = await new JsonlStore(store.root).init();
+  await assert.rejects(
+    () => restarted.allByRefs("feature_snapshot", [recordRef(first)]),
+    (error) => {
+      assert.equal(error.code, "INVALID_RECORD_INDEX");
+      assert.match(error.message, /Conflicting immutable indexed revision/);
+      return true;
+    },
+  );
+  assert.equal(await fs.readFile(canonicalPath, "utf8"), canonicalBefore);
+});
+
+test("feature snapshot index rejects new created_at-only duplicates after migration", async (t) => {
+  const store = await temporaryStore(t);
+  const first = featureSnapshot("post-index-concurrency:1", "same");
+  await store.appendOrReuseMany([first]);
+
+  const duplicate = structuredClone(first);
+  duplicate.created_at = "2026-01-01T01:00:00.000Z";
+  await fs.appendFile(
+    store.recordPath("feature_snapshot"),
+    `${JSON.stringify(duplicate)}\n`,
+    "utf8",
+  );
+
+  const restarted = await new JsonlStore(store.root).init();
+  await assert.rejects(
+    () => restarted.allByRefs("feature_snapshot", [recordRef(first)]),
+    (error) => {
+      assert.equal(error.code, "INVALID_RECORD_INDEX");
+      assert.match(error.message, /Conflicting immutable indexed revision/);
+      return true;
+    },
   );
 });
 
@@ -714,6 +1110,86 @@ test("hourly scheduler records success and does not overlap manual runs", async 
   assert.equal(state.last_error, null);
   assert.equal(state.current_run_started_at, null);
   assert.equal(state.last_timing.knowledge_cutoff, "2026-07-22T18:30:00.000Z");
+});
+
+test("scheduler final-state hooks run after success without becoming pipeline failures", async (t) => {
+  const store = await temporaryStore(t);
+  const callbacks = [];
+  const errors = [];
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-22T18:30:00.000Z"),
+    logger: { info() {}, error(message) { errors.push(message); } },
+    run: async () => ({
+      status: "completed",
+      training: {},
+      forecast: { prediction: { record_id: "pred_hook" } },
+      collection: {},
+      timing: { knowledge_cutoff: "2026-07-22T18:30:00.000Z" },
+    }),
+    afterState: async (context) => {
+      callbacks.push({ name: "afterState", context });
+      const persisted = await store.readState("runtime");
+      assert.equal(persisted.current_run_started_at, null);
+      assert.equal(persisted.last_prediction_id, "pred_hook");
+      throw new Error("snapshot warmup failed");
+    },
+    afterRun: async (context) => {
+      callbacks.push({ name: "afterRun", context });
+      const persisted = await store.readState("runtime");
+      assert.equal(persisted.last_status, "completed");
+    },
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  const state = await store.readState("runtime");
+  assert.equal(state.last_status, "completed");
+  assert.equal(state.last_error, null);
+  assert.deepEqual(callbacks.map((entry) => entry.name), [
+    "afterState",
+    "afterRun",
+  ]);
+  assert.ok(callbacks.every((entry) => entry.context.status === "success"));
+  assert.ok(errors.some((message) =>
+    message.includes("afterState callback failed: Error: snapshot warmup failed")
+  ));
+  assert.ok(!errors.some((message) =>
+    message.includes("forecast pipeline failed")
+  ));
+});
+
+test("scheduler final-state hooks observe persisted pipeline failures", async (t) => {
+  const store = await temporaryStore(t);
+  const callbacks = [];
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: false, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-22T18:30:00.000Z"),
+    logger: { info() {}, error() {} },
+    run: async () => {
+      throw new Error("pipeline test failure");
+    },
+    afterState: async (context) => {
+      callbacks.push(context);
+      const persisted = await store.readState("runtime");
+      assert.equal(persisted.current_run_started_at, null);
+      assert.equal(persisted.last_status, "error");
+      assert.equal(persisted.last_error, "pipeline test failure");
+    },
+  });
+  t.after(() => scheduler.stop());
+
+  await scheduler.runNow();
+  assert.equal(callbacks.length, 1);
+  assert.equal(callbacks[0].status, "failure");
+  assert.equal(callbacks[0].pipeline_status, "error");
+  assert.equal(callbacks[0].error.message, "pipeline test failure");
 });
 
 test("scheduler can refresh collection and forecasts on ten-minute boundaries", async (t) => {

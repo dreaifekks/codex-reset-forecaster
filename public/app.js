@@ -290,14 +290,6 @@ function intervalText(interval) {
     : "大致范围（80%）：暂无";
 }
 
-function coverageFreshnessTier(value) {
-  if (!Number.isFinite(value)) return "不可用";
-  if (value >= 0.99) return "新鲜";
-  if (value >= 0.79) return "轻微延迟";
-  if (value >= 0.39) return "陈旧";
-  return "严重缺失";
-}
-
 function levelForProbability(probability, maximum) {
   if (probability <= 0 || maximum <= 0) return 0;
   const relative = probability / maximum;
@@ -940,10 +932,10 @@ function isCoreEvidence(item) {
     /\b(?:codex|chatgpt(?:\s+work)?)\b/i.test(item.source?.text ?? "");
 }
 
-async function fetchJson(url, { timeoutMs = null } = {}) {
+async function fetchJson(url, { timeoutMs = null, cache = "no-store" } = {}) {
   try {
     const response = await fetch(url, {
-      cache: "no-store",
+      cache,
       ...(Number.isFinite(timeoutMs) && timeoutMs > 0
         ? { signal: AbortSignal.timeout(timeoutMs) }
         : {}),
@@ -1009,6 +1001,7 @@ function forecastErrorText(result, readiness = {}) {
     forecast_not_publishable: "当前数据还不支持发布预测。",
     forecast_stale: "预测已过期，等待更新。",
     forecast_not_ready: "预测尚未生成。",
+    forecast_warming: "预测数据正在预热。",
   };
   if (result.status === 0) return "暂时无法连接预测服务。";
   return labels[result.data?.error] ?? "预测暂不可用，请稍后再试。";
@@ -1080,15 +1073,17 @@ function renderForecast(forecast) {
     "未来 72 小时内发生重置的可能性";
   document.querySelector("#interval-7d").textContent =
     intervalText(cumulativeInterval(forecast, "horizon"));
-  document.querySelector("#data-quality").textContent =
-    percent(forecast.data.data_quality?.score, 0);
-  const coverageFreshness = forecast.data.data_quality?.provider_coverage;
+  document.querySelector("#data-quality").textContent = "实时来源检查中";
   const outcomeSampleCount = forecast.data.data_quality?.outcome_sample_count;
   const sampleSufficiency = forecast.data.data_quality?.sample_sufficiency;
   document.querySelector("#coverage").textContent =
-    `覆盖时效：${coverageFreshnessTier(coverageFreshness)}` +
-    `${Number.isInteger(outcomeSampleCount) ? ` · 历史事件：${outcomeSampleCount} 个` : ""}` +
-    ` · 样本充分度：${percent(sampleSufficiency, 0)}`;
+    [
+      Number.isInteger(outcomeSampleCount) ? `历史事件：${outcomeSampleCount} 个` : null,
+      Number.isFinite(sampleSufficiency)
+        ? `样本充分度：${percent(sampleSufficiency, 0)}`
+        : null,
+      "负标签按审计延迟成熟",
+    ].filter(Boolean).join(" · ");
   document.querySelector("#forecast-window").textContent =
     `${formatTime(slots[0].start)} → ${formatTime(slots.at(-1).end)}`;
   const conditioning = forecast.data.authority_conditioning;
@@ -1195,6 +1190,34 @@ function renderPublicationWarning(forecastResult, readinessResult) {
     : `预测尚未达到发布条件：${label}。`;
 }
 
+function renderDataStatus(forecast, health, readiness) {
+  if (!forecast?.data?.data_quality) return;
+  const groups = health.provider_freshness ?? readiness.provider_freshness?.groups ?? {};
+  const sourcesFresh = Boolean(
+    groups.required_outcome &&
+    groups.exact &&
+    groups.required_outcome.status === "fresh" &&
+    groups.exact.status === "fresh",
+  );
+  const quality = forecast.data.data_quality;
+  const outcomeSampleCount = Number.isInteger(quality.outcome_sample_count)
+    ? quality.outcome_sample_count
+    : readiness.canonical_records?.confirmed_outcomes;
+  const sampleSufficiency = quality.sample_sufficiency;
+  document.querySelector("#data-quality-label").textContent =
+    isProvisionalServing(forecast, readiness) ? "数据状态 · 试用模型" : "数据状态";
+  document.querySelector("#data-quality").textContent = sourcesFresh
+    ? "实时来源正常"
+    : "实时来源待更新";
+  document.querySelector("#coverage").textContent = [
+    Number.isInteger(outcomeSampleCount) ? `历史事件：${outcomeSampleCount} 个` : null,
+    Number.isFinite(sampleSufficiency)
+      ? `样本充分度：${percent(sampleSufficiency, 0)}`
+      : null,
+    "负标签按审计延迟成熟",
+  ].filter(Boolean).join(" · ");
+}
+
 function renderHealth(forecastResult, healthResult, readinessResult) {
   const health = healthResult.data ?? {};
   const readiness = readinessResult.data ?? {};
@@ -1259,6 +1282,7 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
         : `预测生成于 ${formatCompactTime(forecast.data.issued_at)}`,
     );
   }
+  renderDataStatus(forecast, health, readiness);
 }
 
 function renderEvidenceResponse(result) {
@@ -1290,12 +1314,16 @@ function renderEvidenceResponse(result) {
 }
 
 let refreshTimer = null;
-let evidenceRefreshTimer = null;
 let evidenceRequest = null;
 let lastEvidenceSignature = null;
 let loading = false;
 let lastLoadedAt = 0;
 let latestForecastCutoff = null;
+let cachedForecast = null;
+let cachedForecastKey = null;
+let forecastRequest = null;
+let evidenceVisible = false;
+let evidenceLoadedForKey = null;
 
 function evidenceSignature(result) {
   return result.ok && result.data
@@ -1303,53 +1331,146 @@ function evidenceSignature(result) {
     : `error:${result.status}:${result.error ?? "unknown"}`;
 }
 
-function scheduleEvidenceRefresh() {
-  if (evidenceRefreshTimer) clearTimeout(evidenceRefreshTimer);
-  evidenceRefreshTimer = null;
-  if (
-    document.visibilityState !== "visible" ||
-    navigator.onLine === false
-  ) return;
-  evidenceRefreshTimer = setTimeout(() => {
-    void loadEvidence();
-  }, 2 * 60_000);
+function predictionRefKey(reference) {
+  return typeof reference?.record_id === "string" &&
+      Number.isInteger(reference?.revision)
+    ? `${reference.record_id}@${reference.revision}`
+    : null;
+}
+
+function safeSnapshotUrl(reference) {
+  if (typeof reference?.snapshot_url !== "string") return null;
+  try {
+    const url = new URL(reference.snapshot_url, window.location.origin);
+    if (
+      url.origin !== window.location.origin ||
+      !url.pathname.startsWith("/api/forecast/snapshots/")
+    ) return null;
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return null;
+  }
+}
+
+async function loadForecastSnapshot(reference) {
+  const key = predictionRefKey(reference);
+  const url = safeSnapshotUrl(reference);
+  if (!key || !url) {
+    return { ok: false, status: 0, data: null, error: "当前预测快照地址无效" };
+  }
+  if (cachedForecastKey === key && cachedForecast) {
+    return { ok: true, status: 200, data: cachedForecast, error: null };
+  }
+  if (forecastRequest?.key === key) return forecastRequest.promise;
+  const promise = (async () => {
+    const result = await fetchJson(url, {
+      timeoutMs: 15_000,
+      cache: "default",
+    });
+    if (!result.ok || !result.data) return result;
+    if (
+      result.data.record_type !== "prediction" ||
+      predictionRefKey(result.data) !== key
+    ) {
+      return {
+        ok: false,
+        status: result.status,
+        data: null,
+        error: "预测快照与当前版本不一致",
+      };
+    }
+    cachedForecast = result.data;
+    cachedForecastKey = key;
+    return result;
+  })();
+  forecastRequest = { key, promise };
+  try {
+    return await promise;
+  } finally {
+    if (forecastRequest?.promise === promise) forecastRequest = null;
+  }
+}
+
+function forecastWithServing(snapshot, health) {
+  const provisional = health.serving_stage === "provisional";
+  const synthetic = health.synthetic_only === true;
+  return {
+    ...snapshot,
+    serving: {
+      ...(snapshot.serving ?? {}),
+      status: provisional
+        ? "provisional"
+        : synthetic
+          ? "synthetic_demo"
+          : health.forecast?.status ?? "fresh",
+      ready: health.serving_ready === true || synthetic,
+      serving_ready: health.serving_ready === true || synthetic,
+      stage: health.serving_stage,
+      serving_stage: health.serving_stage,
+      blockers: health.serving_blockers ?? [],
+      serving_blockers: health.serving_blockers ?? [],
+      publication_ready: health.publication_ready === true,
+      publication_blockers: health.publication_blockers ?? [],
+      provisional_model: health.provisional_model ?? null,
+      synthetic_demo: synthetic,
+    },
+  };
 }
 
 async function loadEvidence() {
+  if (!evidenceVisible || !cachedForecastKey) return null;
+  if (evidenceLoadedForKey === cachedForecastKey) return null;
   if (evidenceRequest) return evidenceRequest;
+  const requestedKey = cachedForecastKey;
+  const requestedCutoff = latestForecastCutoff;
   evidenceRequest = (async () => {
     const result = await fetchJson("/api/evidence/recent", {
       timeoutMs: 20_000,
     });
     const signature = evidenceSignature(result);
-    if (signature !== lastEvidenceSignature) {
+    const responseCutoff = result.data?.knowledge_cutoff ?? null;
+    const cutoffsMatch = Number.isFinite(Date.parse(requestedCutoff)) &&
+      Number.isFinite(Date.parse(responseCutoff)) &&
+      requestedCutoff === responseCutoff;
+    const stillCurrent = requestedKey === cachedForecastKey &&
+      cutoffsMatch;
+    if (stillCurrent && signature !== lastEvidenceSignature) {
       lastEvidenceSignature = signature;
       renderEvidenceResponse(result);
     }
+    if (stillCurrent && result.ok) evidenceLoadedForKey = requestedKey;
     return result;
   })();
   try {
     return await evidenceRequest;
   } finally {
     evidenceRequest = null;
-    scheduleEvidenceRefresh();
+    if (
+      evidenceVisible &&
+      requestedKey !== cachedForecastKey &&
+      evidenceLoadedForKey !== cachedForecastKey
+    ) {
+      void loadEvidence();
+    }
   }
 }
 
-function scheduleCadenceRefresh() {
+function scheduleCadenceRefresh({ retrySoon = false } = {}) {
   if (refreshTimer) clearTimeout(refreshTimer);
-  const current = new Date();
-  const currentCadence = new Date(current);
-  currentCadence.setMinutes(
-    Math.floor(current.getMinutes() / 10) * 10,
-    0,
-    0,
-  );
+  if (retrySoon) {
+    refreshTimer = setTimeout(() => {
+      void load();
+    }, 30_000);
+    return;
+  }
+  const currentMs = Date.now();
+  const cadenceMs = 10 * 60_000;
+  const currentCadenceMs = Math.floor(currentMs / cadenceMs) * cadenceMs;
   const cutoffMs = Date.parse(latestForecastCutoff);
   const waitingForCurrentCadence = (
-    current.getTime() - currentCadence.getTime() < 2 * 60_000 &&
+    currentMs - currentCadenceMs < 2 * 60_000 &&
     Number.isFinite(cutoffMs) &&
-    cutoffMs < currentCadence.getTime()
+    cutoffMs < currentCadenceMs
   );
   if (waitingForCurrentCadence) {
     refreshTimer = setTimeout(() => {
@@ -1357,93 +1478,101 @@ function scheduleCadenceRefresh() {
     }, 45_000);
     return;
   }
-  const next = new Date(current);
-  next.setMinutes(
-    Math.floor(current.getMinutes() / 10) * 10 + 10,
-    12,
-    0,
-  );
+  const nextCadenceMs = currentCadenceMs + cadenceMs + 12_000;
   refreshTimer = setTimeout(() => {
     void load();
-  }, Math.max(1_000, next.getTime() - current.getTime()));
+  }, Math.max(1_000, nextCadenceMs - currentMs));
 }
 
 async function load() {
   if (loading) return;
   loading = true;
+  let retrySoon = false;
   document.querySelector("#timezone-display").textContent = `时区 · ${displayZone}`;
-  let readinessResult = { ok: true, status: 200, data: {} };
-  const evidencePromise = loadEvidence();
+  let healthResult = { ok: false, status: 0, data: null, error: "尚未检查状态" };
   try {
-    const forecastResult = await fetchJson("/api/forecast/current");
-    const forecastCutoff = forecastResult.data?.data?.knowledge_cutoff ??
-      forecastResult.data?.saved_prediction_ref?.knowledge_cutoff;
-    if (Number.isFinite(Date.parse(forecastCutoff))) {
-      latestForecastCutoff = forecastCutoff;
-    }
-    const servingStatus = forecastResult.data?.serving?.status;
-    const forecastAvailable = (
-      forecastResult.ok &&
-      forecastResult.data?.data &&
-      !["stale", "invalid"].includes(servingStatus)
-    );
-    if (forecastAvailable) {
-      renderForecast(forecastResult.data);
-      renderPublicationWarning(forecastResult, readinessResult);
-      setStatus(
-        "warning",
-        isProvisionalServing(forecastResult.data)
-          ? "试用模型 · 严格验证积累中"
-          : "预测已加载 · 状态检查中",
-      );
-    } else {
-      readinessResult = await fetchJson("/api/readiness");
+    healthResult = await fetchJson("/api/health", { timeoutMs: 15_000 });
+    const health = healthResult.data ?? {};
+    const reference = health.current_prediction_ref;
+    const forecastCutoff = reference?.knowledge_cutoff ?? health.knowledge_cutoff;
+    if (Number.isFinite(Date.parse(forecastCutoff))) latestForecastCutoff = forecastCutoff;
+    const canServe = healthResult.ok &&
+      (health.serving_ready === true || health.synthetic_only === true) &&
+      predictionRefKey(reference);
+    if (!canServe) {
+      retrySoon = true;
       renderForecastError(
-        forecastErrorText(forecastResult, readinessResult.data),
-        readinessResult.data,
+        forecastErrorText(healthResult, health),
+        health,
       );
+      renderPublicationWarning(healthResult, healthResult);
+      renderHealth({ ok: false, status: healthResult.status, data: null }, healthResult, healthResult);
+      return;
     }
-    const healthResult = await fetchJson("/api/health");
-    if (Number.isFinite(Date.parse(healthResult.data?.knowledge_cutoff))) {
-      latestForecastCutoff = healthResult.data.knowledge_cutoff;
+    const previousKey = cachedForecastKey;
+    const snapshotResult = await loadForecastSnapshot(reference);
+    if (!snapshotResult.ok || !snapshotResult.data) {
+      retrySoon = true;
+      renderForecastError(
+        `当前预测快照加载失败：${snapshotResult.error}`,
+        health,
+      );
+      renderPublicationWarning(snapshotResult, healthResult);
+      renderHealth(snapshotResult, healthResult, healthResult);
+      setStatus("error", "预测快照加载失败");
+      return;
     }
-    if (forecastAvailable) {
-      readinessResult = {
-        ok: healthResult.ok,
-        status: healthResult.status,
-        data: healthResult.data ?? {},
-      };
-    }
-    renderPublicationWarning(forecastResult, readinessResult);
-    renderHealth(forecastResult, healthResult, readinessResult);
-    await evidencePromise;
+    const forecast = forecastWithServing(snapshotResult.data, health);
+    const forecastResult = {
+      ok: true,
+      status: 200,
+      data: forecast,
+      error: null,
+    };
+    renderForecast(forecast);
+    renderPublicationWarning(forecastResult, healthResult);
+    renderHealth(forecastResult, healthResult, healthResult);
+    if (previousKey !== cachedForecastKey) evidenceLoadedForKey = null;
+    if (evidenceVisible) void loadEvidence();
   } catch (error) {
+    retrySoon = true;
     console.error(error);
-    renderForecastError(error.message, readinessResult.data);
+    renderForecastError(error.message, healthResult.data ?? {});
     setStatus("error", "预测渲染失败");
   } finally {
     lastLoadedAt = Date.now();
     loading = false;
-    scheduleCadenceRefresh();
+    scheduleCadenceRefresh({ retrySoon });
   }
+}
+
+const evidenceSections = document.querySelectorAll(
+  ".signal-grid, .context-grid, .pending-panel",
+);
+if ("IntersectionObserver" in window) {
+  const visibleEvidenceSections = new Set();
+  const evidenceObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) visibleEvidenceSections.add(entry.target);
+      else visibleEvidenceSections.delete(entry.target);
+    }
+    evidenceVisible = visibleEvidenceSections.size > 0;
+    if (evidenceVisible) void loadEvidence();
+  }, { rootMargin: "200px 0px" });
+  for (const section of evidenceSections) evidenceObserver.observe(section);
+} else {
+  evidenceVisible = true;
 }
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     if (Date.now() - lastLoadedAt > 60_000) {
       void load();
-    } else {
+    } else if (evidenceVisible) {
       void loadEvidence();
     }
-  } else if (evidenceRefreshTimer) {
-    clearTimeout(evidenceRefreshTimer);
-    evidenceRefreshTimer = null;
   }
 });
 window.addEventListener("online", () => void load());
-window.addEventListener("offline", () => {
-  if (evidenceRefreshTimer) clearTimeout(evidenceRefreshTimer);
-  evidenceRefreshTimer = null;
-});
 
 void load();

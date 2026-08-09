@@ -9,6 +9,7 @@ import {
 import {
   assessPredictionFreshness,
   assessEvaluationCompatibility,
+  getProviderFreshness,
   getReadiness,
 } from "../runtime/readiness.mjs";
 import {
@@ -20,10 +21,14 @@ import {
 import { verifiedCoverageAssertionRevisions } from "../pipeline/coverage.mjs";
 import {
   buildOutcomeEligibilityContext,
-  isEligibleConfirmedOutcome,
+  eligibleConfirmedOutcomeVerifications,
 } from "../pipeline/outcomes.mjs";
-import { verifyEvaluationArtifact } from "../model/evaluation.mjs";
 import {
+  assessEvaluationSampleGate,
+  verifyEvaluationArtifact,
+} from "../model/evaluation.mjs";
+import {
+  buildIssuedEvaluationReportingView,
   verifyIssuedEvaluationArtifact,
 } from "../model/issued-evaluation.mjs";
 import {
@@ -43,6 +48,24 @@ const MIME_TYPES = new Map([
   [".json", "application/json; charset=utf-8"],
 ]);
 const API_COMPUTATION_CACHE_MS = 10_000;
+const HISTORY_RESULTS_CACHE_MS = 30_000;
+const SERVING_SNAPSHOT_SCHEMA_VERSION = "serving-snapshot/1";
+const SERVING_SNAPSHOT_STATE_KEY = "serving-snapshot";
+const SERVING_SNAPSHOT_DEFAULT_CADENCE_MINUTES = 10;
+const SERVING_SNAPSHOT_CADENCE_MULTIPLIER = 3;
+const IMMUTABLE_SNAPSHOT_CACHE_CONTROL =
+  "public, max-age=31536000, immutable";
+const DYNAMIC_FORECAST_BLOCKERS = new Set([
+  "forecast_missing",
+  "forecast_fresh",
+  "forecast_degraded",
+  "forecast_stale",
+  "forecast_invalid",
+]);
+const DYNAMIC_SOURCE_BLOCKERS = new Set([
+  "required_outcome_source_not_fresh",
+  "exact_source_not_fresh",
+]);
 
 function timedSingleFlight(loader, ttlMs = API_COMPUTATION_CACHE_MS) {
   let cachedValue = null;
@@ -73,6 +96,29 @@ function sendJson(response, status, value) {
     "cache-control": "no-store",
   });
   response.end(JSON.stringify(value));
+}
+
+function sendImmutableJson(request, response, value, etag) {
+  const headers = {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": IMMUTABLE_SNAPSHOT_CACHE_CONTROL,
+    etag,
+  };
+  if (ifNoneMatch(request.headers["if-none-match"], etag)) {
+    response.writeHead(304, headers);
+    response.end();
+    return;
+  }
+  response.writeHead(200, headers);
+  response.end(request.method === "HEAD" ? undefined : JSON.stringify(value));
+}
+
+function ifNoneMatch(header, etag) {
+  if (typeof header !== "string") return false;
+  return header.split(",").some((candidate) => {
+    const tag = candidate.trim();
+    return tag === "*" || tag === etag || tag === `W/${etag}`;
+  });
 }
 
 function securityHeaders(response) {
@@ -128,6 +174,7 @@ async function currentEvaluation(store, config) {
     ["champion", championEvaluation],
     ["walk_forward", walkForward],
     ["legacy", legacy],
+    ...(!liveThresholdReached && issued ? [["issued_preliminary", issued]] : []),
   ].filter(([, evaluation]) => evaluation);
   const invalidated = [];
   for (const [name, evaluation] of candidates) {
@@ -144,13 +191,50 @@ async function currentEvaluation(store, config) {
         predictionRevisions,
         settlementRevisions,
         evaluationArtifactVerification,
+        allowAsIssuedBaselineSuperseded: name === "issued_preliminary",
       },
     );
     if (compatibility.compatible) {
+      const sampleGate = evaluation.mode === "as_issued"
+        ? assessEvaluationSampleGate(evaluation.metrics, config.model)
+        : null;
+      const preliminary = name === "issued_preliminary" ||
+        compatibility.warnings?.length > 0;
+      const baselineCurrent = !compatibility.warnings?.some((warning) =>
+        [
+          "baseline_coverage_assertion_revision_superseded",
+          "baseline_outcome_revision_superseded",
+        ].includes(warning)
+      );
+      const reportingView = evaluation.mode === "as_issued" &&
+          evaluationArtifactVerification.valid
+        ? buildIssuedEvaluationReportingView(
+          evaluationArtifactVerification.artifact,
+          {
+            sourceEvaluationArtifactHash:
+              evaluation.evaluation_artifact_hash,
+          },
+        )
+        : null;
+      if (reportingView?.status === "available") {
+        reportingView.sample_gate = assessEvaluationSampleGate(
+          reportingView.metrics,
+          config.model,
+        );
+        reportingView.metric_availability = {
+          brier_skill: baselineCurrent,
+        };
+      }
       return {
         evaluation,
         compatibility,
         invalidated,
+        reporting_status: preliminary ? "preliminary" : "mature",
+        sample_gate: sampleGate,
+        metric_availability: {
+          brier_skill: baselineCurrent,
+        },
+        reporting_view: reportingView,
         champion_error: championResult.error?.message ?? null,
       };
     }
@@ -162,6 +246,252 @@ async function currentEvaluation(store, config) {
     invalidated,
     champion_error: championResult.error?.message ?? null,
   };
+}
+
+function servingSnapshotConfig(config) {
+  const servingRuntime = {
+    forecast_fresh_age_hours:
+      config.runtime?.forecast_fresh_age_hours ?? null,
+    forecast_stale_age_hours:
+      config.runtime?.forecast_stale_age_hours ?? null,
+    provisional_bootstrap: config.runtime?.provisional_bootstrap ?? null,
+    scheduler_interval_minutes:
+      config.runtime?.scheduler_interval_minutes ?? null,
+  };
+  const snapshotConfig = {
+    config_hash: config.config_hash ?? hashLabel(config),
+    config_version: config.config_version ?? null,
+    feature_schema_version: config.feature_schema_version ?? null,
+    runtime: servingRuntime,
+  };
+  return {
+    ...snapshotConfig,
+    serving_config_hash: hashLabel(snapshotConfig),
+  };
+}
+
+function servingSnapshotMaxAgeMs(config) {
+  const configuredMinutes = Number(
+    config.runtime?.scheduler_interval_minutes ??
+      SERVING_SNAPSHOT_DEFAULT_CADENCE_MINUTES,
+  );
+  const cadenceMinutes = Number.isFinite(configuredMinutes) &&
+      configuredMinutes > 0
+    ? configuredMinutes
+    : SERVING_SNAPSHOT_DEFAULT_CADENCE_MINUTES;
+  return cadenceMinutes * SERVING_SNAPSHOT_CADENCE_MULTIPLIER * 60_000;
+}
+
+function completedRuntimeState(runtimeState) {
+  if (!runtimeState || typeof runtimeState !== "object") return {};
+  return {
+    last_success_at: runtimeState.last_success_at ?? null,
+    last_failure_at: runtimeState.last_failure_at ?? null,
+    last_run_duration_ms: runtimeState.last_run_duration_ms ?? null,
+    last_status: runtimeState.last_status ?? null,
+    last_waiting: runtimeState.last_waiting ?? null,
+    last_evaluation_waiting: runtimeState.last_evaluation_waiting ?? null,
+    last_training_at: runtimeState.last_training_at ?? null,
+    last_evaluation_at: runtimeState.last_evaluation_at ?? null,
+    last_promotion_status: runtimeState.last_promotion_status ?? null,
+    last_promotion_guard: runtimeState.last_promotion_guard ?? null,
+    last_prediction_id: runtimeState.last_prediction_id ?? null,
+    last_collection: runtimeState.last_collection ?? null,
+    last_timing: runtimeState.last_timing ?? null,
+    last_error: runtimeState.last_error ?? null,
+  };
+}
+
+function runtimeWatermark(runtimeState) {
+  const completed = completedRuntimeState(runtimeState);
+  return {
+    last_success_at: completed.last_success_at ?? null,
+    last_failure_at: completed.last_failure_at ?? null,
+    last_status: completed.last_status ?? null,
+    last_prediction_id: completed.last_prediction_id ?? null,
+    state_hash: hashLabel(completed),
+  };
+}
+
+function predictionReference(prediction) {
+  return prediction ? {
+    record_id: prediction.record_id,
+    revision: prediction.revision,
+  } : null;
+}
+
+function samePredictionReference(left, right) {
+  return left?.record_id === right?.record_id &&
+    left?.revision === right?.revision;
+}
+
+function isServingSnapshotCurrent(snapshot, {
+  config,
+  runtimeState,
+  requestNow,
+}) {
+  const expectedConfig = servingSnapshotConfig(config);
+  if (
+    !snapshot ||
+    snapshot.schema_version !== SERVING_SNAPSHOT_SCHEMA_VERSION ||
+    snapshot.config_hash !== expectedConfig.config_hash ||
+    snapshot.serving_config_hash !==
+      expectedConfig.serving_config_hash
+  ) return false;
+  const materializedAt = Date.parse(snapshot.materialized_at);
+  const ageMs = requestNow.getTime() - materializedAt;
+  if (
+    !Number.isFinite(materializedAt) ||
+    ageMs < 0 ||
+    ageMs > servingSnapshotMaxAgeMs(config)
+  ) return false;
+  if (
+    !samePredictionReference(
+      snapshot.prediction_ref,
+      predictionReference(snapshot.prediction),
+    ) ||
+    snapshot.prediction_hash !== (
+      snapshot.prediction ? hashLabel(snapshot.prediction) : null
+    )
+  ) return false;
+  return snapshot.runtime_watermark?.state_hash ===
+    runtimeWatermark(runtimeState).state_hash;
+}
+
+function withoutDynamicBlockers(blockers, { includePipeline = false } = {}) {
+  return (blockers ?? []).filter((blocker) =>
+    !DYNAMIC_FORECAST_BLOCKERS.has(blocker) &&
+    !DYNAMIC_SOURCE_BLOCKERS.has(blocker) &&
+    (includePipeline || blocker !== "pipeline_error")
+  );
+}
+
+function appendDynamicSourceBlockers(blockers, providerFreshness) {
+  if (providerFreshness.groups.required_outcome.status !== "fresh") {
+    blockers.push("required_outcome_source_not_fresh");
+  }
+  if (providerFreshness.groups.exact.status !== "fresh") {
+    blockers.push("exact_source_not_fresh");
+  }
+}
+
+function runtimeFailureIsCurrent(runtimeState) {
+  if (!runtimeState?.last_error) return false;
+  const successAt = Date.parse(runtimeState.last_success_at ?? "");
+  const failureAt = Date.parse(runtimeState.last_failure_at ?? "");
+  return !Number.isFinite(failureAt) ||
+    !Number.isFinite(successAt) ||
+    failureAt >= successAt;
+}
+
+function projectDynamicReadiness({
+  readiness,
+  prediction,
+  providerFreshness,
+  runtimeState,
+  config,
+  requestNow,
+}) {
+  const currentForecast = assessPredictionFreshness(
+    prediction,
+    config,
+    requestNow,
+  );
+  const servingBlockers = withoutDynamicBlockers(
+    readiness.serving_blockers,
+    { includePipeline: true },
+  );
+  if (!prediction) servingBlockers.push("forecast_missing");
+  else if (["stale", "invalid", "missing"].includes(currentForecast.status)) {
+    servingBlockers.push(`forecast_${currentForecast.status}`);
+  }
+  appendDynamicSourceBlockers(servingBlockers, providerFreshness);
+  const uniqueServingBlockers = [...new Set(servingBlockers)];
+  const forecastAvailable = Boolean(
+    prediction &&
+    readiness.prediction_integrity?.valid &&
+    !["stale", "invalid", "missing"].includes(currentForecast.status) &&
+    withoutDynamicBlockers(readiness.serving_blockers, {
+      includePipeline: true,
+    }).length === 0,
+  );
+  const servingReady = forecastAvailable && uniqueServingBlockers.length === 0;
+
+  const publicationBlockers = withoutDynamicBlockers(
+    readiness.publication_blockers,
+  );
+  if (!prediction) publicationBlockers.push("forecast_missing");
+  else if (currentForecast.status !== "fresh") {
+    publicationBlockers.push(`forecast_${currentForecast.status}`);
+  }
+  appendDynamicSourceBlockers(publicationBlockers, providerFreshness);
+  const failureIsCurrent = runtimeFailureIsCurrent(runtimeState);
+  if (failureIsCurrent) publicationBlockers.push("pipeline_error");
+  const uniquePublicationBlockers = [...new Set(publicationBlockers)];
+
+  const pipelineStatus = runtimeState.current_run_started_at
+    ? "running"
+    : failureIsCurrent
+      ? "error"
+      : readiness.coverage_waiting
+        ? "waiting_for_coverage"
+        : readiness.evaluation_waiting
+          ? "waiting_for_evaluation"
+          : runtimeState.last_status === "promotion_blocked"
+            ? "promotion_blocked"
+            : runtimeState.last_success_at
+              ? "completed"
+              : "idle";
+  return {
+    ...readiness,
+    generated_at: requestNow.toISOString(),
+    current_forecast: currentForecast,
+    forecast_available: forecastAvailable,
+    serving_ready: servingReady,
+    serving_stage: !servingReady
+      ? "blocked"
+      : readiness.provisional_model?.eligibility?.eligible
+        ? "provisional"
+        : "validated",
+    serving_blockers: uniqueServingBlockers,
+    provider_freshness: providerFreshness,
+    publication_ready: uniquePublicationBlockers.length === 0,
+    publication_blockers: uniquePublicationBlockers,
+    pipeline_status: pipelineStatus,
+    last_pipeline_success_at: runtimeState.last_success_at ?? null,
+    last_pipeline_failure_at: runtimeState.last_failure_at ?? null,
+    last_pipeline_error: runtimeState.last_error ?? null,
+  };
+}
+
+async function exactPrediction(store, recordId, revision) {
+  const snapshot = await store.readState(SERVING_SNAPSHOT_STATE_KEY, null);
+  if (
+    snapshot?.prediction_ref?.record_id === recordId &&
+    snapshot.prediction_ref.revision === revision &&
+    snapshot.prediction?.record_id === recordId &&
+    snapshot.prediction.revision === revision &&
+    snapshot.prediction_hash === hashLabel(snapshot.prediction)
+  ) return snapshot.prediction;
+  return null;
+}
+
+function forecastSnapshotPath(pathname) {
+  const match = pathname.match(
+    /^\/api\/forecast\/snapshots\/([^/]+)\/([1-9][0-9]*)$/,
+  );
+  if (!match) return null;
+  try {
+    const recordId = decodeURIComponent(match[1]);
+    const revision = Number(match[2]);
+    if (
+      !/^[a-zA-Z0-9_-]+$/.test(recordId) ||
+      !Number.isSafeInteger(revision)
+    ) return null;
+    return { recordId, revision };
+  } catch {
+    return null;
+  }
 }
 
 function latestProviderSuccess(...states) {
@@ -181,12 +511,93 @@ function latestProviderError(...states) {
     .at(-1)?.last_error ?? null;
 }
 
-function providerStateKey(name) {
-  return `${name.replaceAll("_", "-")}-provider`;
-}
-
 function exactRecordKey(recordOrRef) {
   return `${recordOrRef.record_id}@${recordOrRef.revision}`;
+}
+
+function latestEligibleConfirmedOutcomes({ outcomes, observations, signals, config }) {
+  const outcomeEligibility = buildOutcomeEligibilityContext({
+    observations,
+    signals,
+    config,
+  });
+  const eligibilityContext = {
+    ...outcomeEligibility,
+    confirmationIdentityIds: configuredConfirmationIdentityIds(config),
+  };
+  return [...Map.groupBy(outcomes, (item) => item.record_id).values()]
+    .map((revisions) =>
+      [...revisions]
+        .sort((left, right) => left.revision - right.revision)
+        .at(-1)
+    )
+    .map((outcome) => ({
+      outcome,
+      verification: eligibleConfirmedOutcomeVerifications(
+        outcome,
+        eligibilityContext,
+      )[0],
+    }))
+    .filter((item) => item.verification);
+}
+
+function confirmedOutcomeHistoryRow(outcome, observationByRef, verification = null) {
+  const verificationRef = verification?.observation_ref ??
+    outcome.data.verification[0]?.observation_ref;
+  const source = verificationRef
+    ? observationByRef.get(exactRecordKey(verificationRef))
+    : null;
+  return {
+    outcome_ref: { record_id: outcome.record_id, revision: outcome.revision },
+    status: "confirmed",
+    occurred_time_range: outcome.data.occurred_time_range,
+    known_at: outcome.data.known_at,
+    label_grade: outcome.data.label_grade,
+    source: source ? {
+      observation_ref: verificationRef,
+      canonical_url: source.data.canonical_url,
+      display_handle: source.data.author?.display_handle ?? null,
+      text: source.data.content?.text ?? null,
+      published_at: source.data.published_at,
+    } : null,
+  };
+}
+
+async function loadConfirmedHistoryResults(store, config) {
+  const [outcomes, signals] = await Promise.all([
+    store.all("reset_outcome", { latestOnly: false }),
+    store.all("normalized_signal", { latestOnly: false }),
+  ]);
+  const verificationRefs = [
+    ...new Map(
+      outcomes
+        .flatMap((outcome) => outcome.data.verification ?? [])
+        .map((entry) => entry.observation_ref)
+        .filter(Boolean)
+        .map((reference) => [exactRecordKey(reference), reference]),
+    ).values(),
+  ];
+  const observations = await store.allByRefs("raw_observation", verificationRefs);
+  const observationByRef = new Map(
+    observations.map((item) => [exactRecordKey(item), item]),
+  );
+  return latestEligibleConfirmedOutcomes({
+    outcomes,
+    observations,
+    signals,
+    config,
+  })
+    .sort((left, right) =>
+      right.outcome.data.occurred_time_range.start.localeCompare(
+        left.outcome.data.occurred_time_range.start,
+      ) ||
+      right.outcome.data.known_at.localeCompare(left.outcome.data.known_at) ||
+      left.outcome.record_id.localeCompare(right.outcome.record_id) ||
+      right.outcome.revision - left.outcome.revision
+    )
+    .map(({ outcome, verification }) =>
+      confirmedOutcomeHistoryRow(outcome, observationByRef, verification)
+    );
 }
 
 const CORE_SIGNAL_ROLES = new Set(["official", "product_lead", "product_team_member"]);
@@ -534,9 +945,11 @@ async function serveStatic(response, pathname) {
   if (!target.startsWith(`${PUBLIC_DIR}${path.sep}`)) return false;
   try {
     const content = await fs.readFile(target);
+    const extension = path.extname(target);
+    const mustRevalidate = [".html", ".js", ".css"].includes(extension);
     response.writeHead(200, {
-      "content-type": MIME_TYPES.get(path.extname(target)) ?? "application/octet-stream",
-      "cache-control": path.extname(target) === ".html" ? "no-cache" : "public, max-age=300",
+      "content-type": MIME_TYPES.get(extension) ?? "application/octet-stream",
+      "cache-control": mustRevalidate ? "no-cache" : "public, max-age=300",
     });
     response.end(content);
     return true;
@@ -547,14 +960,154 @@ async function serveStatic(response, pathname) {
 }
 
 export function createRequestHandler({ store, config, now = () => new Date() }) {
-  const readinessFor = timedSingleFlight(
-    (requestNow) => getReadiness(store, config, { now: requestNow }),
-  );
   const evaluationFor = timedSingleFlight(
     () => currentEvaluation(store, config),
     0,
   );
-  return async function requestHandler(request, response) {
+  const historyResultsFor = timedSingleFlight(
+    () => loadConfirmedHistoryResults(store, config),
+    HISTORY_RESULTS_CACHE_MS,
+  );
+  let servingSnapshotInFlight = null;
+
+  async function materializeServingSnapshot(materializedAt) {
+    const snapshotConfig = servingSnapshotConfig(config);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [beforePrediction, beforeRuntime] = await Promise.all([
+        latestPrediction(store),
+        store.readState("runtime", {}),
+      ]);
+      const [readiness, evaluationResult] = await Promise.all([
+        getReadiness(store, config, { now: materializedAt }),
+        currentEvaluation(store, config),
+      ]);
+      const [prediction, runtimeState] = await Promise.all([
+        latestPrediction(store),
+        store.readState("runtime", {}),
+      ]);
+      const stablePrediction = samePredictionReference(
+        predictionReference(beforePrediction),
+        predictionReference(prediction),
+      ) && (beforePrediction ? hashLabel(beforePrediction) : null) ===
+        (prediction ? hashLabel(prediction) : null);
+      const stableRuntime = runtimeWatermark(beforeRuntime).state_hash ===
+        runtimeWatermark(runtimeState).state_hash;
+      if (!stablePrediction || !stableRuntime) continue;
+      const snapshot = {
+        schema_version: SERVING_SNAPSHOT_SCHEMA_VERSION,
+        config_hash: snapshotConfig.config_hash,
+        serving_config_hash: snapshotConfig.serving_config_hash,
+        config: snapshotConfig,
+        materialized_at: materializedAt.toISOString(),
+        runtime_watermark: runtimeWatermark(runtimeState),
+        prediction_ref: predictionReference(prediction),
+        prediction_hash: prediction ? hashLabel(prediction) : null,
+        prediction,
+        readiness,
+        evaluation_result: evaluationResult,
+      };
+      if (typeof store.writeState === "function") {
+        await store.writeState(SERVING_SNAPSHOT_STATE_KEY, snapshot);
+      }
+      return snapshot;
+    }
+    throw new Error("Serving snapshot inputs changed while materializing");
+  }
+
+  async function refreshServingSnapshot(refreshNow = now()) {
+    const materializedAt = refreshNow instanceof Date
+      ? new Date(refreshNow)
+      : new Date(refreshNow);
+    if (!Number.isFinite(materializedAt.getTime())) {
+      throw new TypeError("Invalid serving snapshot time");
+    }
+    if (!servingSnapshotInFlight) {
+      const [persisted, runtimeState] = await Promise.all([
+        store.readState(SERVING_SNAPSHOT_STATE_KEY, null),
+        store.readState("runtime", {}),
+      ]);
+      if (isServingSnapshotCurrent(persisted, {
+        config,
+        runtimeState,
+        requestNow: materializedAt,
+      })) return persisted;
+    }
+    if (servingSnapshotInFlight) {
+      const snapshot = await servingSnapshotInFlight;
+      const runtimeState = await store.readState("runtime", {});
+      if (isServingSnapshotCurrent(snapshot, {
+        config,
+        runtimeState,
+        requestNow: materializedAt,
+      })) return snapshot;
+    }
+    if (servingSnapshotInFlight) return servingSnapshotInFlight;
+    servingSnapshotInFlight = materializeServingSnapshot(materializedAt)
+      .finally(() => {
+        servingSnapshotInFlight = null;
+      });
+    return servingSnapshotInFlight;
+  }
+
+  async function servingSnapshotFor(requestNow) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [snapshot, runtimeState] = await Promise.all([
+        store.readState(SERVING_SNAPSHOT_STATE_KEY, null),
+        store.readState("runtime", {}),
+      ]);
+      if (isServingSnapshotCurrent(snapshot, {
+        config,
+        runtimeState,
+        requestNow,
+      })) {
+        return {
+          snapshot,
+          prediction: snapshot.prediction,
+          runtimeState,
+        };
+      }
+      await refreshServingSnapshot(requestNow);
+    }
+    throw new Error("Unable to obtain a current serving snapshot");
+  }
+
+  async function dynamicServingProjection(requestNow) {
+    const [{ snapshot, prediction, runtimeState }, providerFreshness] =
+      await Promise.all([
+        servingSnapshotFor(requestNow),
+        getProviderFreshness(store, config, requestNow),
+      ]);
+    return {
+      prediction,
+      runtimeState,
+      evaluationResult: snapshot.evaluation_result,
+      readiness: projectDynamicReadiness({
+        readiness: snapshot.readiness,
+        prediction,
+        providerFreshness,
+        runtimeState,
+        config,
+        requestNow,
+      }),
+    };
+  }
+
+  async function servingWarmupFor(requestNow) {
+    if (!servingSnapshotInFlight) return null;
+    const [snapshot, runtimeState, providerFreshness] = await Promise.all([
+      store.readState(SERVING_SNAPSHOT_STATE_KEY, null),
+      store.readState("runtime", {}),
+      getProviderFreshness(store, config, requestNow),
+    ]);
+    if (isServingSnapshotCurrent(snapshot, {
+      config,
+      runtimeState,
+      requestNow,
+    })) return null;
+    return { runtimeState, providerFreshness };
+  }
+
+  const requestHandler = async function requestHandler(request, response) {
     securityHeaders(response);
     try {
       if (!["GET", "HEAD"].includes(request.method)) {
@@ -562,23 +1115,69 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         return;
       }
       const url = new URL(request.url, "http://localhost");
+      if (url.pathname.startsWith("/api/forecast/snapshots/")) {
+        const reference = forecastSnapshotPath(url.pathname);
+        if (!reference) {
+          sendJson(response, 404, { error: "forecast_snapshot_not_found" });
+          return;
+        }
+        const prediction = await exactPrediction(
+          store,
+          reference.recordId,
+          reference.revision,
+        );
+        if (!prediction) {
+          sendJson(response, 404, { error: "forecast_snapshot_not_found" });
+          return;
+        }
+        const etag = `"${hashLabel(prediction).slice("sha256:".length)}"`;
+        sendImmutableJson(request, response, prediction, etag);
+        return;
+      }
       if (url.pathname === "/api/health") {
-        const providerEntries = Object.entries(config.providers ?? {})
-          .filter(([, provider]) => provider && typeof provider === "object");
         const requestNow = now();
-        const [prediction, providerStates, runtimeState, evaluationResult, readiness] = await Promise.all([
-          latestPrediction(store),
-          Promise.all(providerEntries.map(async ([name, provider]) => [
-            name,
-            provider,
-            await store.readState(providerStateKey(name), {}),
-          ])),
-          store.readState("runtime", {}),
-          evaluationFor(),
-          readinessFor(requestNow),
-        ]);
+        const warmup = await servingWarmupFor(requestNow);
+        if (warmup) {
+          const states = Object.values(warmup.providerFreshness.providers);
+          sendJson(response, 503, {
+            status: "warming",
+            error: "forecast_warming",
+            message: "Forecast serving snapshot is warming.",
+            effective_stale: true,
+            now: requestNow.toISOString(),
+            forecast_issued_at: null,
+            knowledge_cutoff: null,
+            current_prediction_ref: null,
+            forecast: null,
+            provider_last_success_at: latestProviderSuccess(...states),
+            provider_last_error: latestProviderError(...states),
+            providers: warmup.providerFreshness.providers,
+            provider_freshness: warmup.providerFreshness.groups,
+            pipeline_last_success_at:
+              warmup.runtimeState.last_success_at ?? null,
+            pipeline_last_failure_at:
+              warmup.runtimeState.last_failure_at ?? null,
+            pipeline_last_error: warmup.runtimeState.last_error ?? null,
+            pipeline_status: "warming",
+            coverage_waiting: null,
+            evaluation_waiting: null,
+            serving_ready: false,
+            serving_stage: "blocked",
+            serving_blockers: ["serving_snapshot_warming"],
+            synthetic_only: false,
+            publication_ready: false,
+            publication_blockers: ["serving_snapshot_warming"],
+          });
+          return;
+        }
+        const {
+          prediction,
+          runtimeState,
+          evaluationResult,
+          readiness,
+        } = await dynamicServingProjection(requestNow);
         const providers = readiness.provider_freshness.providers;
-        const states = providerStates.map(([, , state]) => state);
+        const states = Object.values(providers);
         const forecastStatus = readiness.current_forecast.status;
         const contextStatus = readiness.provider_freshness.groups.context.status;
         const optionalContextDegraded = !["fresh", "disabled"].includes(contextStatus);
@@ -607,6 +1206,14 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           now: requestNow.toISOString(),
           forecast_issued_at: prediction?.data.issued_at ?? null,
           knowledge_cutoff: prediction?.data.knowledge_cutoff ?? null,
+          current_prediction_ref: prediction ? {
+            record_id: prediction.record_id,
+            revision: prediction.revision,
+            issued_at: prediction.data.issued_at,
+            knowledge_cutoff: prediction.data.knowledge_cutoff,
+            snapshot_url:
+              `/api/forecast/snapshots/${encodeURIComponent(prediction.record_id)}/${prediction.revision}`,
+          } : null,
           forecast: readiness.current_forecast,
           provider_last_success_at: latestProviderSuccess(...states),
           provider_last_error: latestProviderError(...states),
@@ -625,6 +1232,7 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           serving_stage: readiness.serving_stage,
           serving_blockers: readiness.serving_blockers,
           provisional_model: readiness.provisional_model,
+          synthetic_only: readiness.synthetic_only,
           publication_ready: readiness.publication_ready,
           publication_blockers: readiness.publication_blockers,
         });
@@ -632,10 +1240,9 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
       }
       if (url.pathname === "/api/forecast/current") {
         const requestNow = now();
-        const [prediction, readiness] = await Promise.all([
-          latestPrediction(store),
-          readinessFor(requestNow),
-        ]);
+        const { prediction, readiness } = await dynamicServingProjection(
+          requestNow,
+        );
         if (!prediction) {
           sendJson(response, 503, {
             error: "forecast_not_ready",
@@ -738,7 +1345,12 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         return;
       }
       if (url.pathname === "/api/readiness") {
-        sendJson(response, 200, await readinessFor(now()));
+        const { readiness } = await dynamicServingProjection(now());
+        sendJson(response, 200, readiness);
+        return;
+      }
+      if (url.pathname === "/api/history/results") {
+        sendJson(response, 200, { results: await historyResultsFor() });
         return;
       }
       if (url.pathname === "/api/evaluation/summary") {
@@ -756,6 +1368,10 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
         sendJson(response, 200, {
           ...evaluation,
           compatibility: result.compatibility,
+          reporting_status: result.reporting_status,
+          sample_gate: result.sample_gate,
+          metric_availability: result.metric_availability,
+          reporting_view: result.reporting_view,
           invalidated_fallbacks: result.invalidated,
           ranking_policy: {
             window_hours: 4,
@@ -777,55 +1393,47 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
           evaluationFor(),
         ]);
         const evaluation = evaluationResult.evaluation;
+        const reportingScope =
+          url.searchParams.get("scope") === "reporting";
+        const scoredEvents = reportingScope
+          ? evaluationResult.reporting_view?.status === "available"
+            ? evaluationResult.reporting_view.events
+            : []
+          : evaluation?.events ?? [];
         const observationByRef = new Map(
           observations.map((item) => [exactRecordKey(item), item]),
         );
         const outcomeByRef = new Map(outcomes.map((item) => [exactRecordKey(item), item]));
         const evaluationByRef = new Map(
-          (evaluation?.events ?? []).map((item) => [exactRecordKey(item.outcome_ref), item]),
+          scoredEvents.map((item) => [exactRecordKey(item.outcome_ref), item]),
         );
-        const referencedOutcomes = (evaluation?.events ?? [])
+        const referencedOutcomes = scoredEvents
           .map((item) => outcomeByRef.get(exactRecordKey(item.outcome_ref)))
           .filter(Boolean);
-        const outcomeEligibility = buildOutcomeEligibilityContext({
+        const latestConfirmed = latestEligibleConfirmedOutcomes({
+          outcomes,
           observations,
           signals,
           config,
-        });
-        const latestConfirmed = [...Map.groupBy(outcomes, (item) => item.record_id).values()]
-          .map((revisions) => [...revisions].sort((left, right) => left.revision - right.revision).at(-1))
-          .filter((outcome) => isEligibleConfirmedOutcome(outcome, {
-            ...outcomeEligibility,
-            confirmationIdentityIds: configuredConfirmationIdentityIds(config),
-          }));
-        const selectedOutcomes = [
-          ...new Map(
-            [...referencedOutcomes, ...latestConfirmed]
-              .map((outcome) => [exactRecordKey(outcome), outcome]),
-          ).values(),
-        ];
+        }).map((item) => item.outcome);
+        const selectedOutcomes = reportingScope
+          ? referencedOutcomes
+          : [
+            ...new Map(
+              [...referencedOutcomes, ...latestConfirmed]
+                .map((outcome) => [exactRecordKey(outcome), outcome]),
+            ).values(),
+          ];
         const rows = selectedOutcomes
           .sort((left, right) => right.data.occurred_time_range.start.localeCompare(left.data.occurred_time_range.start))
-          .map((outcome) => {
-            const verificationRef = outcome.data.verification[0]?.observation_ref;
-            const source = verificationRef
-              ? observationByRef.get(exactRecordKey(verificationRef))
-              : null;
-            return {
-              outcome_ref: { record_id: outcome.record_id, revision: outcome.revision },
-              occurred_time_range: outcome.data.occurred_time_range,
-              known_at: outcome.data.known_at,
-              label_grade: outcome.data.label_grade,
-              source: source ? {
-                canonical_url: source.data.canonical_url,
-                display_handle: source.data.author.display_handle,
-                text: source.data.content.text,
-                published_at: source.data.published_at,
-              } : null,
-              evaluation: evaluationByRef.get(exactRecordKey(outcome)) ?? null,
-            };
-          });
-        sendJson(response, 200, { events: rows });
+          .map((outcome) => ({
+            ...confirmedOutcomeHistoryRow(outcome, observationByRef),
+            evaluation: evaluationByRef.get(exactRecordKey(outcome)) ?? null,
+          }));
+        sendJson(response, 200, {
+          scope: reportingScope ? "reporting" : "all_history",
+          events: rows,
+        });
         return;
       }
       if (url.pathname === "/api/evidence/recent") {
@@ -999,4 +1607,6 @@ export function createRequestHandler({ store, config, now = () => new Date() }) 
       sendJson(response, 500, { error: "internal_error", message: error.message });
     }
   };
+  requestHandler.refreshServingSnapshot = refreshServingSnapshot;
+  return requestHandler;
 }

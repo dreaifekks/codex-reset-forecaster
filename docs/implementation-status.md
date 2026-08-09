@@ -24,8 +24,8 @@ tests; it does not turn synthetic data into evidence of real-world accuracy.
 | Weekly forecast | One immutable prediction containing 168 contiguous future hourly slots and derived first-event, cumulative, no-reset, and complete rolling-4h probabilities where available | integration test and runtime validator |
 | Forecast settlement | Append-only pending, positive, negative, or censored four-hour settlements with exact prediction/outcome refs and coverage evidence | settlement integration test |
 | Model promotion | Rolling-origin evaluation uses one fixed alert budget per fold for both recall and false-alert accounting; promotion checks convergence, the current compatibility signature, paired folds, Brier skill, calibration, and challenger improvement | model-correctness and integration tests |
-| Forecast website | 4h, 24h, and 7×24 projections of the same prediction, green intensity, exact tooltips, provenance/source freshness, an exact-source Tibo timeline (including unclassified posts), ranked impact episodes explicitly separated from reset probability, separate Codex-experience and competition evidence groups, and a deprecated one-version `community` API alias | API integration test and Playwright browser audit |
-| Accuracy website | Clearly separated walk-forward and mature immutable as-issued evaluation, calibration chart, metrics and event table | API integration test and Playwright browser audit |
+| Forecast website | 4h, 24h, and 7×24 projections of the same prediction, green intensity, exact tooltips, distinct current-source health, historical-label maturity delay, and sample sufficiency rather than one overall-health score, an exact-source Tibo timeline (including unclassified posts), ranked impact episodes explicitly separated from reset probability, separate Codex-experience and competition evidence groups, and a deprecated one-version `community` API alias | API integration test and Playwright browser audit |
+| Historical-results website | Latest eligible confirmed outcomes with occurrence and official-source publication times plus exact official-source provenance; the page is independent of evaluation availability and exposes no model-performance claims | API integration test and Playwright browser audit |
 | Ten-minute operation | Non-overlapping 10-minute collection and hourly-slot feature/forecast refresh, exact coverage-recheck wakeups, at-most-daily batch train/evaluate attempt, frozen training cutoff, stable model fallback, Docker image and health endpoint | scheduler, pipeline, and Docker smoke tests |
 | Personal quota optimizer | Deferred by confirmed MVP scope | `docs/personal-optimizer.md` |
 
@@ -79,7 +79,12 @@ history to be batch-fit immediately and, once its ten-outcome bootstrap minimum 
 met, served as a clearly labeled provisional forecast. It does not wait for future
 wall-clock data merely to start training. Strict causal walk-forward and immutable
 as-issued validation continue in the background without blocking that provisional
-use.
+use. A compatible `as_issued` sample below 1,008 windows or 20 eligible events
+remains preliminary operator diagnostics; it does not change promotion,
+publication readiness, or the model's provisional status. The public historical
+page does not show those diagnostics. It independently lists only current-contract
+confirmed outcomes and exact official sources, so evaluation readiness cannot hide
+factual history.
 
 The current honest state is still not `validated`: no causal out-of-sample fold has
 matured under the new availability clock, and no compatible champion satisfies the

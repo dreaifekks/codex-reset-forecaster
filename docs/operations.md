@@ -417,13 +417,15 @@ The service exposes:
 
 - `GET /api/health`
 - `GET /api/forecast/current`
+- `GET /api/forecast/snapshots/:record_id/:revision`
 - `GET /api/readiness`
 - `GET /api/evidence/recent`
+- `GET /api/history/results`
 - `GET /api/evaluation/summary`
 - `GET /api/evaluation/events`
 - `/` for the 4-hour, 24-hour, and 7-day forecast views
-- `/accuracy` for separately labeled walk-forward or mature as-issued metrics,
-  calibration, and event history
+- `/accuracy` for the confirmed reset history (the path is retained for bookmark
+  compatibility)
 
 `GET /api/evidence/recent` returns semantic arrays `core`, `experience`,
 `competition`, and `other_context`, plus a combined `items` view. It also returns
@@ -441,10 +443,11 @@ than presenting stale append-only state as current. For one compatibility versio
 the endpoint also returns
 deprecated `community`, equal to the aggregate of the three non-core groups. New
 clients must use the semantic arrays; the website no longer treats community
-resonance as a signal. The browser refreshes this evidence endpoint independently
-about every two minutes while visible and online, without rerunning the heavier
-forecast/health rendering. This reduces post-collection display latency but does
-not make the underlying 10-minute collection scheduler run faster.
+resonance as a signal. The browser loads this evidence endpoint only when an
+evidence section approaches the viewport, and reloads it after the exact current
+prediction reference changes. Evidence is not part of the forecast page's
+first-render critical path. This reduces initial work without changing the
+underlying 10-minute collection scheduler.
 
 `/api/health` reports every configured provider separately, including its role,
 last success, latest unresolved error, age threshold, and effective stale state.
@@ -459,6 +462,26 @@ failures remain visible and prevent validated publication; a still-fresh compati
 stable forecast may continue serving under its existing stage. An explicitly
 labeled `synthetic_demo` remains available only for local mechanics and carries its
 full blocker list beside the displayed percentage.
+
+The same health response exposes `current_prediction_ref` with the exact
+`record_id`, `revision`, and immutable snapshot URL. The browser always refreshes
+this small dynamic response, but downloads the full prediction only when that exact
+reference changes. The snapshot endpoint serves only the exact prediction
+currently named by the persisted serving projection, contains only that canonical
+record, uses a strong ETag, and is safe for long-lived immutable HTTP caching.
+Unknown or older refs return `404` without scanning prediction history. The
+`/api/forecast/current` alias and `/api/health` remain `no-store` because serving
+eligibility, source freshness, and runtime status can change while a prediction
+record stays unchanged. A cached snapshot is never enough to override a current
+fail-closed health result.
+
+On process start, the service rebuilds or verifies the serving projection before
+starting the configured run-on-start pipeline. While that one-time warmup is in
+flight and no prior valid projection exists, `/api/health` returns a fast
+`503` with `status: "warming"` instead of holding the request open behind a large
+JSONL scan. The page retries this state after 30 seconds. Once the projection is
+ready, the ordinary 10-minute scheduler begins and refreshes it after every final
+success or failure state.
 
 `GET /api/readiness` makes the split machine-readable. An eligible bootstrap reports
 `serving_ready: true` and `serving_stage: "provisional"` while
@@ -519,16 +542,42 @@ rebuildable current view. Provider cursors, evaluations, runtime status, source
 payload blobs, and champion/challenger artifacts live under the same configured
 data root. Back up the whole root together.
 
-Before enough live forecasts mature, `/accuracy` explicitly shows the as-of-safe
-walk-forward result used for model promotion and identifies the current forecast as
-provisional. That page must say the 80% threshold is not yet validated even if an
-exploratory replay prints a similar number. Once mature saved predictions and the
-configured minimum live windows and events exist, the page switches to `as_issued`
-evaluation and the model may become validated. Those scores use only the immutable
-hourly forecasts that users could actually have seen; the evidence modes are never
-labeled as one another. The UI also labels a retrospective import as
-`ARCHIVE REPLAY` from attested availability provenance rather than from any specific
-provider name.
+One configured data root has exactly one writer process. Do not run a manual
+pipeline command against the live server's data directory, and do not overlap two
+containers during a rollout; request concurrency inside one process is serialized,
+but the JSONL store intentionally has no cross-process writer lock. Read-only
+backup and inspection remain safe.
+
+`feature_snapshot.jsonl` remains canonical. A rebuildable exact-reference sidecar
+under `data/indexes` records byte offsets for deterministic existence checks and
+targeted reads, so a new 10-minute forecast does not scan the full multi-gigabyte
+JSONL file merely to prove that its 168 new snapshot IDs are absent. Canonical rows
+are appended before sidecar progress is checkpointed; after a crash, startup
+recovers only the unindexed canonical tail, and a missing or invalid sidecar is
+rebuilt from the JSONL source of truth.
+
+`data/state/serving-snapshot.json` is likewise a rebuildable serving projection.
+It atomically binds one exact prediction to the structural readiness/evaluation
+result completed for the same runtime watermark. Request-time code rechecks the
+dynamic clock, provider freshness, and runtime status instead of rerunning the
+full structural audit for every browser request. A completed scheduler run
+refreshes the projection after final runtime state is written.
+
+`/accuracy` is intentionally a confirmed-history page despite its retained legacy
+path. It calls `/api/history/results`, lists the latest eligible confirmed outcome
+revisions and exact official sources, and does not depend on evaluation state.
+Walk-forward and `as_issued` scores remain available through operator APIs and
+continue to govern promotion and validated publication. Those scores use only the
+immutable hourly forecasts that users could actually have seen; evidence modes are
+never labeled as one another.
+
+The history projection remains on the append-only JSONL store; it does not require
+a separate SQL database. The endpoint loads outcome and signal types only when
+requested, resolves raw observations by exact verification refs, and shares one
+30-second derived result across concurrent requests. HTML, JavaScript, and CSS are
+served with revalidation so a deployment cannot combine new markup with an older
+cached script. The history browser request also fails visibly after 15 seconds
+instead of leaving the initial loading row indefinitely.
 
 ## Docker
 
@@ -574,6 +623,8 @@ Production deployment verification must additionally require:
 
 - `/api/readiness` reports `publication_ready: true` and `synthetic_only: false`.
 - `/api/forecast/current` returns 168 hourly slots.
+- `/api/health` points at the same exact prediction reference, and its immutable
+  snapshot URL returns that canonical record with a strong ETag.
 - At least one configured outcome provider has current
   `negative_label_eligible` assertions with completeness evidence.
 - The Tunnel route maps the chosen public hostname to

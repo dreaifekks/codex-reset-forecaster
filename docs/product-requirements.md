@@ -12,7 +12,7 @@ five-hour or weekly quota-window rollover.
 The first release has two product surfaces:
 
 1. a current forecast page with 4-hour, 24-hour, and seven-day views;
-2. a historical evaluation page showing how previously issued forecasts performed.
+2. a historical results page listing confirmed resets and their official sources.
 
 Personal quota and reset-voucher recommendations are explicitly deferred.
 
@@ -159,6 +159,10 @@ Provider health, delay, and coverage remain separate data-quality outputs. They
 must not enter the probability vector, because observation quality can otherwise
 be mistaken for event risk.
 
+The UI keeps current source health, historical-label maturity delay, and sample
+sufficiency distinct. A scalar feature data-quality score may summarize model
+inputs, but it must not be presented as overall data or service health.
+
 The model has two product statuses:
 
 - `provisional`: an immediately usable bootstrap fit whose causal/as-issued
@@ -212,38 +216,25 @@ state that impact pressure is not reset probability. A `community` array is
 retained for one API compatibility version as a deprecated aggregate of the
 non-core groups, but the UI does not present it as community resonance.
 
-## Historical evaluation page
+## Historical results page
 
-Every issued prediction is immutable. Evaluation uses the forecast that was
-actually available at its issue time and never a reconstruction containing later
-evidence.
+The public historical page is a factual outcome log, not a model-evaluation
+surface. It lists the latest eligible revision of every confirmed reset outcome in
+reverse occurrence order. Each row contains only the confirmed occurrence interval
+and precision, official-source publication time, confirmed status, and the exact
+official source used to verify it.
 
-During the pre-launch period, the page may fall back to the separately labeled,
-compatible as-of-safe walk-forward evaluation used for champion promotion. Each
-fold uses one shared alert set under the configured budget for both recall and
-false-alert counts. It switches to live `as_issued` reporting only after the
-configured minimum number of mature forecast windows and confirmed events exists.
-An evaluation made with an older coverage, feature, model, data, or fold signature
-is invalidated rather than displayed.
+The history endpoint is independent of evaluation availability. A missing,
+incompatible, incomplete, or failed evaluation must not hide a valid confirmed
+outcome. Rejected or cancelled latest revisions, superseded outcome revisions, and
+confirmations that no longer satisfy the current outcome contract are not shown.
 
-Strict causal and as-issued validation runs in the background and does not block
-clearly labeled provisional forecast use. A provisional model may show sample
-counts and exploratory diagnostics, but the historical page must keep “not yet
-validated” distinct from both a passing walk-forward result and mature as-issued
-performance.
-
-The page includes:
-
-- rolling Brier score and Brier skill against the historical baseline;
-- a calibration chart comparing forecast probability buckets with observed rates;
-- recall of confirmed events within the highest-ranked forecast windows;
-- false high-probability alerts over time;
-- useful lead time before confirmed events;
-- an event table containing forecast issue time, highest-ranked windows, confirmed
-  occurrence interval, settlement result, score, and model version.
-
-Plain classification accuracy is not a primary metric because always predicting
-no reset can appear accurate for a rare event.
+Brier score, calibration, event recall, false-alert diagnostics, useful lead time,
+model versions, and promotion gates are intentionally absent from the public page.
+Strict causal walk-forward and as-issued evaluation still run in the background and
+remain available to operator APIs for model promotion, publication readiness, and
+audit. Every issued prediction used there remains immutable, and no reconstructed
+forecast may contain evidence learned after its cutoff.
 
 ## Deferred personal strategy
 

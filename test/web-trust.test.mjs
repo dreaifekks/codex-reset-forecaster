@@ -62,6 +62,10 @@ class MemoryStore {
     return structuredClone(this.states[name] ?? fallback);
   }
 
+  async writeState(name, value) {
+    this.states[name] = structuredClone(value);
+  }
+
   async readModel(name) {
     const value = this.models[name] ?? null;
     if (value instanceof Error) throw value;
@@ -476,6 +480,296 @@ async function serverFor(t, store, appConfig, now) {
   t.after(() => new Promise((resolve) => server.close(resolve)));
   return `http://127.0.0.1:${server.address().port}`;
 }
+
+test("exact forecast snapshots are immutable while current forecasts remain no-store", async (t) => {
+  const appConfig = config();
+  const savedPrediction = prediction();
+  const store = new MemoryStore({
+    records: { prediction: [savedPrediction] },
+  });
+  const base = await serverFor(
+    t,
+    store,
+    appConfig,
+    "2026-07-25T10:10:00.000Z",
+  );
+  const healthResponse = await fetch(`${base}/api/health`);
+  const health = await healthResponse.json();
+  const snapshotUrl =
+    `${base}/api/forecast/snapshots/${savedPrediction.record_id}/${savedPrediction.revision}`;
+  const response = await fetch(snapshotUrl);
+  assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get("cache-control"),
+    "public, max-age=31536000, immutable",
+  );
+  const etag = response.headers.get("etag");
+  assert.match(etag, /^"[a-f0-9]{64}"$/);
+  assert.deepEqual(await response.json(), savedPrediction);
+
+  const conditional = await fetch(snapshotUrl, {
+    headers: { "if-none-match": etag },
+  });
+  assert.equal(conditional.status, 304);
+  assert.equal(conditional.headers.get("etag"), etag);
+  assert.equal(
+    conditional.headers.get("cache-control"),
+    "public, max-age=31536000, immutable",
+  );
+  assert.equal(await conditional.text(), "");
+
+  const missing = await fetch(
+    `${base}/api/forecast/snapshots/${savedPrediction.record_id}/2`,
+  );
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get("cache-control"), "no-store");
+
+  const current = await fetch(`${base}/api/forecast/current`);
+  assert.equal(current.headers.get("cache-control"), "no-store");
+  assert.deepEqual(health.current_prediction_ref, {
+    record_id: savedPrediction.record_id,
+    revision: savedPrediction.revision,
+    issued_at: savedPrediction.data.issued_at,
+    knowledge_cutoff: savedPrediction.data.knowledge_cutoff,
+    snapshot_url:
+      `/api/forecast/snapshots/${savedPrediction.record_id}/${savedPrediction.revision}`,
+  });
+  assert.equal(health.synthetic_only, false);
+  assert.equal(
+    store.states["serving-snapshot"].schema_version,
+    "serving-snapshot/1",
+  );
+  assert.equal(
+    store.states["serving-snapshot"].prediction_hash,
+    hashLabel(savedPrediction),
+  );
+  assert.deepEqual(
+    store.states["serving-snapshot"].prediction,
+    savedPrediction,
+  );
+  assert.ok(store.states["serving-snapshot"].runtime_watermark.state_hash);
+  assert.ok(store.states["serving-snapshot"].readiness);
+  assert.ok(store.states["serving-snapshot"].evaluation_result);
+  store.allByRefs = async () => {
+    throw new Error("exact lookup should use the serving snapshot for current ref");
+  };
+  const projectedSnapshot = await fetch(snapshotUrl);
+  assert.equal(projectedSnapshot.status, 200);
+  assert.deepEqual(await projectedSnapshot.json(), savedPrediction);
+  const failedLookup = await fetch(
+    `${base}/api/forecast/snapshots/pred_unavailable/1`,
+  );
+  assert.equal(failedLookup.status, 404);
+  assert.equal(failedLookup.headers.get("cache-control"), "no-store");
+});
+
+test("serving projections singleflight heavy work and refresh volatile health dynamically", async (t) => {
+  class CountingStore extends MemoryStore {
+    modelReads = 0;
+    predictionScans = 0;
+
+    async all(type, options) {
+      if (type === "prediction") this.predictionScans += 1;
+      return super.all(type, options);
+    }
+
+    async readModel(name) {
+      this.modelReads += 1;
+      return super.readModel(name);
+    }
+  }
+
+  const appConfig = config({
+    runtime: {
+      forecast_fresh_age_hours: 1.5,
+      forecast_stale_age_hours: 3,
+      scheduler_interval_minutes: 10,
+    },
+  });
+  const store = new CountingStore({
+    states: {
+      "x-provider": {
+        last_success_at: "2026-07-25T10:05:00.000Z",
+        last_error: null,
+      },
+      runtime: {
+        last_run_started_at: "2026-07-25T10:00:00.000Z",
+        last_success_at: "2026-07-25T10:06:00.000Z",
+        last_status: "completed",
+        last_error: null,
+      },
+    },
+  });
+  let requestNow = new Date("2026-07-25T10:10:00.000Z");
+  const handler = createRequestHandler({
+    store,
+    config: appConfig,
+    now: () => new Date(requestNow),
+  });
+  assert.equal(typeof handler.refreshServingSnapshot, "function");
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  await Promise.all([
+    fetch(`${base}/api/health`),
+    fetch(`${base}/api/forecast/current`),
+  ]);
+  const firstHeavyReadCount = store.modelReads;
+  const firstPredictionScanCount = store.predictionScans;
+  assert.equal(firstHeavyReadCount, 3);
+  assert.equal(
+    store.states["serving-snapshot"].materialized_at,
+    requestNow.toISOString(),
+  );
+  await handler.refreshServingSnapshot(requestNow);
+  assert.equal(store.modelReads, firstHeavyReadCount);
+  assert.equal(store.predictionScans, firstPredictionScanCount);
+
+  store.states["x-provider"].last_success_at =
+    "2026-07-25T04:00:00.000Z";
+  const dynamicHealthResponse = await fetch(`${base}/api/health`);
+  const dynamicHealth = await dynamicHealthResponse.json();
+  assert.equal(dynamicHealth.provider_freshness.exact.status, "stale");
+  assert.equal(store.modelReads, firstHeavyReadCount);
+  assert.equal(store.predictionScans, firstPredictionScanCount);
+
+  store.states.runtime.current_run_started_at =
+    "2026-07-25T10:10:00.000Z";
+  store.states.runtime.last_run_started_at =
+    "2026-07-25T10:10:00.000Z";
+  store.states.runtime.last_retrain_requested_at =
+    "2026-07-25T10:10:00.000Z";
+  const runningHealthResponse = await fetch(`${base}/api/health`);
+  assert.equal((await runningHealthResponse.json()).pipeline_status, "running");
+  assert.equal(store.modelReads, firstHeavyReadCount);
+  assert.equal(store.predictionScans, firstPredictionScanCount);
+  store.states.runtime.current_run_started_at = null;
+
+  requestNow = new Date("2026-07-25T10:40:00.001Z");
+  await fetch(`${base}/api/health`);
+  assert.ok(store.modelReads > firstHeavyReadCount);
+  const afterTtlRefresh = store.modelReads;
+
+  store.states.runtime.last_status = "promotion_blocked";
+  store.states.runtime.last_promotion_status = "test_guard_rejected";
+  await fetch(`${base}/api/health`);
+  assert.ok(store.modelReads > afterTtlRefresh);
+  assert.equal(
+    store.states["serving-snapshot"].runtime_watermark.last_status,
+    "promotion_blocked",
+  );
+});
+
+test("health returns warming without waiting for cold snapshot materialization", async (t) => {
+  let releasePredictionReads;
+  let markPredictionReadStarted;
+  const predictionReadsReleased = new Promise((resolve) => {
+    releasePredictionReads = resolve;
+  });
+  const predictionReadStarted = new Promise((resolve) => {
+    markPredictionReadStarted = resolve;
+  });
+  let predictionReadMarked = false;
+  class SlowPredictionStore extends MemoryStore {
+    async all(type, options) {
+      if (type === "prediction") {
+        if (!predictionReadMarked) {
+          predictionReadMarked = true;
+          markPredictionReadStarted();
+        }
+        await predictionReadsReleased;
+      }
+      return super.all(type, options);
+    }
+  }
+
+  const savedPrediction = prediction();
+  const appConfig = config({
+    runtime: {
+      forecast_fresh_age_hours: 1.5,
+      forecast_stale_age_hours: 3,
+      scheduler_interval_minutes: 10,
+    },
+  });
+  const store = new SlowPredictionStore({
+    records: { prediction: [savedPrediction] },
+    states: {
+      "x-provider": {
+        last_success_at: "2026-07-25T10:05:00.000Z",
+        last_error: null,
+      },
+      runtime: {
+        last_success_at: "2026-07-25T10:06:00.000Z",
+        last_status: "completed",
+        last_prediction_id: savedPrediction.record_id,
+        last_error: null,
+      },
+    },
+  });
+  const requestNow = new Date("2026-07-25T10:10:00.000Z");
+  const handler = createRequestHandler({
+    store,
+    config: appConfig,
+    now: () => new Date(requestNow),
+  });
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  let warmupSettled = false;
+  const warmup = handler.refreshServingSnapshot(requestNow).finally(() => {
+    warmupSettled = true;
+  });
+  await predictionReadStarted;
+  let timeout;
+  let warmingResponse;
+  try {
+    warmingResponse = await Promise.race([
+      fetch(`${base}/api/health`),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("health waited for serving snapshot warmup"));
+        }, 250);
+      }),
+    ]);
+    assert.equal(warmingResponse.status, 503);
+    assert.equal(warmingResponse.headers.get("cache-control"), "no-store");
+    const warming = await warmingResponse.json();
+    assert.equal(warming.status, "warming");
+    assert.equal(warming.error, "forecast_warming");
+    assert.equal(warming.pipeline_status, "warming");
+    assert.equal(warming.current_prediction_ref, null);
+    assert.deepEqual(warming.serving_blockers, [
+      "serving_snapshot_warming",
+    ]);
+    assert.equal(warmupSettled, false);
+  } finally {
+    clearTimeout(timeout);
+    releasePredictionReads();
+  }
+
+  await warmup;
+  assert.equal(warmupSettled, true);
+  const readyHealthResponse = await fetch(`${base}/api/health`);
+  const readyHealth = await readyHealthResponse.json();
+  assert.notEqual(readyHealth.status, "warming");
+  assert.deepEqual(readyHealth.current_prediction_ref, {
+    record_id: savedPrediction.record_id,
+    revision: savedPrediction.revision,
+    issued_at: savedPrediction.data.issued_at,
+    knowledge_cutoff: savedPrediction.data.knowledge_cutoff,
+    snapshot_url:
+      `/api/forecast/snapshots/${savedPrediction.record_id}/${savedPrediction.revision}`,
+  });
+  const exactResponse = await fetch(
+    `${base}${readyHealth.current_prediction_ref.snapshot_url}`,
+  );
+  assert.equal(exactResponse.status, 200);
+  assert.deepEqual(await exactResponse.json(), savedPrediction);
+});
 
 test("recent evidence is aligned to the forecast cutoff and aggregator summaries never become core", async (t) => {
   const before = observation(

@@ -12,7 +12,7 @@ The repository contains the contracts plus a zero-dependency Node.js prototype:
 direct X, RSSHub X timeline, X Search Gateway, historical-monitor, and fixture
 adapters; append-only records and acquisition audit data; deterministic extraction
 and adjudication; feature snapshots; a regularized hourly hazard model; a
-walk-forward promotion gate; JSON APIs; and the forecast/evaluation website.
+walk-forward promotion gate; JSON APIs; and forecast plus confirmed-history pages.
 Personal quota integration remains deferred.
 
 The operating policy separates immediate usefulness from validated performance. A
@@ -117,8 +117,8 @@ The first website release covers:
   deduplication;
 - a small, strongly regularized hourly hazard model;
 - a single 168-hour forecast rendered as 4-hour, 24-hour, and seven-day heatmaps;
-- immutable prediction history and an evaluation page for calibration, Brier
-  score, event-window recall, false alerts, and useful lead time.
+- immutable prediction history, internal evaluation for promotion, and a public
+  history page containing only confirmed reset results and their sources.
 
 The MVP does not include user accounts, personal five-hour or weekly quota state,
 reset-voucher inventory, or personalized voucher recommendations. Those remain a
@@ -227,7 +227,7 @@ and restart commands.
 
 ## Status
 
-Version `0.5.0` with canonical contract `reset-intel/0.2` implements the website
+Version `0.5.1` with canonical contract `reset-intel/0.2` implements the website
 prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,

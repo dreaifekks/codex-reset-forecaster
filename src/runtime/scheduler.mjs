@@ -35,11 +35,29 @@ export function startScheduler({
   now = () => new Date(),
   logger = console,
   run = runPipeline,
+  afterRun = null,
+  afterState = null,
 }) {
   let timer = null;
   let stopped = false;
   let running = false;
   let scheduledFor = null;
+
+  async function notifyFinalState(context) {
+    for (const [name, callback] of [
+      ["afterState", afterState],
+      ["afterRun", afterRun],
+    ]) {
+      if (typeof callback !== "function") continue;
+      try {
+        await callback(context);
+      } catch (error) {
+        logger.error?.(
+          `forecast scheduler ${name} callback failed: ${error.stack ?? error.message}`,
+        );
+      }
+    }
+  }
 
   function schedule(preferredAt = null) {
     if (timer) clearTimeout(timer);
@@ -138,7 +156,7 @@ export function startScheduler({
       if (!waitingStatus && !promotionBlocked && !result.forecast?.prediction) {
         throw new Error("Pipeline completed without issuing a forecast");
       }
-      await store.writeState("runtime", {
+      const finalState = {
         ...state,
         current_run_started_at: null,
         last_run_started_at: startedAt.toISOString(),
@@ -180,6 +198,16 @@ export function startScheduler({
         last_collection: result.collection,
         last_timing: result.timing ?? null,
         last_error: trainingError,
+      };
+      await store.writeState("runtime", finalState);
+      await notifyFinalState({
+        status: "success",
+        pipeline_status: result.status ?? "completed",
+        started_at: startedAt.toISOString(),
+        finished_at: finishedAt.toISOString(),
+        state: finalState,
+        result,
+        error: null,
       });
       if (coverageWaiting) {
         logger.info?.(
@@ -208,7 +236,7 @@ export function startScheduler({
     } catch (error) {
       const state = await store.readState("runtime", {});
       const failedAt = now();
-      await store.writeState("runtime", {
+      const finalState = {
         ...state,
         current_run_started_at: null,
         last_run_started_at: startedAt.toISOString(),
@@ -216,6 +244,16 @@ export function startScheduler({
         last_run_duration_ms: Math.max(0, failedAt.getTime() - startedAt.getTime()),
         last_status: "error",
         last_error: error.message,
+      };
+      await store.writeState("runtime", finalState);
+      await notifyFinalState({
+        status: "failure",
+        pipeline_status: "error",
+        started_at: startedAt.toISOString(),
+        finished_at: failedAt.toISOString(),
+        state: finalState,
+        result: null,
+        error,
       });
       logger.error?.(`forecast pipeline failed: ${error.stack ?? error.message}`);
     } finally {

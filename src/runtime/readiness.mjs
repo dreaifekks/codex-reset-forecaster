@@ -153,6 +153,9 @@ function assessRecordSnapshot({
   records,
   name,
   requireSnapshot = true,
+  allowSupersededRefs = new Set(),
+  supersededWarnings = null,
+  supersededWarning = null,
 }) {
   const reasons = [];
   if (!Array.isArray(entries)) {
@@ -174,7 +177,12 @@ function assessRecordSnapshot({
       continue;
     }
     if (Number(latestById.get(entry.record_id)?.revision) > Number(entry.revision)) {
-      reasons.push(`${name}_revision_superseded`);
+      const key = exactRevisionKey(entry);
+      if (allowSupersededRefs.has(key) && supersededWarnings && supersededWarning) {
+        supersededWarnings.push(supersededWarning);
+      } else {
+        reasons.push(`${name}_revision_superseded`);
+      }
     }
   }
   return [...new Set(reasons)];
@@ -190,6 +198,7 @@ export function assessEvaluationCompatibility(
     predictionRevisions = [],
     settlementRevisions = [],
     evaluationArtifactVerification = null,
+    allowAsIssuedBaselineSuperseded = false,
   } = {},
 ) {
   if (!evaluation) {
@@ -197,6 +206,7 @@ export function assessEvaluationCompatibility(
   }
   const provenance = evaluation.provenance ?? {};
   const reasons = [];
+  const warnings = [];
   if (!evaluationVersionSupported(evaluation.evaluation_version)) {
     reasons.push("evaluation_version_unsupported");
   }
@@ -243,6 +253,31 @@ export function assessEvaluationCompatibility(
     `${assertion.assertion_id}@${assertion.revision}`,
     assertion,
   ]));
+  const issuedArtifact = evaluation.mode === "as_issued" &&
+      evaluationArtifactVerification?.valid === true
+    ? evaluationArtifactVerification.artifact
+    : null;
+  const issuedRows = Array.isArray(issuedArtifact?.rows)
+    ? issuedArtifact.rows
+    : [];
+  const baselineCoverageRefKeys = new Set(
+    issuedRows.flatMap((row) => row.baseline_coverage_assertion_refs ?? [])
+      .map((ref) => `${ref.assertion_id}@${ref.revision}`),
+  );
+  const settlementCoverageRefKeys = new Set(
+    issuedRows.flatMap((row) => row.settlement_coverage_assertion_refs ?? [])
+      .map((ref) => `${ref.assertion_id}@${ref.revision}`),
+  );
+  const baselineOutcomeRefKeys = new Set(
+    issuedRows.flatMap((row) => row.baseline_outcome_snapshot_refs ?? [])
+      .map(exactRevisionKey),
+  );
+  const labelOutcomeRefKeys = new Set(
+    (issuedArtifact?.events ?? [])
+      .map((event) => event.outcome_ref)
+      .filter(Boolean)
+      .map(exactRevisionKey),
+  );
   const referencedAssertions = [];
   if (actualCoverageRefs.length === 0) {
     reasons.push("coverage_assertions_missing");
@@ -261,7 +296,17 @@ export function assessEvaluationCompatibility(
       reasons.push("coverage_assertion_not_eligible");
     }
     if (Number(latestAssertionById.get(ref.assertion_id)?.revision) > Number(ref.revision)) {
-      reasons.push("coverage_assertion_revision_superseded");
+      const key = `${ref.assertion_id}@${ref.revision}`;
+      const displayOnlyBaseline =
+        allowAsIssuedBaselineSuperseded &&
+        evaluation.mode === "as_issued" &&
+        baselineCoverageRefKeys.has(key) &&
+        !settlementCoverageRefKeys.has(key);
+      if (displayOnlyBaseline) {
+        warnings.push("baseline_coverage_assertion_revision_superseded");
+      } else {
+        reasons.push("coverage_assertion_revision_superseded");
+      }
     }
   }
   referencedAssertions.sort((left, right) =>
@@ -291,11 +336,19 @@ export function assessEvaluationCompatibility(
       reasons.push("champion_model_version_mismatch");
     }
   }
+  const displayOnlyBaselineOutcomeRefs = new Set(
+    allowAsIssuedBaselineSuperseded && evaluation.mode === "as_issued"
+      ? [...baselineOutcomeRefKeys].filter((key) => !labelOutcomeRefKeys.has(key))
+      : [],
+  );
   reasons.push(...assessRecordSnapshot({
     entries: provenance.outcome_snapshot_refs,
     expectedHash: provenance.outcome_snapshot_hash,
     records: outcomeRevisions,
     name: "outcome",
+    allowSupersededRefs: displayOnlyBaselineOutcomeRefs,
+    supersededWarnings: warnings,
+    supersededWarning: "baseline_outcome_revision_superseded",
   }));
   if (evaluation.mode === "as_issued") {
     reasons.push(...assessRecordSnapshot({
@@ -321,6 +374,7 @@ export function assessEvaluationCompatibility(
     compatible: reasons.length === 0,
     invalidated: reasons.length > 0,
     reasons: [...new Set(reasons)],
+    warnings: [...new Set(warnings)],
     evaluation_version: evaluation.evaluation_version ?? null,
     referenced_coverage_assertion_refs: actualCoverageRefs,
   };

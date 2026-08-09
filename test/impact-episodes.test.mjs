@@ -666,6 +666,96 @@ test("one common timing token cannot merge unrelated same-surface issues", async
   );
 });
 
+test("split clusters preserve the causal owner of an existing episode identity", async (t) => {
+  const seedStore = await temporaryStore(t);
+  const at = "2026-07-29T00:00:00Z";
+  const [originalAnchor] = await appendImpactSignals(seedStore, [
+    {
+      id: "original-tool-episode",
+      availableAt: at,
+      group: "ind_original_tool_episode",
+      category: "tool_execution",
+      surfaces: ["mcp"],
+      text: "Codex MCP execution hangs after tool return",
+    },
+  ]);
+  await buildImpactEpisodes(seedStore, CONFIG, {
+    asOf: new Date("2026-07-29T01:00:00Z"),
+  });
+  const [seedEpisode] = await seedStore.all("impact_episode");
+
+  const first = impactSignal({
+    id: "earlier-sorted-client-issue",
+    availableAt: at,
+    group: "ind_earlier_client_issue",
+    category: "client_ux",
+    surfaces: ["cli"],
+  });
+  const observations = [
+    rawObservation({
+      id: "earlier-sorted-client-issue",
+      availableAt: at,
+      text: "Codex CLI repeatedly asks for approval",
+    }),
+    rawObservation({
+      id: "original-tool-episode",
+      availableAt: at,
+      text: "Codex MCP execution hangs after tool return",
+    }),
+  ];
+  const existing = structuredClone(seedEpisode);
+  existing.revision = 3;
+  existing.data.evidence = [
+    {
+      signal_ref: {
+        record_id: first.record_id,
+        revision: first.revision,
+      },
+      independence_group_id: first.data.provenance.independence_group_id,
+      relation: "reports",
+    },
+    ...existing.data.evidence,
+  ];
+  existing.data.pressure_components.independent_evidence_count = 2;
+
+  let planned = [];
+  const store = {
+    async all(type) {
+      if (type === "normalized_signal") return [first, originalAnchor];
+      if (type === "raw_observation") return observations;
+      if (type === "impact_episode") return [existing];
+      throw new Error(`Unexpected record type ${type}`);
+    },
+    async appendMany(records) {
+      planned = records;
+      return records.map((record) => ({ inserted: true, record }));
+    },
+  };
+
+  await buildImpactEpisodes(store, CONFIG, {
+    asOf: new Date("2026-07-29T02:00:00Z"),
+  });
+  assert.equal(planned.length, 2);
+  assert.equal(
+    new Set(planned.map((episode) =>
+      `${episode.record_id}@${episode.revision}`
+    )).size,
+    2,
+  );
+  const revision = planned.find((episode) =>
+    episode.record_id === existing.record_id
+  );
+  assert.equal(revision.revision, 4);
+  assert.deepEqual(revision.supersedes, {
+    record_id: existing.record_id,
+    revision: 3,
+  });
+  assert.deepEqual(
+    revision.data.evidence.map((entry) => entry.independence_group_id),
+    [originalAnchor.data.provenance.independence_group_id],
+  );
+});
+
 test("impact episodes ignore incompatible extractor history and irrelevant current signals", async (t) => {
   const store = await temporaryStore(t);
   const config = {

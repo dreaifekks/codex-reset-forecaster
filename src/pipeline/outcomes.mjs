@@ -96,7 +96,7 @@ export function buildOutcomeEligibilityContext({ observations, signals, config =
   };
 }
 
-export function isEligibleConfirmedOutcome(outcome, {
+export function eligibleConfirmedOutcomeVerifications(outcome, {
   observationsByExactRef = new Map(),
   currentSignalsByObservationId = new Map(),
   confirmationIdentityIds: allowedConfirmationIds = null,
@@ -122,7 +122,7 @@ export function isEligibleConfirmedOutcome(outcome, {
         expectedAdjudicationContractHash
     ) ||
     !expectedExtractor
-  ) return false;
+  ) return [];
   if (
     target &&
     (
@@ -132,8 +132,8 @@ export function isEligibleConfirmedOutcome(outcome, {
       (target.quota_bucket != null &&
         outcome.data.scope.quota_bucket !== target.quota_bucket)
     )
-  ) return false;
-  return outcome.data.verification.some((entry) => {
+  ) return [];
+  return outcome.data.verification.filter((entry) => {
     const observation = observationsByExactRef.get(exactRefKey(entry.observation_ref));
     if (!observation) return false;
     if (
@@ -166,6 +166,10 @@ export function isEligibleConfirmedOutcome(outcome, {
     return !allowedConfirmationIds ||
       allowedConfirmationIds.has(signal.data.provenance.source_identity_id);
   });
+}
+
+export function isEligibleConfirmedOutcome(outcome, context = {}) {
+  return eligibleConfirmedOutcomeVerifications(outcome, context).length > 0;
 }
 
 function inferredOccurrenceRange(signal, observation) {

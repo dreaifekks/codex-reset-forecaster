@@ -9,14 +9,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=forecast-lazy-1">
     <script
       defer
       src="https://vibecafe.ai/telemetry/v1.js"
       data-vc-product-id="cms37qho500000bl2g4vpcf9b"
       data-vc-auth-key="vc_web__qNoqm01G9r2-8F-e7i7NC7xD4WmbnNBhsvDYfg59mk"
     ></script>
-    <script src="/app.js" type="module"></script>
+    <script src="/app.js?v=forecast-lazy-1" type="module"></script>
   </head>
   <body>
     <header class="site-header">
@@ -28,7 +28,7 @@
         </a>
         <nav aria-label="主导航">
           <a class="active" href="/">预测</a>
-          <a href="/accuracy">历史精度</a>
+          <a href="/accuracy">历史结果</a>
         </nav>
       </div>
     </header>
@@ -141,7 +141,7 @@
             </div>
           </div>
           <p class="cutoff-note" id="evidence-cutoff">仅显示预测信息截止时间前已知的信号。</p>
-          <ol class="evidence-list" id="core-signal-list" aria-live="polite"><li>正在加载核心信号…</li></ol>
+          <ol class="evidence-list" id="core-signal-list" aria-live="polite"><li>滚动到此处后加载核心信号…</li></ol>
         </article>
         <article class="panel reference-panel">
           <div class="panel-heading compact">
@@ -151,11 +151,11 @@
               <p class="section-description">按影响严重级整理实际 bug、故障与工作流退化，不以讨论声量排序。</p>
             </div>
           </div>
-          <ol class="evidence-list" id="experience-signal-list" aria-live="polite"><li>正在加载体验问题…</li></ol>
+          <ol class="evidence-list" id="experience-signal-list" aria-live="polite"><li>滚动到此处后加载体验问题…</li></ol>
           <div class="reference-subsection">
             <h3>竞争模型发布</h3>
             <p class="section-description">只保留明确宣布、预览或正式发布的直接相关模型与编码代理。</p>
-            <ol class="evidence-list" id="competition-signal-list" aria-live="polite"><li>正在加载竞争动态…</li></ol>
+            <ol class="evidence-list" id="competition-signal-list" aria-live="polite"><li>滚动到此处后加载竞争动态…</li></ol>
           </div>
         </article>
       </section>
@@ -170,7 +170,7 @@
             </div>
           </div>
           <p class="context-disclaimer">原始动态不等于重置信号，是否参与预测以每条动态的匹配状态为准。</p>
-          <ol class="evidence-list timeline-list" id="tibo-timeline-list" aria-live="polite"><li>正在加载 Tibo 最新动态…</li></ol>
+          <ol class="evidence-list timeline-list" id="tibo-timeline-list" aria-live="polite"><li>滚动到此处后加载 Tibo 最新动态…</li></ol>
         </article>
         <article class="panel impact-panel">
           <div class="panel-heading compact">
@@ -181,7 +181,7 @@
             </div>
           </div>
           <p class="context-disclaimer pressure-disclaimer">影响压力是问题发酵强度，不是 reset 概率，也不应按概率解读。</p>
-          <ol class="evidence-list impact-episode-list" id="impact-episode-list" aria-live="polite"><li>正在加载问题发酵状态…</li></ol>
+          <ol class="evidence-list impact-episode-list" id="impact-episode-list" aria-live="polite"><li>滚动到此处后加载问题发酵状态…</li></ol>
         </article>
       </section>
 
@@ -193,7 +193,7 @@
             <p class="section-description">新收到的信号会用于下一次预测。</p>
           </div>
         </div>
-        <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>正在检查截止时间后的信号…</li></ol>
+        <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>滚动到此处后检查截止时间后的信号…</li></ol>
       </section>
     </main>
 

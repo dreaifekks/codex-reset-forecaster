@@ -842,7 +842,31 @@ function clusterTopicKey(cluster) {
   );
 }
 
-function episodeIdentity(cluster, existing, claimedEpisodeIds) {
+function defaultEpisodeIdentity(cluster) {
+  return makeRecordId("episode", [
+    clusterTopicKey(cluster),
+    new Date(cluster.firstObservedAtMs).toISOString(),
+  ].join(":"));
+}
+
+function splitEpisodeIdentity(cluster) {
+  const groups = [...new Set(
+    cluster.entries.map((entry) => entry.independenceGroupId),
+  )].sort();
+  return makeRecordId("episode", [
+    "split",
+    clusterTopicKey(cluster),
+    new Date(cluster.firstObservedAtMs).toISOString(),
+    groups.join(","),
+  ].join(":"));
+}
+
+function episodeIdentity(
+  cluster,
+  existing,
+  claimedEpisodeIds,
+  reservedIdentityOwners,
+) {
   const groups = new Set(
     cluster.entries.map((entry) => entry.independenceGroupId),
   );
@@ -850,6 +874,10 @@ function episodeIdentity(cluster, existing, claimedEpisodeIds) {
     .filter(
       (episode) =>
         !claimedEpisodeIds.has(episode.data.episode_id) &&
+        (
+          !reservedIdentityOwners.has(episode.data.episode_id) ||
+          reservedIdentityOwners.get(episode.data.episode_id) === cluster
+        ) &&
         episode.data.evidence.some((entry) =>
           groups.has(entry.independence_group_id)
         ),
@@ -861,14 +889,23 @@ function episodeIdentity(cluster, existing, claimedEpisodeIds) {
         ) ||
         left.data.episode_id.localeCompare(right.data.episode_id),
     )[0];
-  const episodeId =
-    prior?.data.episode_id ??
-    makeRecordId("episode", [
-      clusterTopicKey(cluster),
-      new Date(cluster.firstObservedAtMs).toISOString(),
-    ].join(":"));
-  claimedEpisodeIds.add(episodeId);
-  return episodeId;
+  if (prior) {
+    claimedEpisodeIds.add(prior.data.episode_id);
+    return prior.data.episode_id;
+  }
+  const defaultIdentity = defaultEpisodeIdentity(cluster);
+  if (!claimedEpisodeIds.has(defaultIdentity)) {
+    claimedEpisodeIds.add(defaultIdentity);
+    return defaultIdentity;
+  }
+  const splitIdentity = splitEpisodeIdentity(cluster);
+  if (claimedEpisodeIds.has(splitIdentity)) {
+    throw new Error(
+      `Deterministic impact episode identity collision: ${splitIdentity}`,
+    );
+  }
+  claimedEpisodeIds.add(splitIdentity);
+  return splitIdentity;
 }
 
 function buildEpisodeData({
@@ -983,12 +1020,26 @@ export async function buildImpactEpisodes(
   );
   const existing = await store.all("impact_episode");
   const claimedEpisodeIds = new Set();
+  const reservedIdentityOwners = new Map();
+  const existingEpisodeIds = new Set(
+    existing.map((episode) => episode.data.episode_id),
+  );
+  for (const cluster of clusters) {
+    const defaultIdentity = defaultEpisodeIdentity(cluster);
+    if (
+      existingEpisodeIds.has(defaultIdentity) &&
+      !reservedIdentityOwners.has(defaultIdentity)
+    ) {
+      reservedIdentityOwners.set(defaultIdentity, cluster);
+    }
+  }
   const records = [];
   for (const cluster of clusters) {
     const episodeId = episodeIdentity(
       cluster,
       existing,
       claimedEpisodeIds,
+      reservedIdentityOwners,
     );
     const naturalKey = `${policy.version}:${episodeId}`;
     const recordId = makeRecordId("imp", naturalKey);
@@ -1016,6 +1067,10 @@ export async function buildImpactEpisodes(
         data,
       }),
     );
+  }
+  const plannedRecordIds = records.map((record) => record.record_id);
+  if (new Set(plannedRecordIds).size !== plannedRecordIds.length) {
+    throw new Error("Impact episode batch contains duplicate record identities");
   }
   const results = await store.appendMany(records);
   return {

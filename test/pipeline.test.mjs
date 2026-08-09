@@ -16,10 +16,19 @@ import {
 } from "../src/pipeline/run.mjs";
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
 import { createRequestHandler, evidenceTierForSignal } from "../src/web/app.mjs";
-import { addCoverageInterval } from "../src/pipeline/coverage.mjs";
-import { evaluateIssuedForecasts } from "../src/model/issued-evaluation.mjs";
+import {
+  addCoverageInterval,
+  verifiedCoverageAssertionRevisions,
+} from "../src/pipeline/coverage.mjs";
+import {
+  evaluateIssuedForecasts,
+  verifyIssuedEvaluationArtifact,
+} from "../src/model/issued-evaluation.mjs";
 import { settleIssuedPredictions } from "../src/model/settlement.mjs";
-import { getReadiness } from "../src/runtime/readiness.mjs";
+import {
+  assessEvaluationCompatibility,
+  getReadiness,
+} from "../src/runtime/readiness.mjs";
 import { hashLabel } from "../src/core/hash.mjs";
 
 test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product events in core", () => {
@@ -124,6 +133,52 @@ test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product e
     ),
     "competition",
   );
+});
+
+test("confirmed history stays available when evaluation storage is unavailable", async (t) => {
+  const config = await loadConfig();
+  let evaluationReads = 0;
+  let recordReads = 0;
+  const store = {
+    async all(recordType) {
+      recordReads += 1;
+      assert.ok([
+        "reset_outcome",
+        "normalized_signal",
+      ].includes(recordType));
+      return [];
+    },
+    async allByRefs(recordType, refs) {
+      recordReads += 1;
+      assert.equal(recordType, "raw_observation");
+      assert.deepEqual(refs, []);
+      return [];
+    },
+    async readState() {
+      evaluationReads += 1;
+      throw new Error("evaluation storage must not be read");
+    },
+    async readModel() {
+      evaluationReads += 1;
+      throw new Error("model storage must not be read");
+    },
+  };
+  const server = http.createServer(createRequestHandler({ store, config }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}/api/history/results`,
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { results: [] });
+  const repeated = await fetch(
+    `http://127.0.0.1:${address.port}/api/history/results`,
+  );
+  assert.equal(repeated.status, 200);
+  assert.deepEqual(await repeated.json(), { results: [] });
+  assert.equal(evaluationReads, 0);
+  assert.equal(recordReads, 3, "the derived history view should be cached");
 });
 
 test("covered end-to-end pipeline passes the meaningful 80% gate and serves the website", async (t) => {
@@ -328,17 +383,23 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     healthResponse,
     forecastResponse,
     evaluationResponse,
+    historyResponse,
     evidenceResponse,
     pageResponse,
     appScriptResponse,
+    accuracyPageResponse,
+    accuracyScriptResponse,
     stylesResponse,
   ] = await Promise.all([
     fetch(`${base}/api/health`),
     fetch(`${base}/api/forecast/current`),
     fetch(`${base}/api/evaluation/summary`),
+    fetch(`${base}/api/history/results`),
     fetch(`${base}/api/evidence/recent`),
     fetch(`${base}/`),
     fetch(`${base}/app.js`),
+    fetch(`${base}/accuracy`),
+    fetch(`${base}/accuracy.js`),
     fetch(`${base}/styles.css`),
   ]);
   assert.equal(healthResponse.status, 200);
@@ -351,13 +412,29 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.equal(health.provider_last_success_at, "2026-07-22T17:30:00.000Z");
   assert.equal(health.providers.x_search_gateway.upstream_provider, "hermes");
   assert.equal(forecastResponse.status, 200);
+  assert.equal(historyResponse.status, 200);
+  assert.equal(accuracyPageResponse.status, 200);
+  assert.equal(accuracyScriptResponse.status, 200);
   assert.equal(stylesResponse.status, 200);
+  assert.equal(accuracyScriptResponse.headers.get("cache-control"), "no-cache");
+  assert.equal(stylesResponse.headers.get("cache-control"), "no-cache");
   const servedForecast = await forecastResponse.json();
   assert.equal(servedForecast.data.slots.length, 168);
   assert.equal(servedForecast.serving.synthetic_demo, true);
   assert.equal(servedForecast.serving.publication_ready, false);
   assert.ok(servedForecast.serving.publication_blockers.includes("synthetic_only"));
   assert.ok((await evaluationResponse.json()).metrics.event_window_recall >= 0.8);
+  const history = await historyResponse.json();
+  assert.ok(history.results.length > 0);
+  assert.ok(history.results.every((result) => result.status === "confirmed"));
+  assert.ok(history.results.every((result) => result.source?.observation_ref));
+  assert.ok(history.results.every((result) => !("evaluation" in result)));
+  assert.deepEqual(
+    history.results.map((result) => result.occurred_time_range.start),
+    history.results
+      .map((result) => result.occurred_time_range.start)
+      .toSorted((left, right) => right.localeCompare(left)),
+  );
   const evidence = await evidenceResponse.json();
   assert.ok(evidence.core.length > 0);
   assert.ok(evidence.community.length > 0);
@@ -369,6 +446,8 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.ok(evidence.items.every((item) => item.scope && "derivation" in item && "published_at" in item.source));
   const page = await pageResponse.text();
   const appScript = await appScriptResponse.text();
+  const accuracyPage = await accuracyPageResponse.text();
+  const accuracyScript = await accuracyScriptResponse.text();
   const styles = await stylesResponse.text();
   assert.match(page, /每小时重置概率/);
   assert.match(page, /未来 7 天重置概率/);
@@ -430,7 +509,154 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     /未重置概率|与 OpenAI 无关联|原始陈述/,
   );
   assert.match(appScript, /模型已训练 · 评估中/);
+  assert.match(appScript, /实时来源正常/);
+  assert.match(appScript, /负标签按审计延迟成熟/);
+  assert.doesNotMatch(appScript, /data_quality\?\.score/);
+  assert.match(page, /app\.js\?v=forecast-lazy-1/);
+  assert.match(page, /styles\.css\?v=forecast-lazy-1/);
+  assert.match(page, /滚动到此处后加载核心信号/);
+  assert.match(appScript, /current_prediction_ref/);
+  assert.match(appScript, /snapshot_url/);
+  assert.match(appScript, /IntersectionObserver/);
+  assert.match(appScript, /cache: "default"/);
+  assert.doesNotMatch(appScript, /\/api\/forecast\/current/);
+  assert.doesNotMatch(appScript, /\/api\/readiness/);
+  assert.match(page, /href="\/accuracy">历史结果</);
+  assert.match(accuracyPage, /<h1>历史结果<\/h1>/);
+  assert.match(accuracyPage, /只列出已经确认发生的 Codex 重置结果/);
+  assert.match(accuracyPage, /id="result-table"/);
+  assert.match(accuracyPage, /accuracy\.js\?v=history-results-2/);
+  assert.match(accuracyPage, /确认发生时间/);
+  assert.match(accuracyPage, /官方确认时间/);
+  assert.match(accuracyScript, /\/api\/history\/results/);
+  assert.match(accuracyScript, /rel="noopener noreferrer"/);
+  assert.match(accuracyScript, /source\?\.published_at/);
+  assert.match(accuracyScript, /请求超时/);
+  assert.doesNotMatch(accuracyScript, /\/api\/evaluation\//);
+  assert.doesNotMatch(
+    `${accuracyPage}\n${accuracyScript}`,
+    /历史精度|历史预测精度|历史事件召回率|概率误差|相对基线|校准曲线|高概率误报|策略非事件|提前量中位数|发布评估|评估已失效/,
+  );
   assert.match(pageResponse.headers.get("content-security-policy"), /default-src 'self'/);
+
+  const issuedArtifact = await store.readBlob(
+    twoWindowEvaluation.provenance.row_sample_ref,
+  );
+  const settlementCoverageKeys = new Set(
+    issuedArtifact.rows.flatMap((row) =>
+      row.settlement_coverage_assertion_refs ?? []
+    ).map((ref) => `${ref.assertion_id}@${ref.revision}`),
+  );
+  const baselineOnlyRef = issuedArtifact.rows.flatMap((row) =>
+    row.baseline_coverage_assertion_refs ?? []
+  ).find((ref) =>
+    !settlementCoverageKeys.has(`${ref.assertion_id}@${ref.revision}`)
+  );
+  assert.ok(baselineOnlyRef, "fixture needs baseline-only coverage provenance");
+  const assertionsBeforeCorrection = await verifiedCoverageAssertionRevisions(
+    store,
+    config.model.outcome_coverage_providers,
+    { config },
+  );
+  const baselineAssertion = assertionsBeforeCorrection.find((assertion) =>
+    assertion.assertion_id === baselineOnlyRef.assertion_id &&
+    assertion.revision === baselineOnlyRef.revision
+  );
+  assert.ok(baselineAssertion);
+  await addCoverageInterval(
+    store,
+    baselineAssertion.provider,
+    baselineAssertion.start,
+    baselineAssertion.end,
+    {
+      assertion_id: baselineAssertion.assertion_id,
+      asserted_at: addHours(now, 14),
+      mode: baselineAssertion.mode,
+      adequacy: "outcome_only",
+      rationale: "test correction after the as-issued baseline cutoff",
+    },
+  );
+  const correctedAssertions = await verifiedCoverageAssertionRevisions(
+    store,
+    config.model.outcome_coverage_providers,
+    { config },
+  );
+  const verification = await verifyIssuedEvaluationArtifact(
+    store,
+    twoWindowEvaluation,
+  );
+  const compatibilityOptions = {
+    champion: await store.readModel("champion"),
+    outcomeRevisions: await store.all("reset_outcome", { latestOnly: false }),
+    predictionRevisions: await store.all("prediction", { latestOnly: false }),
+    settlementRevisions: await store.all("prediction_settlement", { latestOnly: false }),
+    evaluationArtifactVerification: verification,
+  };
+  const strictCompatibility = assessEvaluationCompatibility(
+    twoWindowEvaluation,
+    config,
+    correctedAssertions,
+    compatibilityOptions,
+  );
+  assert.ok(
+    strictCompatibility.reasons.includes("coverage_assertion_revision_superseded"),
+  );
+  const displayCompatibility = assessEvaluationCompatibility(
+    twoWindowEvaluation,
+    config,
+    correctedAssertions,
+    {
+      ...compatibilityOptions,
+      allowAsIssuedBaselineSuperseded: true,
+    },
+  );
+  assert.equal(displayCompatibility.compatible, true);
+  assert.ok(
+    displayCompatibility.warnings.includes(
+      "baseline_coverage_assertion_revision_superseded",
+    ),
+  );
+
+  await store.writeState("champion-evaluation", null);
+  await store.writeState("walk-forward-summary", null);
+  await store.writeState("evaluation-summary", null);
+  const preliminaryResponse = await fetch(`${base}/api/evaluation/summary`);
+  const preliminary = await preliminaryResponse.json();
+  assert.equal(preliminaryResponse.status, 200, JSON.stringify(preliminary));
+  assert.equal(preliminary.reporting_status, "preliminary");
+  assert.equal(preliminary.sample_gate.sample_threshold_passed, false);
+  assert.equal(preliminary.metric_availability.brier_skill, false);
+  assert.equal(preliminary.reporting_view.status, "available");
+  assert.equal(preliminary.reporting_view.scope, "current_model_release");
+  assert.equal(
+    preliminary.reporting_view.source_evaluation_artifact_hash,
+    preliminary.evaluation_artifact_hash,
+  );
+  assert.equal(preliminary.reporting_view.metrics.evaluated_windows, 2);
+  assert.equal(preliminary.reporting_view.metrics.evaluated_events, 1);
+  assert.equal(
+    preliminary.reporting_view.sample_gate.sample_threshold_passed,
+    false,
+  );
+  const [allEventsResponse, reportingEventsResponse] = await Promise.all([
+    fetch(`${base}/api/evaluation/events`),
+    fetch(`${base}/api/evaluation/events?scope=reporting`),
+  ]);
+  const allEvents = await allEventsResponse.json();
+  const reportingEvents = await reportingEventsResponse.json();
+  assert.equal(allEvents.scope, "all_history");
+  assert.equal(reportingEvents.scope, "reporting");
+  assert.equal(
+    reportingEvents.events.length,
+    preliminary.reporting_view.events.length,
+  );
+  assert.ok(allEvents.events.length >= reportingEvents.events.length);
+  assert.equal((await getReadiness(store, config)).publication_ready, false);
+  await store.writeState("issued-evaluation-summary", null);
+  const historyWithoutEvaluationResponse = await fetch(`${base}/api/history/results`);
+  const historyWithoutEvaluation = await historyWithoutEvaluationResponse.json();
+  assert.equal(historyWithoutEvaluationResponse.status, 200);
+  assert.deepEqual(historyWithoutEvaluation, history);
 });
 
 test("live coverage can fit a challenger while causal walk-forward remains pending", async (t) => {

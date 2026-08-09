@@ -18,9 +18,45 @@ const RECORD_TYPES = [
 
 const TARGETED_RECORD_CACHE_LIMIT = 1_024;
 const TARGETED_SCAN_TAIL_RECORDS = 512;
+const FEATURE_SNAPSHOT_RECORD_TYPE = "feature_snapshot";
+const EXACT_INDEX_SCHEMA_VERSION = "jsonl-exact-index/2";
+const FEATURE_SNAPSHOT_INDEX_FILE = "feature_snapshot.exact.jsonl";
+const FEATURE_SNAPSHOT_INDEX_CHECKPOINT_FILE =
+  "feature_snapshot.exact.checkpoint.json";
+const INDEX_WRITE_BATCH_RECORDS = 1_024;
+const EMPTY_EXACT_INDEX_CHAIN_SHA256 = sha256(
+  `${EXACT_INDEX_SCHEMA_VERSION}\0${FEATURE_SNAPSHOT_RECORD_TYPE}\0empty`,
+);
 
 function exactRecordKey(record) {
   return `${record.record_id}@${record.revision}`;
+}
+
+function featureSnapshotEquivalenceSha256(record) {
+  const comparable = structuredClone(record);
+  delete comparable.created_at;
+  return sha256(stableStringify(comparable));
+}
+
+function featureSnapshotsDifferBeyondCreatedAt(left, right) {
+  if (
+    typeof left?.created_at !== "string" ||
+    typeof right?.created_at !== "string"
+  ) {
+    return true;
+  }
+  return featureSnapshotEquivalenceSha256(left) !==
+    featureSnapshotEquivalenceSha256(right);
+}
+
+function extendExactIndexChain(previous, serializedLine) {
+  return sha256(`${previous}\0${serializedLine}`);
+}
+
+function invalidRecordIndex(message, cause = null) {
+  const error = new Error(message, cause ? { cause } : undefined);
+  error.code = "INVALID_RECORD_INDEX";
+  return error;
 }
 
 function invalidModelArtifact(message) {
@@ -51,10 +87,12 @@ function assertStoredModelArtifact(model) {
 export class JsonlStore {
   #appendChain = Promise.resolve();
   #recordsCache = new Map();
+  #recordLoadPromises = new Map();
   #targetedRecordsCache = new Map();
   #latestTargetedRecordsCache = new Map();
   #negativeRefScanSizes = new Map();
   #scanChains = new Map();
+  #featureSnapshotIndex = null;
 
   constructor(root) {
     this.root = path.resolve(root);
@@ -64,6 +102,7 @@ export class JsonlStore {
     this.stateDir = path.join(this.root, "state");
     this.modelsDir = path.join(this.root, "models");
     this.modelArtifactsDir = path.join(this.modelsDir, "artifacts");
+    this.indexesDir = path.join(this.root, "indexes");
   }
 
   async init() {
@@ -74,6 +113,7 @@ export class JsonlStore {
       fs.mkdir(this.stateDir, { recursive: true }),
       fs.mkdir(this.modelsDir, { recursive: true }),
       fs.mkdir(this.modelArtifactsDir, { recursive: true }),
+      fs.mkdir(this.indexesDir, { recursive: true }),
     ]);
     return this;
   }
@@ -81,6 +121,658 @@ export class JsonlStore {
   recordPath(type) {
     if (!RECORD_TYPES.includes(type)) throw new TypeError(`Unsupported record type: ${type}`);
     return path.join(this.recordsDir, `${type}.jsonl`);
+  }
+
+  #featureSnapshotIndexPath() {
+    return path.join(this.indexesDir, FEATURE_SNAPSHOT_INDEX_FILE);
+  }
+
+  #featureSnapshotIndexCheckpointPath() {
+    return path.join(
+      this.indexesDir,
+      FEATURE_SNAPSHOT_INDEX_CHECKPOINT_FILE,
+    );
+  }
+
+  async #writeJsonAtomically(target, value) {
+    const temporary = `${target}.${process.pid}.tmp`;
+    await fs.writeFile(
+      temporary,
+      `${JSON.stringify(value, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.rename(temporary, target);
+  }
+
+  #featureSnapshotIndexEntry(record, offset, length, serialized) {
+    if (record?.record_type !== FEATURE_SNAPSHOT_RECORD_TYPE) {
+      throw invalidRecordIndex(
+        "Feature snapshot index encountered another record type",
+      );
+    }
+    return {
+      record_id: record.record_id,
+      revision: record.revision,
+      offset,
+      length,
+      sha256: sha256(serialized),
+    };
+  }
+
+  #assertFeatureSnapshotIndexEntry(entry, canonicalBytes) {
+    if (
+      typeof entry?.record_id !== "string" ||
+      entry.record_id.length === 0 ||
+      !Number.isInteger(entry.revision) ||
+      entry.revision < 1 ||
+      !Number.isInteger(entry.offset) ||
+      entry.offset < 0 ||
+      !Number.isInteger(entry.length) ||
+      entry.length < 2 ||
+      entry.offset + entry.length > canonicalBytes ||
+      !/^[a-f0-9]{64}$/.test(entry.sha256 ?? "")
+    ) {
+      throw invalidRecordIndex("Feature snapshot index entry is invalid");
+    }
+    return entry;
+  }
+
+  #addFeatureSnapshotIndexEntry(index, entry) {
+    const key = exactRecordKey(entry);
+    const exact = index.byExactRef.get(key);
+    if (exact) {
+      if (exact.sha256 !== entry.sha256) {
+        throw invalidRecordIndex(
+          `Conflicting immutable indexed revision ${key}`,
+        );
+      }
+      return false;
+    }
+    index.byExactRef.set(key, entry);
+    const latest = index.latestById.get(entry.record_id);
+    if (!latest || entry.revision > latest.revision) {
+      index.latestById.set(entry.record_id, entry);
+    }
+    return true;
+  }
+
+  async *#recordsWithOffsets(type, {
+    start = 0,
+    endExclusive = null,
+  } = {}) {
+    const filePath = this.recordPath(type);
+    const fileSize = endExclusive ?? await this.#recordFileSize(type);
+    if (
+      !Number.isInteger(start) ||
+      start < 0 ||
+      !Number.isInteger(fileSize) ||
+      fileSize < start
+    ) {
+      throw invalidRecordIndex(
+        `Invalid ${type} byte range ${start}:${fileSize}`,
+      );
+    }
+    if (start === fileSize) return;
+    if (start > 0) {
+      const handle = await fs.open(filePath, "r");
+      try {
+        const boundary = Buffer.allocUnsafe(1);
+        const { bytesRead } = await handle.read(
+          boundary,
+          0,
+          1,
+          start - 1,
+        );
+        if (bytesRead !== 1 || boundary[0] !== 0x0a) {
+          throw invalidRecordIndex(
+            `${type} index checkpoint is not on a JSONL boundary`,
+          );
+        }
+      } finally {
+        await handle.close();
+      }
+    }
+
+    const input = createReadStream(filePath, {
+      start,
+      end: fileSize - 1,
+    });
+    let pending = Buffer.alloc(0);
+    let pendingOffset = start;
+    try {
+      for await (const chunk of input) {
+        const data = pending.length > 0
+          ? Buffer.concat([pending, chunk])
+          : chunk;
+        const dataOffset = pendingOffset;
+        let cursor = 0;
+        let newline = data.indexOf(0x0a, cursor);
+        while (newline !== -1) {
+          const raw = data.subarray(cursor, newline);
+          const offset = dataOffset + cursor;
+          const length = newline - cursor + 1;
+          if (raw.length > 0) {
+            const serialized = raw.toString("utf8");
+            let record;
+            try {
+              record = JSON.parse(serialized);
+            } catch (error) {
+              throw new Error(
+                `${type}.jsonl byte ${offset}: ${error.message}`,
+                { cause: error },
+              );
+            }
+            yield { record, offset, length, serialized };
+          }
+          cursor = newline + 1;
+          newline = data.indexOf(0x0a, cursor);
+        }
+        pending = data.subarray(cursor);
+        pendingOffset = dataOffset + cursor;
+      }
+    } finally {
+      input.destroy();
+    }
+    if (pending.length > 0) {
+      throw invalidRecordIndex(
+        `${type}.jsonl has an incomplete trailing record at byte ${pendingOffset}`,
+      );
+    }
+  }
+
+  async #writeFeatureSnapshotIndexCheckpoint(index, canonicalBytes, indexBytes) {
+    const checkpoint = {
+      schema_version: EXACT_INDEX_SCHEMA_VERSION,
+      record_type: FEATURE_SNAPSHOT_RECORD_TYPE,
+      canonical_bytes: canonicalBytes,
+      index_bytes: indexBytes,
+      exact_entry_count: index.byExactRef.size,
+      index_chain_sha256: index.indexChainSha256,
+    };
+    await this.#writeJsonAtomically(
+      this.#featureSnapshotIndexCheckpointPath(),
+      checkpoint,
+    );
+    index.checkpoint = checkpoint;
+    return checkpoint;
+  }
+
+  async #appendFeatureSnapshotIndexEntries(index, entries, canonicalBytes) {
+    const pending = new Map();
+    for (const entry of entries) {
+      this.#assertFeatureSnapshotIndexEntry(entry, canonicalBytes);
+      const key = exactRecordKey(entry);
+      const existing = index.byExactRef.get(key) ?? pending.get(key);
+      if (existing) {
+        if (existing.sha256 !== entry.sha256) {
+          throw invalidRecordIndex(
+            `Conflicting immutable indexed revision ${key}`,
+          );
+        }
+        continue;
+      }
+      pending.set(key, entry);
+    }
+    const additions = [...pending.values()];
+    const lines = additions.map((entry) => `${JSON.stringify(entry)}\n`);
+    const serialized = lines.join("");
+    const indexPath = this.#featureSnapshotIndexPath();
+    const checkpoint = index.checkpoint;
+    const actualIndexBytes = await fs.stat(indexPath)
+      .then((value) => value.size)
+      .catch((error) => {
+        if (error.code === "ENOENT") return 0;
+        throw error;
+      });
+    if (actualIndexBytes < checkpoint.index_bytes) {
+      throw invalidRecordIndex(
+        "Feature snapshot index is shorter than its checkpoint",
+      );
+    }
+    if (actualIndexBytes > checkpoint.index_bytes) {
+      await fs.truncate(indexPath, checkpoint.index_bytes);
+    }
+    if (serialized.length > 0) {
+      await fs.appendFile(indexPath, serialized, "utf8");
+    }
+    const indexBytes = checkpoint.index_bytes + Buffer.byteLength(serialized);
+    const nextEntryCount = index.byExactRef.size + additions.length;
+    let nextIndexChainSha256 = checkpoint.index_chain_sha256;
+    for (const line of lines) {
+      nextIndexChainSha256 = extendExactIndexChain(
+        nextIndexChainSha256,
+        line,
+      );
+    }
+    const nextCheckpoint = {
+      schema_version: EXACT_INDEX_SCHEMA_VERSION,
+      record_type: FEATURE_SNAPSHOT_RECORD_TYPE,
+      canonical_bytes: canonicalBytes,
+      index_bytes: indexBytes,
+      exact_entry_count: nextEntryCount,
+      index_chain_sha256: nextIndexChainSha256,
+    };
+    await this.#writeJsonAtomically(
+      this.#featureSnapshotIndexCheckpointPath(),
+      nextCheckpoint,
+    );
+    for (const entry of additions) {
+      this.#addFeatureSnapshotIndexEntry(index, entry);
+    }
+    index.indexChainSha256 = nextIndexChainSha256;
+    index.checkpoint = nextCheckpoint;
+    return index;
+  }
+
+  async #rebuildFeatureSnapshotIndex() {
+    await fs.mkdir(this.indexesDir, { recursive: true });
+    const indexPath = this.#featureSnapshotIndexPath();
+    const temporary = `${indexPath}.${process.pid}.tmp`;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const canonicalBytes = await this.#recordFileSize(
+        FEATURE_SNAPSHOT_RECORD_TYPE,
+      );
+      const index = {
+        byExactRef: new Map(),
+        latestById: new Map(),
+        checkpoint: null,
+        indexChainSha256: EMPTY_EXACT_INDEX_CHAIN_SHA256,
+      };
+      await fs.writeFile(temporary, "", "utf8");
+      let indexBytes = 0;
+      let buffered = [];
+      let canonicalHandle = null;
+      const flush = async () => {
+        if (buffered.length === 0) return;
+        const payload = buffered.join("");
+        await fs.appendFile(temporary, payload, "utf8");
+        indexBytes += Buffer.byteLength(payload);
+        buffered = [];
+      };
+      try {
+        for await (const item of this.#recordsWithOffsets(
+          FEATURE_SNAPSHOT_RECORD_TYPE,
+          { endExclusive: canonicalBytes },
+        )) {
+          const entry = this.#featureSnapshotIndexEntry(
+            item.record,
+            item.offset,
+            item.length,
+            item.serialized,
+          );
+          this.#assertFeatureSnapshotIndexEntry(entry, canonicalBytes);
+          const key = exactRecordKey(entry);
+          const existing = index.byExactRef.get(key);
+          if (existing) {
+            if (existing.sha256 !== entry.sha256) {
+              canonicalHandle ??= await fs.open(
+                this.recordPath(FEATURE_SNAPSHOT_RECORD_TYPE),
+                "r",
+              );
+              const existingRecord = await this.#readFeatureSnapshotIndexEntry(
+                existing,
+                canonicalHandle,
+              );
+              if (featureSnapshotsDifferBeyondCreatedAt(
+                existingRecord,
+                item.record,
+              )) {
+                throw invalidRecordIndex(
+                  `Conflicting immutable indexed revision ${key}`,
+                );
+              }
+            }
+            continue;
+          }
+          this.#addFeatureSnapshotIndexEntry(index, entry);
+          const line = `${JSON.stringify(entry)}\n`;
+          index.indexChainSha256 = extendExactIndexChain(
+            index.indexChainSha256,
+            line,
+          );
+          buffered.push(line);
+          if (buffered.length >= INDEX_WRITE_BATCH_RECORDS) await flush();
+        }
+        await flush();
+        if (
+          await this.#recordFileSize(FEATURE_SNAPSHOT_RECORD_TYPE) !==
+            canonicalBytes
+        ) {
+          continue;
+        }
+        await fs.rename(temporary, indexPath);
+        await this.#writeFeatureSnapshotIndexCheckpoint(
+          index,
+          canonicalBytes,
+          indexBytes,
+        );
+        this.#featureSnapshotIndex = index;
+        return index;
+      } catch (error) {
+        await fs.unlink(temporary).catch(() => {});
+        throw error;
+      } finally {
+        await canonicalHandle?.close();
+      }
+    }
+    await fs.unlink(temporary).catch(() => {});
+    throw invalidRecordIndex(
+      "Feature snapshot JSONL kept changing while its index was rebuilt",
+    );
+  }
+
+  async #loadFeatureSnapshotIndex(checkpoint, canonicalBytes) {
+    const indexPath = this.#featureSnapshotIndexPath();
+    const indexSize = await fs.stat(indexPath).then((value) => value.size);
+    if (
+      checkpoint?.schema_version !== EXACT_INDEX_SCHEMA_VERSION ||
+      checkpoint.record_type !== FEATURE_SNAPSHOT_RECORD_TYPE ||
+      !Number.isInteger(checkpoint.canonical_bytes) ||
+      checkpoint.canonical_bytes < 0 ||
+      checkpoint.canonical_bytes > canonicalBytes ||
+      !Number.isInteger(checkpoint.index_bytes) ||
+      checkpoint.index_bytes < 0 ||
+      checkpoint.index_bytes > indexSize ||
+      !Number.isInteger(checkpoint.exact_entry_count) ||
+      checkpoint.exact_entry_count < 0 ||
+      !/^[a-f0-9]{64}$/.test(checkpoint.index_chain_sha256 ?? "")
+    ) {
+      throw invalidRecordIndex("Feature snapshot index checkpoint is invalid");
+    }
+    if (indexSize > checkpoint.index_bytes) {
+      await fs.truncate(indexPath, checkpoint.index_bytes);
+    }
+    const index = {
+      byExactRef: new Map(),
+      latestById: new Map(),
+      checkpoint: { ...checkpoint },
+      indexChainSha256: EMPTY_EXACT_INDEX_CHAIN_SHA256,
+    };
+    if (checkpoint.index_bytes > 0) {
+      const input = createReadStream(indexPath, {
+        encoding: "utf8",
+        start: 0,
+        end: checkpoint.index_bytes - 1,
+      });
+      const lines = createInterface({ input, crlfDelay: Infinity });
+      let lineNumber = 0;
+      try {
+        for await (const line of lines) {
+          lineNumber += 1;
+          if (!line) continue;
+          let entry;
+          try {
+            entry = JSON.parse(line);
+          } catch (error) {
+            throw invalidRecordIndex(
+              `${FEATURE_SNAPSHOT_INDEX_FILE}:${lineNumber}: ${error.message}`,
+              error,
+            );
+          }
+          this.#assertFeatureSnapshotIndexEntry(
+            entry,
+            checkpoint.canonical_bytes,
+          );
+          this.#addFeatureSnapshotIndexEntry(index, entry);
+          index.indexChainSha256 = extendExactIndexChain(
+            index.indexChainSha256,
+            `${line}\n`,
+          );
+        }
+      } finally {
+        lines.close();
+        input.destroy();
+      }
+    }
+    if (index.byExactRef.size !== checkpoint.exact_entry_count) {
+      throw invalidRecordIndex(
+        "Feature snapshot index entry count does not match its checkpoint",
+      );
+    }
+    if (index.indexChainSha256 !== checkpoint.index_chain_sha256) {
+      throw invalidRecordIndex(
+        "Feature snapshot index content does not match its checkpoint",
+      );
+    }
+    return index;
+  }
+
+  async #recoverFeatureSnapshotIndexTail(index, canonicalBytes, attempt = 0) {
+    const start = index.checkpoint.canonical_bytes;
+    if (canonicalBytes < start) return this.#rebuildFeatureSnapshotIndex();
+    if (canonicalBytes === start) return index;
+    const entries = [];
+    const pending = new Map();
+    for await (const item of this.#recordsWithOffsets(
+      FEATURE_SNAPSHOT_RECORD_TYPE,
+      { start, endExclusive: canonicalBytes },
+    )) {
+      const entry = this.#featureSnapshotIndexEntry(
+        item.record,
+        item.offset,
+        item.length,
+        item.serialized,
+      );
+      const key = exactRecordKey(entry);
+      const existing = pending.get(key) ?? index.byExactRef.get(key);
+      if (existing) {
+        if (existing.sha256 !== entry.sha256) {
+          throw invalidRecordIndex(
+            `Conflicting immutable indexed revision ${key}`,
+          );
+        }
+        continue;
+      }
+      pending.set(key, entry);
+      entries.push(entry);
+    }
+    const actualCanonicalBytes = await this.#recordFileSize(
+      FEATURE_SNAPSHOT_RECORD_TYPE,
+    );
+    if (actualCanonicalBytes !== canonicalBytes) {
+      if (attempt >= 2) {
+        throw invalidRecordIndex(
+          "Feature snapshot JSONL kept changing during index tail recovery",
+        );
+      }
+      return this.#recoverFeatureSnapshotIndexTail(
+        index,
+        actualCanonicalBytes,
+        attempt + 1,
+      );
+    }
+    return this.#appendFeatureSnapshotIndexEntries(
+      index,
+      entries,
+      canonicalBytes,
+    );
+  }
+
+  async #ensureFeatureSnapshotIndex({ rebuild = false } = {}) {
+    await fs.mkdir(this.indexesDir, { recursive: true });
+    if (rebuild) return this.#rebuildFeatureSnapshotIndex();
+    const canonicalBytes = await this.#recordFileSize(
+      FEATURE_SNAPSHOT_RECORD_TYPE,
+    );
+    if (!this.#featureSnapshotIndex) {
+      try {
+        const checkpoint = JSON.parse(await fs.readFile(
+          this.#featureSnapshotIndexCheckpointPath(),
+          "utf8",
+        ));
+        this.#featureSnapshotIndex = await this.#loadFeatureSnapshotIndex(
+          checkpoint,
+          canonicalBytes,
+        );
+      } catch (error) {
+        if (
+          error.code !== "ENOENT" &&
+          error.code !== "INVALID_RECORD_INDEX" &&
+          !(error instanceof SyntaxError)
+        ) {
+          throw error;
+        }
+        return this.#rebuildFeatureSnapshotIndex();
+      }
+    }
+    return this.#recoverFeatureSnapshotIndexTail(
+      this.#featureSnapshotIndex,
+      canonicalBytes,
+    );
+  }
+
+  async #readFeatureSnapshotIndexEntry(entry, handle) {
+    const buffer = Buffer.allocUnsafe(entry.length);
+    let bytesRead = 0;
+    while (bytesRead < entry.length) {
+      const result = await handle.read(
+        buffer,
+        bytesRead,
+        entry.length - bytesRead,
+        entry.offset + bytesRead,
+      );
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    if (bytesRead !== entry.length || buffer.at(-1) !== 0x0a) {
+      throw invalidRecordIndex(
+        `Indexed feature snapshot ${exactRecordKey(entry)} is truncated`,
+      );
+    }
+    const serialized = buffer.subarray(0, -1).toString("utf8");
+    if (sha256(serialized) !== entry.sha256) {
+      throw invalidRecordIndex(
+        `Indexed feature snapshot ${exactRecordKey(entry)} hash mismatch`,
+      );
+    }
+    let record;
+    try {
+      record = JSON.parse(serialized);
+    } catch (error) {
+      throw invalidRecordIndex(
+        `Indexed feature snapshot ${exactRecordKey(entry)} is invalid JSON`,
+        error,
+      );
+    }
+    if (
+      record.record_type !== FEATURE_SNAPSHOT_RECORD_TYPE ||
+      exactRecordKey(record) !== exactRecordKey(entry)
+    ) {
+      throw invalidRecordIndex(
+        `Indexed feature snapshot ${exactRecordKey(entry)} points to another record`,
+      );
+    }
+    return record;
+  }
+
+  async #readIndexedFeatureSnapshots(entries) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const index = await this.#ensureFeatureSnapshotIndex({
+        rebuild: attempt > 0,
+      });
+      try {
+        const records = new Map();
+        const selected = [...entries(index)];
+        if (selected.length === 0) return records;
+        const handle = await fs.open(
+          this.recordPath(FEATURE_SNAPSHOT_RECORD_TYPE),
+          "r",
+        );
+        try {
+          for (const [key, entry] of selected) {
+            records.set(
+              key,
+              await this.#readFeatureSnapshotIndexEntry(entry, handle),
+            );
+          }
+        } finally {
+          await handle.close();
+        }
+        return records;
+      } catch (error) {
+        if (error.code !== "INVALID_RECORD_INDEX" || attempt > 0) throw error;
+      }
+    }
+    throw invalidRecordIndex("Feature snapshot index could not be recovered");
+  }
+
+  async #appendOrReuseIndexedFeatureSnapshots(records) {
+    const existingLatest = await this.#readIndexedFeatureSnapshots((index) =>
+      records
+        .map((record) => [
+          record.record_id,
+          index.latestById.get(record.record_id),
+        ])
+        .filter(([, entry]) => entry)
+    );
+    const additions = records.filter(
+      (record) => !existingLatest.has(record.record_id),
+    );
+    if (additions.length > 0) {
+      const index = await this.#ensureFeatureSnapshotIndex();
+      const canonicalBytesBefore = index.checkpoint.canonical_bytes;
+      let nextOffset = canonicalBytesBefore;
+      const lines = [];
+      const entries = [];
+      for (const record of additions) {
+        const serialized = JSON.stringify(record);
+        const line = `${serialized}\n`;
+        const length = Buffer.byteLength(line);
+        lines.push(line);
+        entries.push(this.#featureSnapshotIndexEntry(
+          record,
+          nextOffset,
+          length,
+          serialized,
+        ));
+        nextOffset += length;
+      }
+
+      await fs.appendFile(
+        this.recordPath(FEATURE_SNAPSHOT_RECORD_TYPE),
+        lines.join(""),
+        "utf8",
+      );
+      const canonicalBytesAfter = await this.#recordFileSize(
+        FEATURE_SNAPSHOT_RECORD_TYPE,
+      );
+      if (canonicalBytesAfter !== nextOffset) {
+        throw new Error(
+          "feature_snapshot.jsonl changed during indexed deterministic append",
+        );
+      }
+      await this.#appendFeatureSnapshotIndexEntries(
+        index,
+        entries,
+        canonicalBytesAfter,
+      );
+
+      const fullyLoaded = this.#recordsCache.get(
+        FEATURE_SNAPSHOT_RECORD_TYPE,
+      );
+      if (fullyLoaded) fullyLoaded.push(...additions);
+      for (const record of additions) {
+        this.#cacheTargetedRecord(FEATURE_SNAPSHOT_RECORD_TYPE, record);
+      }
+    }
+
+    const finalFileSize = await this.#recordFileSize(
+      FEATURE_SNAPSHOT_RECORD_TYPE,
+    );
+    for (const record of records) {
+      this.#cacheLatestTargetedRecord(
+        FEATURE_SNAPSHOT_RECORD_TYPE,
+        existingLatest.get(record.record_id) ?? record,
+        finalFileSize,
+      );
+    }
+    return records.map((record) => {
+      const existing = existingLatest.get(record.record_id);
+      return {
+        inserted: !existing,
+        record: existing ?? record,
+      };
+    });
   }
 
   #targetedCache(type) {
@@ -200,39 +892,52 @@ export class JsonlStore {
 
   async #loadRecords(type) {
     let records = this.#recordsCache.get(type);
-    if (!records) {
-      try {
-        await fs.access(this.recordPath(type));
-      } catch (error) {
-        if (error.code === "ENOENT") {
-          records = [];
-          this.#recordsCache.set(type, records);
-          return records;
-        }
-        throw error;
-      }
-
-      records = [];
-      const input = createReadStream(this.recordPath(type), { encoding: "utf8" });
-      const lines = createInterface({ input, crlfDelay: Infinity });
-      let lineNumber = 0;
-      try {
-        for await (const line of lines) {
-          lineNumber += 1;
-          if (!line) continue;
-          try {
-            records.push(JSON.parse(line));
-          } catch (error) {
-            throw new Error(`${type}.jsonl:${lineNumber}: ${error.message}`);
+    if (records) return records;
+    let loading = this.#recordLoadPromises.get(type);
+    if (!loading) {
+      loading = (async () => {
+        try {
+          await fs.access(this.recordPath(type));
+        } catch (error) {
+          if (error.code === "ENOENT") {
+            const empty = [];
+            this.#recordsCache.set(type, empty);
+            return empty;
           }
+          throw error;
         }
-      } finally {
-        lines.close();
-        input.destroy();
-      }
-      this.#recordsCache.set(type, records);
+
+        const loaded = [];
+        const input = createReadStream(this.recordPath(type), { encoding: "utf8" });
+        const lines = createInterface({ input, crlfDelay: Infinity });
+        let lineNumber = 0;
+        try {
+          for await (const line of lines) {
+            lineNumber += 1;
+            if (!line) continue;
+            try {
+              loaded.push(JSON.parse(line));
+            } catch (error) {
+              throw new Error(`${type}.jsonl:${lineNumber}: ${error.message}`);
+            }
+          }
+        } finally {
+          lines.close();
+          input.destroy();
+        }
+        this.#recordsCache.set(type, loaded);
+        return loaded;
+      })();
+      this.#recordLoadPromises.set(type, loading);
     }
-    return records;
+    try {
+      records = await loading;
+      return records;
+    } finally {
+      if (this.#recordLoadPromises.get(type) === loading) {
+        this.#recordLoadPromises.delete(type);
+      }
+    }
   }
 
   async all(type, { latestOnly = true } = {}) {
@@ -268,6 +973,28 @@ export class JsonlStore {
     }
     return this.#withTypeScan(type, async () => {
       const cache = this.#targetedCache(type);
+      if (type === FEATURE_SNAPSHOT_RECORD_TYPE) {
+        const found = new Map(
+          keys
+            .filter((key) => cache.has(key))
+            .map((key) => [key, cache.get(key)]),
+        );
+        const unresolved = [...new Set(
+          keys.filter((key) => !found.has(key)),
+        )];
+        if (unresolved.length > 0) {
+          const indexed = await this.#readIndexedFeatureSnapshots((index) =>
+            unresolved
+              .map((key) => [key, index.byExactRef.get(key)])
+              .filter(([, entry]) => entry)
+          );
+          for (const [key, record] of indexed) {
+            found.set(key, record);
+            this.#cacheTargetedRecord(type, record);
+          }
+        }
+        return keys.map((key) => found.get(key)).filter(Boolean);
+      }
       const negativeScans = this.#negativeScanCache(type);
       const fileSizeBefore = await this.#recordFileSize(type);
       const unresolved = new Set(keys.filter((key) =>
@@ -320,6 +1047,9 @@ export class JsonlStore {
       ids.add(record.record_id);
     }
     const operation = async () => this.#withTypeScan(type, async () => {
+      if (type === FEATURE_SNAPSHOT_RECORD_TYPE) {
+        return this.#appendOrReuseIndexedFeatureSnapshots(records);
+      }
       const existingLatest = new Map();
       const fullyLoaded = this.#recordsCache.get(type);
       if (fullyLoaded) {
