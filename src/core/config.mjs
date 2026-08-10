@@ -303,6 +303,71 @@ function validateImpactTracking(config) {
   }
 }
 
+function validatePublicationRuntime(config) {
+  const runtime = config.runtime ?? {};
+  let publicBaseUrl;
+  try {
+    publicBaseUrl = new URL(runtime.public_base_url);
+  } catch {
+    throw new TypeError("runtime.public_base_url must be an absolute HTTP(S) origin");
+  }
+  if (
+    !["http:", "https:"].includes(publicBaseUrl.protocol) ||
+    publicBaseUrl.username ||
+    publicBaseUrl.password ||
+    !["", "/"].includes(publicBaseUrl.pathname) ||
+    publicBaseUrl.search ||
+    publicBaseUrl.hash
+  ) {
+    throw new TypeError("runtime.public_base_url must be a credential-free HTTP(S) origin");
+  }
+  runtime.public_base_url = publicBaseUrl.origin;
+
+  const publication = runtime.publication;
+  const probability = publication?.probability_alert;
+  if (
+    publication?.policy_version !== "publication-policy/1" ||
+    typeof publication.enabled !== "boolean" ||
+    publication.bootstrap_mode !== "baseline_only" ||
+    !Number.isFinite(publication.outcome_max_delivery_delay_hours) ||
+    publication.outcome_max_delivery_delay_hours <= 0 ||
+    !Number.isFinite(publication.authority_max_delivery_delay_hours) ||
+    publication.authority_max_delivery_delay_hours <= 0 ||
+    typeof probability?.enabled !== "boolean" ||
+    !Number.isFinite(probability.open_threshold) ||
+    !Number.isFinite(probability.close_threshold) ||
+    probability.close_threshold < 0 ||
+    probability.open_threshold > 1 ||
+    probability.close_threshold >= probability.open_threshold ||
+    !["provisional", "validated"].includes(probability.minimum_stage) ||
+    !Number.isFinite(probability.max_delivery_delay_minutes) ||
+    probability.max_delivery_delay_minutes <= 0
+  ) {
+    throw new TypeError(
+      "runtime.publication must use the supported bounded publication-policy/1 contract",
+    );
+  }
+
+  const webPush = runtime.web_push;
+  if (
+    typeof webPush?.enabled !== "boolean" ||
+    ![null, "string"].includes(
+      webPush.vapid_keys_file === null ? null : typeof webPush.vapid_keys_file,
+    ) ||
+    ![null, "string"].includes(
+      webPush.vapid_subject === null ? null : typeof webPush.vapid_subject,
+    ) ||
+    !Number.isInteger(webPush.dispatch_interval_seconds) ||
+    webPush.dispatch_interval_seconds < 1 ||
+    webPush.dispatch_interval_seconds > 3600 ||
+    !Number.isInteger(webPush.max_subscriptions) ||
+    webPush.max_subscriptions < 1 ||
+    webPush.max_subscriptions > 100_000
+  ) {
+    throw new TypeError("runtime.web_push must declare bounded runtime-only settings");
+  }
+}
+
 function semanticConfigHash(config) {
   const {
     runtime: _runtime,
@@ -326,6 +391,22 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   }
   if (process.env.RESET_RUN_ON_START !== undefined) {
     config.runtime.run_on_start = process.env.RESET_RUN_ON_START === "true";
+  }
+  config.runtime.public_base_url = process.env.RESET_PUBLIC_BASE_URL ??
+    config.runtime.public_base_url;
+  if (process.env.RESET_PUBLICATION_ENABLED !== undefined) {
+    config.runtime.publication.enabled =
+      process.env.RESET_PUBLICATION_ENABLED === "true";
+  }
+  if (process.env.WEB_PUSH_ENABLED !== undefined) {
+    config.runtime.web_push.enabled = process.env.WEB_PUSH_ENABLED === "true";
+  }
+  config.runtime.web_push.vapid_keys_file =
+    process.env.WEB_PUSH_VAPID_KEYS_FILE ??
+    config.runtime.web_push.vapid_keys_file;
+  if (process.env.WEB_PUSH_VAPID_SUBJECT?.trim()) {
+    config.runtime.web_push.vapid_subject =
+      process.env.WEB_PUSH_VAPID_SUBJECT.trim();
   }
   if (process.env.X_SEARCH_GATEWAY_ENABLED !== undefined) {
     config.providers.x_search_gateway.enabled = process.env.X_SEARCH_GATEWAY_ENABLED === "true";
@@ -367,6 +448,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateLiveForecastPromotionGuard(config);
   validateFeatureSupport(config);
   validateImpactTracking(config);
+  validatePublicationRuntime(config);
   validateSchedulerInterval(config);
   validateXSearchGatewayProvider(config);
   validateRsshubXProvider(config);

@@ -42,6 +42,7 @@ export function startScheduler({
   let stopped = false;
   let running = false;
   let scheduledFor = null;
+  let currentExecution = null;
 
   async function notifyFinalState(context) {
     for (const [name, callback] of [
@@ -77,7 +78,17 @@ export function startScheduler({
       preferredAt,
     );
     scheduledFor = new Date(current.getTime() + waitMs).toISOString();
-    timer = setTimeout(execute, waitMs);
+    timer = setTimeout(() => {
+      void triggerExecute();
+    }, waitMs);
+  }
+
+  function triggerExecute() {
+    if (currentExecution) return currentExecution;
+    currentExecution = execute().finally(() => {
+      currentExecution = null;
+    });
+    return currentExecution;
   }
 
   async function execute() {
@@ -262,7 +273,7 @@ export function startScheduler({
     }
   }
 
-  if (config.runtime.run_on_start) void execute();
+  if (config.runtime.run_on_start) void triggerExecute();
   else schedule();
 
   return {
@@ -270,13 +281,16 @@ export function startScheduler({
       if (timer) clearTimeout(timer);
       timer = null;
       scheduledFor = null;
-      await execute();
+      await triggerExecute();
     },
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
       timer = null;
       scheduledFor = null;
+    },
+    async waitForIdle() {
+      await currentExecution;
     },
     get running() {
       return running;

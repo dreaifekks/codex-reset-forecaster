@@ -9,10 +9,16 @@ Codex quota reset/refill completed during the next seven days. It does not claim
 to cover every physical backend reset, and it does not predict a user's ordinary
 five-hour or weekly quota-window rollover.
 
-The first release has two product surfaces:
+The first release has three product surfaces:
 
 1. a current forecast page with 4-hour, 24-hour, and seven-day views;
-2. a historical results page listing confirmed resets and their official sources.
+2. a historical results page listing confirmed resets and their official sources;
+3. an opt-in notification surface backed by one channel-neutral event ledger.
+
+All subscription channels are UI over the same forecast and confirmed-outcome
+results. Usage, subscriber, and delivery telemetry remain outside canonical
+records and model features. Operational capacity alerts use a separate admin-only
+stream and cannot be delivered through an ordinary model-result subscription.
 
 Personal quota and reset-voucher recommendations are explicitly deferred.
 
@@ -236,6 +242,34 @@ remain available to operator APIs for model promotion, publication readiness, an
 audit. Every issued prediction used there remains immutable, and no reconstructed
 forecast may contain evidence learned after its cutoff.
 
+## Notification surfaces
+
+The stable notification product covers two facts: a newly active exact authority
+time window, labeled as not yet confirmed, and a confirmed outcome together with
+later corrections, retractions, or verification withdrawals. These topics appear
+in `/feed.xml` and are the default for Web Push and Telegram. The first successful
+pipeline generation after enablement records a baseline without replaying old
+history.
+
+Model probability watches are a separate experimental product. They open at the
+subscriber's configured `1..168` hour probability threshold only from a fresh,
+serving-ready, non-synthetic prediction at the configured minimum stage, use a
+five-percentage-point lower close threshold to avoid repeated 10-minute alerts,
+and require explicit subscription. Parameterized Atom, Web Push, and dynamic
+Telegram subscriptions share the same rule and emit only an upward crossing;
+baseline and close transitions are silent. `/feeds/experimental.xml` and the
+static Telegram experimental chat list retain the fixed public rule. Neither an
+alert nor model/extraction confidence can confirm a reset.
+
+Every channel displays a new correction event instead of silently editing an old
+notification. `verification_withdrawn` means that the current exact verification
+contract is no longer satisfied; it must not be phrased as proof that the reset did
+not happen. Delivery consumers deduplicate by stable `event_id`, advance by the
+global sequence cursor, and drop expired events before queueing and sending. This
+prevents duplicate local jobs but does not claim exactly-once delivery after an
+ambiguous transport failure. See `docs/notifications.md` for the complete event
+contract and safe-enabling rules.
+
 ## Deferred personal strategy
 
 User accounts, remaining quota, ordinary five-hour and weekly reset times, demand,
@@ -250,6 +284,12 @@ its probabilities or retraining its model.
 - Every displayed forecast identifies its knowledge cutoff and source freshness.
 - Only a qualifying completion statement can create a positive operational
   outcome under the live profile.
+- The first enabled publication pass emits no historical backlog. Default Atom,
+  Web Push, and Telegram subscriptions carry only `authority` and `outcome`;
+  `experimental_probability` always requires explicit opt-in.
+- Outcome corrections and withdrawals append a new, idempotent event tied to exact
+  canonical revisions; evidence confidence and forecast probability never create
+  a confirmed-outcome event.
 - A first Tibo-authority deployment leaves daily ledger coverage pending; a
   negative-eligible day needs day-end plus 36 hours and at least two actual fetches
   spanning six hours.

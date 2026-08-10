@@ -1,3 +1,12 @@
+import {
+  NOTIFICATION_HORIZON_HOURS,
+  calibrationAt,
+  createNotificationCalibrationCache,
+  formatNotificationHorizon,
+  nearestHorizonIndex,
+  normalizeCalibrationPayload,
+} from "./notification-preferences.js";
+
 const percent = (value, digits = 0) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "—";
 const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1574,5 +1583,718 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("online", () => void load());
+
+const notificationOpen = document.querySelector("#notification-open");
+const notificationDialog = document.querySelector("#notification-dialog");
+const notificationClose = document.querySelector("#notification-close");
+const notificationCancel = document.querySelector("#notification-cancel");
+const notificationEnable = document.querySelector("#notification-enable");
+const notificationDisable = document.querySelector("#notification-disable");
+const notificationStatus = document.querySelector("#notification-status");
+const notificationProbabilityTopic = document.querySelector(
+  "#notification-topic-probability",
+);
+const notificationProbabilityRule = document.querySelector(
+  "#notification-probability-rule",
+);
+const notificationHorizon = document.querySelector("#notification-horizon");
+const notificationHorizonValue = document.querySelector(
+  "#notification-horizon-value",
+);
+const notificationHorizonTicks = document.querySelector(
+  "#notification-horizon-ticks",
+);
+const notificationThreshold = document.querySelector("#notification-threshold");
+const notificationThresholdValue = document.querySelector(
+  "#notification-threshold-value",
+);
+const calibrationPlot = document.querySelector("#calibration-plot");
+const calibrationArea = document.querySelector("#calibration-area");
+const calibrationCurve = document.querySelector("#calibration-curve");
+const calibrationCrosshair = document.querySelector("#calibration-crosshair");
+const calibrationMarker = document.querySelector("#calibration-marker");
+const calibrationHitArea = document.querySelector("#calibration-hit-area");
+const calibrationTooltip = document.querySelector("#calibration-tooltip");
+const calibrationState = document.querySelector("#calibration-state");
+const calibrationSample = document.querySelector("#calibration-sample");
+const calibrationSummary = document.querySelector("#calibration-summary");
+const personalizedFeedUrl = document.querySelector("#personalized-feed-url");
+const personalizedFeedCopy = document.querySelector("#personalized-feed-copy");
+const personalizedFeedOpen = document.querySelector("#personalized-feed-open");
+const personalizedFeedStatus = document.querySelector(
+  "#personalized-feed-status",
+);
+const NOTIFICATION_PREFERENCES_STORAGE_KEY =
+  "codex-reset-notification-preferences/1";
+let notificationRegistration = null;
+let notificationPublicConfig = null;
+let notificationCalibration = null;
+const notificationCalibrationCache = createNotificationCalibrationCache();
+let notificationCalibrationRequest = null;
+let notificationCalibrationTimer = null;
+let notificationCalibrationGeneration = 0;
+let notificationDialogTrigger = null;
+let notificationFeedBaselineCursor = null;
+let notificationFeedBaselineRequest = null;
+
+function supportsWebPush() {
+  return typeof navigator !== "undefined" &&
+    "serviceWorker" in navigator &&
+    typeof PushManager !== "undefined" &&
+    typeof Notification !== "undefined";
+}
+
+function applicationServerKey(value) {
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const bytes = atob(base64);
+  return Uint8Array.from(bytes, (character) => character.charCodeAt(0));
+}
+
+function selectedNotificationTopics() {
+  return [
+    ["#notification-topic-authority", "authority"],
+    ["#notification-topic-outcome", "outcome"],
+    ["#notification-topic-probability", "experimental_probability"],
+  ].filter(([selector]) => document.querySelector(selector)?.checked)
+    .map(([, topic]) => topic);
+}
+
+function selectedNotificationPreferences() {
+  const index = Math.min(
+    NOTIFICATION_HORIZON_HOURS.length - 1,
+    Math.max(0, Number(notificationHorizon?.value) || 0),
+  );
+  return {
+    schema_version: "notification-preferences/1",
+    horizon_hours: NOTIFICATION_HORIZON_HOURS[index],
+    probability_threshold: Math.min(
+      0.99,
+      Math.max(0.01, (Number(notificationThreshold?.value) || 0) / 100),
+    ),
+  };
+}
+
+function saveLocalNotificationPreferences() {
+  try {
+    localStorage.setItem(NOTIFICATION_PREFERENCES_STORAGE_KEY, JSON.stringify({
+      topics: selectedNotificationTopics(),
+      preferences: selectedNotificationPreferences(),
+    }));
+  } catch {
+    // Local persistence is a convenience; the server remains authoritative.
+  }
+}
+
+function restoreLocalNotificationPreferences() {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(NOTIFICATION_PREFERENCES_STORAGE_KEY) ?? "null",
+    );
+    const topics = Array.isArray(saved?.topics) ? new Set(saved.topics) : null;
+    if (topics) {
+      for (const [selector, topic] of [
+        ["#notification-topic-authority", "authority"],
+        ["#notification-topic-outcome", "outcome"],
+        ["#notification-topic-probability", "experimental_probability"],
+      ]) {
+        const input = document.querySelector(selector);
+        if (input) input.checked = topics.has(topic);
+      }
+    }
+    const preferences = saved?.preferences;
+    if (preferences?.schema_version === "notification-preferences/1") {
+      notificationHorizon.value = String(
+        nearestHorizonIndex(preferences.horizon_hours),
+      );
+      const threshold = Number(preferences.probability_threshold);
+      if (Number.isFinite(threshold) && threshold >= 0.01 && threshold <= 0.99) {
+        notificationThreshold.value = String(Math.round(threshold * 100));
+      }
+      return true;
+    }
+  } catch {
+    // Ignore unavailable or malformed browser storage.
+  }
+  return false;
+}
+
+function applyPublicNotificationDefaults(config) {
+  const preferences = config?.notification_preferences;
+  if (preferences?.schema_version !== "notification-preferences/1") return;
+  const defaultHorizon = Number(preferences.horizon_hours?.default);
+  const defaultThreshold = Number(preferences.probability_threshold?.default);
+  if (Number.isSafeInteger(defaultHorizon)) {
+    notificationHorizon.value = String(nearestHorizonIndex(defaultHorizon));
+  }
+  if (
+    Number.isFinite(defaultThreshold) &&
+    defaultThreshold >= 0.01 &&
+    defaultThreshold <= 0.99
+  ) {
+    notificationThreshold.value = String(Math.round(defaultThreshold * 100));
+  }
+}
+
+function horizonHours() {
+  const index = Math.min(
+    NOTIFICATION_HORIZON_HOURS.length - 1,
+    Math.max(0, Number(notificationHorizon.value) || 0),
+  );
+  return NOTIFICATION_HORIZON_HOURS[index];
+}
+
+function renderHorizonTicks() {
+  const labelled = new Set([1, 4, 8, 12, 24, 48, 72, 96, 120, 144, 168]);
+  notificationHorizonTicks.replaceChildren(
+    ...NOTIFICATION_HORIZON_HOURS.map((hours) => {
+      const tick = document.createElement("span");
+      tick.dataset.label = labelled.has(hours)
+        ? hours >= 24 && hours % 24 === 0
+          ? `${hours / 24}d`
+          : `${hours}h`
+        : "";
+      return tick;
+    }),
+  );
+}
+
+function renderNotificationValues() {
+  const hours = horizonHours();
+  notificationHorizonValue.textContent = formatNotificationHorizon(hours);
+  notificationHorizon.setAttribute(
+    "aria-valuetext",
+    formatNotificationHorizon(hours),
+  );
+  const threshold = Number(notificationThreshold.value) || 0;
+  notificationThresholdValue.textContent = `${threshold}%`;
+  notificationThreshold.setAttribute("aria-valuetext", `${threshold}%`);
+  const preference = selectedNotificationPreferences();
+  const thresholdParameter = preference.probability_threshold
+    .toFixed(2)
+    .replace(/0+$/, "")
+    .replace(/\.$/, "");
+  if (!Number.isSafeInteger(notificationFeedBaselineCursor)) {
+    personalizedFeedUrl.value = "";
+    personalizedFeedCopy.disabled = true;
+    personalizedFeedOpen.removeAttribute("href");
+    personalizedFeedOpen.setAttribute("aria-disabled", "true");
+    return;
+  }
+  const feedPath = "/feeds/probability.xml" +
+    `?horizon_hours=${preference.horizon_hours}` +
+    `&probability_threshold=${thresholdParameter}` +
+    `&after=${notificationFeedBaselineCursor}`;
+  personalizedFeedUrl.value = new URL(feedPath, window.location.href).href;
+  personalizedFeedCopy.disabled = false;
+  personalizedFeedOpen.href = feedPath;
+  personalizedFeedOpen.removeAttribute("aria-disabled");
+  personalizedFeedOpen.setAttribute(
+    "aria-label",
+    `打开 ${formatNotificationHorizon(preference.horizon_hours)}、${threshold}% 门槛的个性化 Atom`,
+  );
+}
+
+async function refreshPersonalizedFeedBaseline() {
+  notificationFeedBaselineRequest?.abort();
+  const controller = new AbortController();
+  notificationFeedBaselineRequest = controller;
+  notificationFeedBaselineCursor = null;
+  personalizedFeedStatus.textContent = "正在从当前预测建立订阅基线…";
+  renderNotificationValues();
+  try {
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const response = await fetch("/api/notification-preferences/baseline", {
+      cache: "no-store",
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message ?? payload?.error ?? `HTTP ${response.status}`);
+    }
+    if (
+      payload?.schema_version !== "notification-feed-baseline/1" ||
+      !Number.isSafeInteger(payload.cursor) ||
+      payload.cursor < 0
+    ) {
+      throw new TypeError("订阅基线响应无效");
+    }
+    if (controller.signal.aborted) return;
+    notificationFeedBaselineCursor = payload.cursor;
+    personalizedFeedStatus.textContent =
+      "链接只会评估建立基线之后的新预测，不会回放过去的提醒。";
+    renderNotificationValues();
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    notificationFeedBaselineCursor = null;
+    renderNotificationValues();
+    personalizedFeedStatus.textContent =
+      `暂时无法建立安全基线，个性化 Atom 链接不可用：${error.message}`;
+  } finally {
+    if (notificationFeedBaselineRequest === controller) {
+      notificationFeedBaselineRequest = null;
+    }
+  }
+}
+
+function clearCalibrationGraphic() {
+  calibrationArea.removeAttribute("d");
+  calibrationCurve.removeAttribute("d");
+  calibrationCrosshair.hidden = true;
+  calibrationMarker.hidden = true;
+  calibrationTooltip.hidden = true;
+}
+
+function setCalibrationState(state, message, sampleText = "等待历史数据") {
+  calibrationPlot.dataset.state = state;
+  calibrationState.textContent = message;
+  calibrationSample.textContent = sampleText;
+  if (state !== "ready") clearCalibrationGraphic();
+}
+
+function calibrationCoordinates(points) {
+  const maximumDensity = Math.max(...points.map((point) => point.density), 0);
+  if (!(maximumDensity > 0)) return [];
+  return points.map((point) => ({
+    ...point,
+    x: 20 + point.probability * 560,
+    y: 165 - (point.density / maximumDensity) * 132,
+  }));
+}
+
+function renderCalibrationGraphic(calibration) {
+  const coordinates = calibrationCoordinates(calibration.points);
+  if (coordinates.length < 2) {
+    setCalibrationState(
+      "insufficient",
+      "当前时间窗的历史样本不足，无法判断门槛可靠度。",
+      `${calibration.sample_count} 个窗口 · ${calibration.event_count} 次重置`,
+    );
+    calibrationSummary.textContent = "样本不足，当前不能判断哪个概率门槛更可靠。";
+    return;
+  }
+  const line = coordinates
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+  const first = coordinates[0];
+  const last = coordinates.at(-1);
+  calibrationCurve.setAttribute("d", line);
+  calibrationArea.setAttribute(
+    "d",
+    `M ${first.x.toFixed(2)} 165 ${line.replace(/^M/, "L")} L ${last.x.toFixed(2)} 165 Z`,
+  );
+  calibrationPlot.dataset.state = "ready";
+  calibrationState.textContent = "";
+  calibrationSample.textContent = calibration.status === "preliminary"
+    ? `初步 · ${calibration.sample_count}/${calibration.min_sample_count} 窗口 · ${calibration.event_count}/${calibration.min_event_count} 次重置`
+    : `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`;
+  showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
+}
+
+function calibrationCopy(point, threshold) {
+  const selectedThreshold = point?.probability ?? threshold;
+  const thresholdText = `${Math.round(selectedThreshold * 100)}%`;
+  const pointGate = point?.point_sample_gate;
+  if (
+    !point ||
+    pointGate?.passed !== true ||
+    !Number.isFinite(point.confidence_above)
+  ) {
+    const evaluated = Number.isFinite(pointGate?.evaluated_windows)
+      ? pointGate.evaluated_windows
+      : point?.sample_count_above ?? 0;
+    const minimum = Number.isFinite(pointGate?.minimum_windows)
+      ? pointGate.minimum_windows
+      : 20;
+    return {
+      detail: `概率 > ${thresholdText} · 样本 ${evaluated}/${minimum}`,
+      summary: "该真实 1% 门槛点尚未通过样本门槛，暂不显示历史命中率。",
+    };
+  }
+  const hitRate = percent(point.confidence_above);
+  const samples = Number.isFinite(point.sample_count_above)
+    ? `${point.sample_count_above} 个门槛以上样本`
+    : "样本量未提供";
+  const prefix = notificationCalibration?.status === "preliminary"
+    ? "初步历史命中率"
+    : "历史命中率";
+  const interval = point.confidence_interval;
+  const intervalText = interval &&
+      Number.isFinite(interval.lower) &&
+      Number.isFinite(interval.upper)
+    ? ` · 95% Wilson 区间 ${percent(interval.lower)}–${percent(interval.upper)}`
+    : "";
+  return {
+    detail: `概率 > ${thresholdText} · ${prefix} ${hitRate}${intervalText}`,
+    summary: `${prefix} ${hitRate}${intervalText}，基于${samples}；仅用于辅助选择门槛。`,
+  };
+}
+
+function showCalibrationPoint(threshold) {
+  if (!notificationCalibration || calibrationPlot.dataset.state !== "ready") return;
+  const point = calibrationAt(notificationCalibration.points, threshold);
+  if (!point) return;
+  const coordinates = calibrationCoordinates(notificationCalibration.points);
+  const maximumDensity = Math.max(
+    ...notificationCalibration.points.map((item) => item.density),
+    0,
+  );
+  const x = 20 + point.probability * 560;
+  const y = maximumDensity > 0
+    ? 165 - ((point.density ?? 0) / maximumDensity) * 132
+    : coordinates.at(-1)?.y ?? 165;
+  calibrationCrosshair.setAttribute("x1", x.toFixed(2));
+  calibrationCrosshair.setAttribute("x2", x.toFixed(2));
+  calibrationCrosshair.hidden = false;
+  calibrationMarker.setAttribute("cx", x.toFixed(2));
+  calibrationMarker.setAttribute("cy", y.toFixed(2));
+  calibrationMarker.hidden = false;
+  const copy = calibrationCopy(point, point.probability);
+  calibrationTooltip.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = copy.detail;
+  const sample = document.createElement("span");
+  sample.textContent = Number.isFinite(point.sample_count_above)
+    ? `${point.sample_count_above} 个门槛以上样本`
+    : "样本量暂不可用";
+  calibrationTooltip.append(title, sample);
+  calibrationTooltip.style.left = `${(x / 600) * 100}%`;
+  calibrationTooltip.style.top = `${Math.max(34, (y / 190) * 174)}px`;
+  calibrationTooltip.hidden = false;
+  calibrationSummary.textContent = copy.summary;
+}
+
+function calibrationThresholdForEvent(event) {
+  const bounds = calibrationHitArea.getBoundingClientRect();
+  if (!(bounds.width > 0)) return null;
+  return Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+}
+
+function renderNotificationCalibration(calibration) {
+  notificationCalibration = calibration;
+  if (calibration.status === "insufficient") {
+    setCalibrationState(
+      "insufficient",
+      "当前时间窗的历史样本不足，无法判断哪个概率门槛更可靠。",
+      `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`,
+    );
+    calibrationSummary.textContent = "样本不足，当前不可判断历史命中率。";
+    return;
+  }
+  renderCalibrationGraphic(calibration);
+}
+
+function notificationCalibrationMatchesSelection(hours, generation) {
+  return notificationDialog.open &&
+    generation === notificationCalibrationGeneration &&
+    horizonHours() === hours;
+}
+
+function notificationCalibrationIsCurrent(hours, generation, controller = null) {
+  return notificationCalibrationMatchesSelection(hours, generation) &&
+    !(controller?.signal.aborted);
+}
+
+async function loadNotificationCalibration(
+  hours = horizonHours(),
+  generation = notificationCalibrationGeneration,
+) {
+  if (!notificationCalibrationIsCurrent(hours, generation)) return null;
+  const cached = notificationCalibrationCache.get(hours);
+  if (cached) {
+    renderNotificationCalibration(cached);
+    return cached;
+  }
+  notificationCalibrationRequest?.controller.abort();
+  const controller = new AbortController();
+  const request = { controller, generation, horizon_hours: hours };
+  notificationCalibrationRequest = request;
+  notificationCalibration = null;
+  setCalibrationState("loading", "正在读取该时间窗的历史预测与重置记录…");
+  calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+  let timedOut = false;
+  try {
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 15_000);
+    const response = await fetch(
+      `/api/notification-preferences/calibration?horizon_hours=${hours}`,
+      {
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    ).finally(() => clearTimeout(timeout));
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message ?? payload?.error ?? `HTTP ${response.status}`);
+    }
+    const calibration = normalizeCalibrationPayload(payload, hours);
+    if (!notificationCalibrationIsCurrent(hours, generation, controller)) return null;
+    notificationCalibrationCache.set(hours, calibration);
+    renderNotificationCalibration(calibration);
+    return calibration;
+  } catch (error) {
+    if (
+      !notificationCalibrationMatchesSelection(hours, generation) ||
+      (controller.signal.aborted && !timedOut)
+    ) return null;
+    const reason = timedOut ? "请求超时" : error.message;
+    setCalibrationState(
+      "error",
+      `历史可靠度暂时加载失败：${reason}`,
+      "加载失败",
+    );
+    calibrationSummary.textContent = "无法读取历史记录，仍可手动设置通知门槛。";
+    return null;
+  } finally {
+    if (notificationCalibrationRequest === request) {
+      notificationCalibrationRequest = null;
+    }
+  }
+}
+
+function scheduleNotificationCalibration() {
+  if (!notificationDialog.open) return;
+  clearTimeout(notificationCalibrationTimer);
+  notificationCalibrationTimer = null;
+  notificationCalibrationRequest?.controller.abort();
+  notificationCalibrationRequest = null;
+  const hours = horizonHours();
+  const generation = ++notificationCalibrationGeneration;
+  const cached = notificationCalibrationCache.get(hours);
+  if (cached) {
+    renderNotificationCalibration(cached);
+    return;
+  }
+  notificationCalibration = null;
+  setCalibrationState("loading", "选择停稳后加载该时间窗的历史记录…");
+  calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+  notificationCalibrationTimer = setTimeout(
+    () => {
+      notificationCalibrationTimer = null;
+      if (!notificationCalibrationIsCurrent(hours, generation)) return;
+      void loadNotificationCalibration(hours, generation);
+    },
+    220,
+  );
+}
+
+function updateProbabilityRule() {
+  notificationProbabilityRule.dataset.pushEnabled = String(
+    notificationProbabilityTopic.checked,
+  );
+  if (notificationDialog.open) scheduleNotificationCalibration();
+}
+
+async function webPushJson(url, { method = "GET", body = null } = {}) {
+  const response = await fetch(url, {
+    method,
+    cache: "no-store",
+    headers: body ? { "content-type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : null,
+    signal: AbortSignal.timeout(15_000),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.message ?? payload?.error ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function setNotificationBusy(busy) {
+  notificationEnable.disabled = busy;
+  notificationDisable.disabled = busy;
+  notificationCancel.disabled = busy;
+}
+
+async function refreshNotificationControls(message = null) {
+  const subscription = await notificationRegistration.pushManager.getSubscription();
+  notificationEnable.textContent = subscription ? "保存通知设置" : "启用通知";
+  notificationDisable.hidden = !subscription;
+  notificationStatus.textContent = message ?? (subscription
+    ? "此浏览器已订阅通知。"
+    : Notification.permission === "denied"
+      ? "浏览器已阻止通知，请在站点设置中重新允许。"
+      : "通知权限只会在点击保存后询问。");
+}
+
+async function enableWebPush() {
+  setNotificationBusy(true);
+  try {
+    const topics = selectedNotificationTopics();
+    if (topics.length === 0) throw new Error("请至少选择一种通知主题。");
+    const permission = Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
+    if (permission !== "granted") throw new Error("未获得浏览器通知权限。");
+    let subscription = await notificationRegistration.pushManager.getSubscription();
+    let created = false;
+    if (!subscription) {
+      subscription = await notificationRegistration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: applicationServerKey(
+          notificationPublicConfig.application_server_key,
+        ),
+      });
+      created = true;
+    }
+    const serialized = subscription.toJSON();
+    const preferences = selectedNotificationPreferences();
+    try {
+      await webPushJson("/api/web-push/subscriptions", {
+        method: "POST",
+        body: { ...serialized, topics, preferences },
+      });
+    } catch (error) {
+      if (created) await subscription.unsubscribe().catch(() => false);
+      throw error;
+    }
+    saveLocalNotificationPreferences();
+    await refreshNotificationControls(
+      "通知设置已保存；个性化规则会从现在开始应用。",
+    );
+  } catch (error) {
+    notificationStatus.textContent = `通知未启用：${error.message}`;
+  } finally {
+    setNotificationBusy(false);
+  }
+}
+
+async function disableWebPush() {
+  setNotificationBusy(true);
+  try {
+    const subscription = await notificationRegistration.pushManager.getSubscription();
+    if (subscription) {
+      await webPushJson("/api/web-push/subscriptions", {
+        method: "DELETE",
+        body: { endpoint: subscription.endpoint },
+      });
+      await subscription.unsubscribe();
+    }
+    notificationStatus.textContent = "此浏览器的通知已关闭。";
+    await refreshNotificationControls();
+  } catch (error) {
+    notificationStatus.textContent = `关闭通知失败：${error.message}`;
+  } finally {
+    setNotificationBusy(false);
+  }
+}
+
+async function initializeWebPushControls() {
+  if (!notificationDialog) return;
+  const restoredLocalPreferences = restoreLocalNotificationPreferences();
+  renderHorizonTicks();
+  renderNotificationValues();
+  updateProbabilityRule();
+  if (!supportsWebPush()) {
+    notificationEnable.disabled = true;
+    notificationStatus.textContent = "此浏览器不支持 Web Push；仍可使用下方公共 Atom 事件流。";
+    return;
+  }
+  try {
+    const config = await webPushJson("/api/web-push/config");
+    if (!restoredLocalPreferences) applyPublicNotificationDefaults(config);
+    renderNotificationValues();
+    if (!config?.enabled || !config.application_server_key) {
+      notificationEnable.disabled = true;
+      notificationStatus.textContent = "浏览器通知暂未开放；仍可查看规则或使用公共 Atom 事件流。";
+      return;
+    }
+    notificationPublicConfig = config;
+    notificationRegistration = await navigator.serviceWorker.register(
+      "/sw.js?v=web-push-1",
+      { scope: "/" },
+    );
+    await refreshNotificationControls();
+  } catch (error) {
+    notificationEnable.disabled = true;
+    notificationStatus.textContent = "浏览器通知配置暂时不可用；请稍后重试。";
+    console.warn("Web push is unavailable", error);
+  }
+}
+
+function openNotificationDialog() {
+  notificationDialogTrigger = document.activeElement;
+  if (typeof notificationDialog.showModal === "function") {
+    notificationDialog.showModal();
+  } else {
+    notificationDialog.setAttribute("open", "");
+  }
+  document.body.classList.add("subscription-dialog-open");
+  void refreshPersonalizedFeedBaseline();
+  scheduleNotificationCalibration();
+}
+
+function closeNotificationDialog() {
+  if (typeof notificationDialog.close === "function") notificationDialog.close();
+  else notificationDialog.removeAttribute("open");
+  document.body.classList.remove("subscription-dialog-open");
+  clearTimeout(notificationCalibrationTimer);
+  notificationCalibrationTimer = null;
+  notificationCalibrationGeneration += 1;
+  notificationCalibrationRequest?.controller.abort();
+  notificationCalibrationRequest = null;
+  notificationFeedBaselineRequest?.abort();
+  notificationDialogTrigger?.focus?.();
+  notificationDialogTrigger = null;
+}
+
+notificationOpen?.addEventListener("click", openNotificationDialog);
+notificationClose?.addEventListener("click", closeNotificationDialog);
+notificationCancel?.addEventListener("click", closeNotificationDialog);
+notificationDialog?.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeNotificationDialog();
+});
+notificationDialog?.addEventListener("click", (event) => {
+  if (event.target === notificationDialog) closeNotificationDialog();
+});
+notificationDialog?.addEventListener("close", () => {
+  document.body.classList.remove("subscription-dialog-open");
+});
+notificationProbabilityTopic?.addEventListener("change", updateProbabilityRule);
+notificationHorizon?.addEventListener("input", () => {
+  renderNotificationValues();
+  scheduleNotificationCalibration();
+});
+notificationThreshold?.addEventListener("input", () => {
+  renderNotificationValues();
+  showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
+});
+calibrationHitArea?.addEventListener("pointermove", (event) => {
+  const threshold = calibrationThresholdForEvent(event);
+  if (threshold !== null) showCalibrationPoint(threshold);
+});
+calibrationHitArea?.addEventListener("pointerleave", () => {
+  showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
+});
+calibrationHitArea?.addEventListener("pointerdown", (event) => {
+  const selected = calibrationThresholdForEvent(event);
+  if (selected === null) return;
+  const point = calibrationAt(notificationCalibration?.points ?? [], selected);
+  const threshold = Math.min(0.99, Math.max(0.01, point?.probability ?? selected));
+  notificationThreshold.value = String(Math.round(threshold * 100));
+  renderNotificationValues();
+  showCalibrationPoint(threshold);
+});
+personalizedFeedCopy?.addEventListener("click", async () => {
+  if (!Number.isSafeInteger(notificationFeedBaselineCursor)) {
+    personalizedFeedStatus.textContent = "尚未建立安全基线，当前没有可复制的链接。";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(personalizedFeedUrl.value);
+    personalizedFeedStatus.textContent = "个性化订阅链接已复制。";
+  } catch {
+    personalizedFeedUrl.focus();
+    personalizedFeedUrl.select();
+    personalizedFeedStatus.textContent = "无法自动复制，链接已选中，请手动复制。";
+  }
+});
+notificationEnable?.addEventListener("click", () => void enableWebPush());
+notificationDisable?.addEventListener("click", () => void disableWebPush());
+
+void initializeWebPushControls();
 
 void load();

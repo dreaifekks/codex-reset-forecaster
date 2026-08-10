@@ -351,6 +351,108 @@ validated 80% recall, validated accuracy, or production-calibrated probabilities
 The eventual validated state uses the original real-data sample, calibration, and
 compatibility gates; provisional use does not weaken those gates.
 
+### 10. Publication projection and delivery channels
+
+After the canonical outcome and serving projections are current, one serialized
+projector derives non-canonical `publication-event/1` audit entries. It evaluates
+outcome transitions before authority and probability transitions, so a confirmed
+outcome in the same run cancels a stale experimental watch. Its first successful
+pipeline generation after enablement is baseline-only and emits no historical
+backlog. Stable event IDs are derived from
+the event type, entity, exact source revisions, policy hash, and superseded event;
+the append-only ledger assigns a global sequence cursor. If a process crashes after
+the audit append but before projection state is saved, replay finds the same event
+ID and converges without publishing a duplicate.
+
+The default topics are `authority` and `outcome`. Authority events describe an exact
+future assertion and explicitly say that it is not a confirmed reset. Only an
+eligible `reset_outcome` revision can create a confirmed outcome event. The
+`experimental_probability` topic applies hysteresis to a fresh, serving-ready,
+non-synthetic forecast and requires explicit subscription; it is never evidence or
+an outcome. Later canonical corrections append corrected, retracted, or
+verification-withdrawn events instead of changing earlier publication entries.
+
+Personalized probability delivery is a second non-canonical projection, not a
+different model. Every fresh eligible prediction appends one bounded
+`notification-forecast-input/2` carrying the exact prediction reference, model
+issue time, true projection `emitted_at`, knowledge cutoff, expiry, cumulative
+1..168-hour curve, and the exact current outcome-revision gate. A shared
+`notification-preferences/1` transition state machine evaluates a subscriber's
+horizon and probability threshold with silent baseline, strict upward crossing,
+and hysteretic rearm. Only a new or changed eligible outcome whose occurred range
+can overlap the currently open episode closes it; an older historical correction
+only makes forecasts with an older knowledge cutoff stale. The parameterized Atom
+feed keeps the rule and baseline cursor in its URL; Web Push and Telegram persist
+the same rule, watch state, and per-channel input cursor. No surface may write
+canonical records or feed subscriber behavior back into the model.
+
+The website dialog and Telegram bot are result UI/read-model consumers of that
+projection. The core stream still retains all 168 cumulative hourly points for
+deterministic replay. Read APIs may lazily project only the points a current view
+or subscription needs, and clients may cache those derived results, but neither
+the projection nor access pattern can write canonical data, enter training or
+labels, or become a publication trigger. The browser requests one calibration
+profile only after the dialog is open and its selected horizon has been still for
+220 ms, then keeps a per-horizon in-memory cache for ten minutes in that page
+session.
+
+Telegram collects the distinct horizons used by current dynamic rules and repeats
+the `horizon_hours` query parameter once per requested point. The HTTP response is
+a sparse `notification-forecast-input-view/1`; it omits the full `probabilities`
+array while retaining input identity, clocks, and outcome gate. With no dynamic
+probability rule, the bot makes a baseline-only request for the current tail cursor
+and gate and transfers no forecast input or 168-point curve.
+
+Atom, Web Push, and Telegram consume the shared publication ledger for stable
+events and use `event_id` for local queue idempotency; an ambiguous network send
+can still be delivered at least once. The shared experimental Atom feed and
+explicit static Telegram experimental chat list retain the fixed public rule.
+Parameterized Atom, Web Push, and dynamic Telegram subscriptions consume the
+bounded forecast-input projection for personalized crossings instead of creating
+subscriber-specific publication events.
+The default Atom feed and default push/bot subscriptions exclude the experimental
+topic. Web Push subscription state and Telegram cursors/outboxes are delivery state,
+not canonical intelligence. Both credential-bearing transports are disabled until
+secrets are mounted from protected files; only Atom has no secret. The full
+contract is in `docs/notifications.md`.
+
+Web Push endpoint capabilities are accepted only for known browser push-service
+hosts, revalidated at send time, and persisted mode `0600`. Public subscription
+creation still requires edge rate limiting and an anti-automation challenge; HTTP
+same-origin metadata is not authentication. Telegram delivery state is bound to a
+bot ID and has one supported writer/replica per volume.
+
+These channels are presentation surfaces over the same model and outcome results,
+just like the website. Subscriber counts, delivery success, command volume, and
+traffic growth never become model evidence, features, labels, calibration inputs,
+or publication triggers.
+
+### 11. Operations telemetry
+
+Origin traffic and capacity telemetry use a separate, non-canonical operations
+state. The monitor keeps bounded one-minute and UTC-day aggregates by
+low-cardinality route class; it never stores an IP address, user agent, query
+string, raw path, push endpoint, Telegram user ID, or chat ID. Docker liveness uses
+`/api/live`, so its 30-second probe is separate from model readiness and public
+traffic growth.
+
+Daily growth is a planning trend, not a capacity alarm. The initial capacity policy
+shows a rolling five-minute summary, but advances alert streaks only on closed,
+non-overlapping five-minute evidence windows. It distinguishes user impact
+(interactive latency, true internal errors, or aborted requests) from resource
+pressure (event-loop lag and utilization, in-flight concurrency, Node heap, or
+finite cgroup memory). A single side becomes `watch`; `strained` requires both
+sides for three independent windows. Critical hard signals require two windows,
+and recovery requires six healthy windows. Open/escalate/recover and policy-
+superseded transitions enter a separate operations alert cursor. They never enter
+the publication ledger or ordinary subscriptions.
+
+The protected traffic summary and alert stream require an independent file-backed
+Bearer token. The public Bot reads them only for administrator private chats and
+stores their cursor in its own delivery volume. The application measures requests
+that actually reach Node; Cloudflare cache hits, WAF/challenge actions, and edge
+errors require a separate edge data source and are not inferred from origin data.
+
 ## Runtime cadence
 
 - Bootstrap: when no compatible usable model exists, batch-fit immediately from

@@ -256,6 +256,28 @@
       "minimum_outcomes": 10
     },
     "forecast_fresh_age_hours": 1.5,
-    "forecast_stale_age_hours": 3
+    "forecast_stale_age_hours": 3,
+    "public_base_url": "http://127.0.0.1:8787",
+    "publication": {
+      "enabled": false,
+      "policy_version": "publication-policy/1",
+      "bootstrap_mode": "baseline_only",
+      "outcome_max_delivery_delay_hours": 24,
+      "authority_max_delivery_delay_hours": 48,
+      "probability_alert": {
+        "enabled": true,
+        "open_threshold": 0.5,
+        "close_threshold": 0.3,
+        "minimum_stage": "provisional",
+        "max_delivery_delay_minutes": 45
+      }
+    },
+    "web_push": {
+      "enabled": false,
+      "vapid_keys_file": null,
+      "vapid_subject": null,
+      "dispatch_interval_seconds": 15,
+      "max_subscriptions": 5000
+    }
   }
 }

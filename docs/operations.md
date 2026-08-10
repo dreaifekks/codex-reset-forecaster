@@ -415,12 +415,22 @@ RESET_SCHEDULER_ENABLED=true npm start
 
 The service exposes:
 
+- `GET /api/live` for process liveness only
 - `GET /api/health`
 - `GET /api/forecast/current`
 - `GET /api/forecast/snapshots/:record_id/:revision`
 - `GET /api/readiness`
 - `GET /api/evidence/recent`
 - `GET /api/history/results`
+- `GET /api/notifications/events?after=<sequence>&limit=<1..500>`
+- `GET /api/notifications/forecast-inputs?after=<sequence>&limit=<1..500>`
+- `GET /api/notification-preferences/baseline`
+- `GET /feed.xml` and `GET /feeds/experimental.xml`
+- `GET /feeds/probability.xml?horizon_hours=<1..168>&probability_threshold=<0.01..0.99>&after=<baseline-sequence>`
+- `GET /api/web-push/config`
+- `POST /api/web-push/subscriptions` and `DELETE /api/web-push/subscriptions`
+- protected `GET /api/operations/traffic` and
+  `GET /api/operations/traffic/alerts?after=<sequence>&limit=<1..500>`
 - `GET /api/evaluation/summary`
 - `GET /api/evaluation/events`
 - `/` for the 4-hour, 24-hour, and 7-day forecast views
@@ -578,6 +588,251 @@ requested, resolves raw observations by exact verification refs, and shares one
 served with revalidation so a deployment cannot combine new markup with an older
 cached script. The history browser request also fails visibly after 15 seconds
 instead of leaving the initial loading row indefinitely.
+
+## Publication and notification operation
+
+The channel-neutral projector is disabled by `config/default.json`; the selected
+live profile and deployment environment may enable it with
+`RESET_PUBLICATION_ENABLED=true`. Its first successful pipeline generation after
+enablement writes only a baseline, so starting notification support against an
+existing data volume does not replay the entire outcome history. A partial failed
+run or restart without a recorded pipeline success cannot establish the baseline.
+Confirm baseline and cursor behavior before enabling a
+transport:
+
+```bash
+curl -fsS http://127.0.0.1:8799/api/notifications/events
+curl -fsS 'http://127.0.0.1:8799/api/notifications/events?after=0&limit=100'
+curl -fsS http://127.0.0.1:8799/api/notifications/forecast-inputs
+curl -fsS 'http://127.0.0.1:8799/api/notifications/forecast-inputs?after=0&limit=100'
+curl -fsS http://127.0.0.1:8799/api/notification-preferences/baseline
+curl -fsS http://127.0.0.1:8799/feed.xml
+curl -fsS 'http://127.0.0.1:8799/feeds/probability.xml?horizon_hours=24&probability_threshold=0.50&after=0'
+curl -fsS 'http://127.0.0.1:8799/api/notification-preferences/calibration?horizon_hours=24'
+```
+
+The request without `after` returns the current cursor and an empty event list; it
+is the safe initial position for a new consumer. Only explicit `after=0` replays
+retained history; a cursor ahead of the current ledger tail returns an invalid-cursor
+error. A subsequent page returns `events`, `cursor`, `next_cursor`, and `has_more`.
+Persist a consumer cursor only after durably recording its page, deduplicate local
+delivery by `event_id`, and reject an expired event before both enqueue and send.
+An ambiguous transport failure remains at-least-once rather than exactly-once.
+Default delivery is limited to
+`authority` and `outcome`. `/feeds/experimental.xml` additionally exposes
+`experimental_probability` and must be treated as an explicit opt-in feed. The
+parameterized probability feed instead applies the supplied `1..168` hour horizon
+and `0.01..0.99` threshold to the bounded eligible-forecast projection. Its
+required `after` value is the silent baseline cursor obtained when the site creates
+the link; use `after=0` only when deliberately replaying retained projection
+history. The calibration endpoint returns as-issued
+historical density and threshold-above hit rate. Check `status`, `sample_count`, and
+`event_count`: `preliminary` is not validated confidence. These are output views;
+Atom autodiscovery remains limited to the stable feed. The RSSHub X timeline remains
+an unrelated input adapter.
+
+Outcome events expire at canonical `known_at` plus the configured outcome maximum
+delivery delay; a later-seen revision still advances projection state but is not
+published. Authority events expire at the earlier of their asserted range end and
+`emitted_at` plus the authority maximum delivery delay. Experimental watches use
+their own short policy delay. Expired audit rows remain available for history and
+cursor continuity even though transports must not send them.
+
+Web Push is independently safe-disabled. Generate one persistent key file in the
+ignored `.secrets` directory without overwriting an existing key:
+
+```bash
+npm run web-push:generate-keys -- \
+  --output .secrets/web-push-vapid.json \
+  --subject mailto:operator@example.com
+chmod 0600 .secrets/web-push-vapid.json
+```
+
+Then set `WEB_PUSH_VAPID_KEYS_FILE_HOST` to that host path and set
+`WEB_PUSH_ENABLED=true`; Compose mounts it read-only at
+`/run/secrets/web-push-vapid.json`. Keep the same key pair across deployments or
+existing browser subscriptions stop working. Enabled startup accepts only a
+regular key file with mode `0400` or `0600` and rejects an inline private key.
+Never copy the private key into
+`.env`, checked-in JSON, logs, HTML, or an API response. Only
+`GET /api/web-push/config` may expose the public application-server key. Outside
+localhost the configured public origin must be HTTPS. Subscription mutations are
+same-origin, size-bounded requests. Stable topics are selected by default;
+`experimental_probability` must be explicitly requested by the browser. Its POST
+body includes `preferences` with schema `notification-preferences/1`, and changing
+the rule silently baselines the latest forecast instead of replaying a crossing.
+
+Do not enable public Web Push until the external edge applies a strict per-client
+rate limit and a validated anti-automation challenge (for example Cloudflare
+Turnstile) to both subscription mutation methods. `Origin` and `Sec-Fetch-Site`
+protect the browser flow but are not credentials and can be forged by direct HTTP
+clients. The server restricts endpoints to known browser push-service hostnames,
+uses bounded delivery deadlines, and stores subscription capabilities with mode
+`0600`; those controls do not stop an attacker from filling the subscription cap.
+
+The Telegram bot is also safe-disabled by service topology: it runs only under the
+`telegram` Compose profile. Create an ignored token-only file with mode `0400` or
+`0600`, then configure at least one positive `TELEGRAM_ADMIN_USER_IDS`. Ordinary
+users require no pre-registration: only their own private chats are accepted.
+`TELEGRAM_ALLOWED_GROUP_CHAT_IDS` is optional, accepts only negative group IDs,
+and enables addressed read-only queries; group subscription changes are rejected.
+Use `TELEGRAM_BLOCKED_USER_IDS` only as an abuse kill switch. The per-user fixed
+window defaults to 12 commands per 60 seconds and emits at most one warning per
+window. Do not place the BotFather token in `.env`, JSON, logs, or a command
+argument. After setting `TELEGRAM_BOT_TOKEN_FILE_HOST`, start and inspect the
+optional service:
+
+```bash
+docker compose --profile telegram up --build -d
+docker compose --profile telegram ps
+docker compose --profile telegram logs --tail=100 reset-forecaster-bot
+```
+
+The public bot supports `/forecast`, `/report`, `/history [1-10]`, `/lastreset`,
+`/subscribe`, `/subscribe probability 24h 60%`, `/subscribe experimental`,
+`/subscription`, `/unsubscribe`, and `/help`. The experimental command is a
+compatibility alias for the `4h/50%` personalized rule. Dynamic probability users
+consume the read-only forecast-input cursor and receive only upward crossings;
+the first poll, preference change, cursor reset, and close/rearm transition are
+silent. Static `TELEGRAM_NOTIFICATION_CHAT_IDS` and ordinary `/subscribe` receive
+only stable events. `TELEGRAM_EXPERIMENTAL_CHAT_IDS` is the deployment-only fixed
+public experimental stream and is not added to dynamic subscribers. Preserve the
+bot data volume during upgrades because
+it contains cursors, subscriptions, and delivery idempotency state, but remember
+that this state is rebuildable delivery state rather than canonical reset data.
+Keep exactly one `reset-forecaster-bot` replica per bot-data volume. The stored bot
+ID prevents accidentally reusing the volume with another token, but concurrent
+writers are unsupported and can overwrite cursor/outbox state.
+
+The administrator-only `/traffic` command reads the protected
+`GET /api/operations/traffic` endpoint. Configure the same operations token file
+read-only in the core and bot containers; the bot token is never reused for this
+request. With `TELEGRAM_OPERATIONS_ALERTS_ENABLED=true`, the bot also polls the
+protected alert endpoint. Its first poll stores a separate tail cursor without
+replaying old alerts; later alerts are persisted as high-priority admin-only jobs,
+independent of publication and subscription cursors. `/traffic` also summarizes
+the local bot outbox without showing user/chat IDs or raw request metadata. The
+container healthcheck derives event, forecast-input, and operations poll freshness
+from their configured poll intervals, rejects a stale due outbox (including an administrator alert due
+for more than 60 seconds under the default request timeout), and reports a recent
+failed administrator alert instead of remaining green while operations delivery
+is broken. The due threshold can never be configured below the Telegram request
+timeout plus shutdown margin; the latest operations failure has its own persisted
+health marker and cannot be hidden by pruning ordinary public replies.
+
+### Origin traffic and capacity monitoring
+
+`TRAFFIC_MONITOR_ENABLED=true` keeps a bounded non-canonical state under the core
+data directory. It aggregates requests into low-cardinality route classes and
+retains only one-minute operational buckets plus 35 UTC days. It deliberately does
+not retain IP addresses, `CF-Connecting-IP`, user agents, query strings, raw paths,
+Web Push endpoints, or Telegram identities. `/api/health` and the lightweight
+Docker `/api/live` probe are classified as internal health traffic; the Bot's
+publication cursor poll and the protected operations routes are also excluded from
+public growth. Their load still contributes to total origin requests.
+
+State version 2 migrates version 1 by retaining only minute/day aggregates and
+resetting the old capacity streak, incident, and alert cursor before binding the
+current policy. This avoids turning a prior alert shape or threshold into evidence
+under the new policy.
+
+This is origin monitoring: it sees work that reaches the Node process and is the
+appropriate signal for whether the current single-process architecture is under
+pressure. Cloudflare cache hits, WAF/challenge decisions, blocked bots, and edge
+522/524 responses never reach this process and require Cloudflare Analytics or
+Logpush if total public-edge traffic is needed later. Feed request count is not an
+RSS subscriber count.
+
+Daily growth compares complete UTC days only. It remains `insufficient_data` until
+seven prior complete days are present. A growth watch requires yesterday to have
+at least 200 public origin requests, at least 200 more than the preceding seven-day
+median, and at least twice that median. Growth never opens a capacity incident by
+itself.
+
+Capacity policy `traffic-capacity-policy/1` shows a rolling five-minute summary,
+while its alert streak advances only on closed, non-overlapping five-minute
+evidence windows. This prevents one isolated slow request or runtime spike from
+being counted again on each following minute:
+
+- user impact: interactive p95 above 750 ms with at least 20 samples, at least five
+  true internal errors, a true 5xx rate over 1% with at least 100 requests, or an
+  abort rate over 1% with at least 100 requests;
+- resource pressure: event-loop lag p95 above 100 ms, event-loop utilization above
+  0.75, finite cgroup memory above 75%, Node heap above 80% when cgroup headroom is
+  unknown, or more than 12 simultaneous in-flight requests;
+- one side is `watch` and sends nothing; both sides must persist for three evaluated
+  windows before `strained` opens and alerts administrators;
+- severe latency/error/lag/utilization/memory signals require two independent
+  windows for `critical`. Severe latency still requires 20 interactive samples;
+  severe runtime signals require at least 12 runtime samples with the default
+  five-second sampler. Six healthy windows close the incident and send one
+  recovery message.
+
+Model-readiness 503 responses and `web_push_disabled` 503 responses are semantic
+states, not capacity failures. Other public 503 responses, including a reached
+subscription limit, remain real user-impact failures. Initial thresholds are
+conservative bootstrap guardrails and should be reviewed after at least seven full
+UTC days, but must not automatically rise to normalize bad performance. A policy
+hash change resets old streak evidence; if it supersedes an open incident, the
+administrator receives an explicit `capacity.policy_superseded` close message.
+
+To enable the administrator endpoint and Bot alerts, generate one independent
+random token file outside the repository and mount the same file read-only into
+both services:
+
+```bash
+mkdir -p .secrets
+openssl rand -hex 32 > .secrets/forecaster-operations-token
+chmod 0600 .secrets/forecaster-operations-token
+```
+
+Set these values in the local, ignored `.env`:
+
+```dotenv
+FORECASTER_OPERATIONS_TOKEN_FILE_HOST=./.secrets/forecaster-operations-token
+FORECASTER_OPERATIONS_TOKEN_FILE=/run/secrets/forecaster-operations-token
+TELEGRAM_OPERATIONS_ALERTS_ENABLED=true
+```
+
+Before enabling alert polling, every configured administrator must open the Bot's
+private chat and send `/start` (or another command). Telegram bots cannot initiate
+a private conversation; without this step the first administrator alert can fail
+with `403` and the Bot healthcheck will correctly become unhealthy.
+
+The file must be regular and exactly mode `0400` or `0600`; the token is never
+accepted inline. The protected endpoints are:
+
+```text
+GET /api/operations/traffic
+GET /api/operations/traffic/alerts?after=<sequence>&limit=<1..500>
+```
+
+The alert endpoint follows the same safe baseline shape as publication polling:
+omitting `after` returns an empty list and the current tail; explicit `after=0`
+replays retained operations alerts. Its cursor and records are independent of
+`publication-event/1`. The Telegram Bot's first operations poll only stores the
+tail, so enabling it cannot replay an old alert backlog. If a Bot cursor is ahead
+of a restored core state or older than retained alert history, the API returns an
+explicit `409 operations_alert_cursor_reset_required`; the Bot atomically records
+the gap, increments a local operations-stream generation, and sends administrators
+a local warning instead of retrying the invalid cursor forever. For a retention
+gap it resumes at the earliest still-retained alert and drains bounded continuation
+pages immediately, up to five pages per poll; if more remain, every completed page
+and cursor is already durable and the next poll resumes from there. For a restored
+source whose tail moved backwards, it resumes at that durable tail. The generation
+keeps a sequence reused after a core rollback from colliding with the earlier
+delivery key.
+
+On shutdown the core stops scheduling new work and waits for the current pipeline
+and bounded Web Push dispatch to settle. Keep the Compose stop grace period long
+enough for the active pipeline; the checked-in profile uses 120 seconds so a normal
+SIGTERM does not immediately interrupt an append-only write.
+
+Outcome corrections are never edited in place: the ledger appends corrected,
+retracted, or verification-withdrawn events that point at the prior event.
+Verification withdrawal means the current exact source no longer satisfies the
+confirmation contract; it does not prove that no reset occurred. See
+`docs/notifications.md` for the event schema, expiry, and topic semantics.
 
 ## Docker
 

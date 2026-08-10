@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "publication-event.schema.json",
+  "title": "Reset Forecaster Publication Event",
+  "description": "A non-canonical, append-only public notification projection derived from canonical reset intelligence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "entity_key",
+    "topic",
+    "emitted_at",
+    "expires_at",
+    "experimental",
+    "supersedes_event_id",
+    "policy",
+    "source",
+    "report",
+    "title",
+    "summary",
+    "url",
+    "notification",
+    "sequence",
+    "revision",
+    "supersedes"
+  ],
+  "properties": {
+    "schema_version": { "const": "publication-event/1" },
+    "event_id": { "type": "string", "pattern": "^pub_[a-f0-9]{64}$" },
+    "event_type": {
+      "enum": [
+        "forecast.authority_window.opened.v1",
+        "forecast.reset_watch.opened.v1",
+        "forecast.reset_watch.closed.v1",
+        "outcome.reset_confirmed.v1",
+        "outcome.reset_corrected.v1",
+        "outcome.reset_retracted.v1",
+        "outcome.verification_withdrawn.v1"
+      ]
+    },
+    "entity_key": { "type": "string", "minLength": 1 },
+    "topic": {
+      "enum": ["authority", "outcome", "experimental_probability"]
+    },
+    "emitted_at": { "$ref": "#/$defs/utcTimestamp" },
+    "expires_at": { "$ref": "#/$defs/utcTimestamp" },
+    "experimental": { "type": "boolean" },
+    "supersedes_event_id": {
+      "oneOf": [
+        { "type": "string", "pattern": "^pub_[a-f0-9]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "hash"],
+      "properties": {
+        "version": { "const": "publication-policy/1" },
+        "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "prediction_ref": { "$ref": "#/$defs/recordRef" },
+        "signal_ref": { "$ref": "#/$defs/recordRef" },
+        "outcome_ref": { "$ref": "#/$defs/recordRef" },
+        "verification_ref": {
+          "oneOf": [
+            { "$ref": "#/$defs/recordRef" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": ["default_delivery"],
+      "properties": {
+        "default_delivery": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "url": { "type": "string", "format": "uri" },
+    "notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "body", "url", "tag"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "body": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "tag": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "revision": { "const": 1 },
+    "supersedes": { "type": "null" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "topic": { "const": "experimental_probability" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "experimental": { "const": true },
+          "report": {
+            "properties": { "default_delivery": { "const": false } }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "experimental": { "const": false },
+          "report": {
+            "properties": { "default_delivery": { "const": true } }
+          }
+        }
+      }
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "event_type": { "const": "forecast.authority_window.opened.v1" },
+            "topic": { "const": "authority" },
+            "supersedes_event_id": { "type": "null" },
+            "source": {
+              "required": ["prediction_ref", "signal_ref"]
+            }
+          }
+        },
+        {
+          "properties": {
+            "event_type": { "const": "forecast.reset_watch.opened.v1" },
+            "topic": { "const": "experimental_probability" },
+            "supersedes_event_id": { "type": "null" },
+            "source": { "required": ["prediction_ref"] }
+          }
+        },
+        {
+          "properties": {
+            "event_type": { "const": "forecast.reset_watch.closed.v1" },
+            "topic": { "const": "experimental_probability" },
+            "supersedes_event_id": {
+              "type": "string",
+              "pattern": "^pub_[a-f0-9]{64}$"
+            },
+            "source": { "required": ["prediction_ref"] }
+          }
+        },
+        {
+          "properties": {
+            "event_type": { "const": "outcome.reset_confirmed.v1" },
+            "topic": { "const": "outcome" },
+            "supersedes_event_id": { "type": "null" },
+            "source": {
+              "required": ["outcome_ref", "verification_ref"],
+              "properties": {
+                "verification_ref": { "$ref": "#/$defs/recordRef" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "event_type": { "const": "outcome.reset_corrected.v1" },
+            "topic": { "const": "outcome" },
+            "supersedes_event_id": {
+              "type": "string",
+              "pattern": "^pub_[a-f0-9]{64}$"
+            },
+            "source": {
+              "required": ["outcome_ref", "verification_ref"],
+              "properties": {
+                "verification_ref": { "$ref": "#/$defs/recordRef" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "event_type": { "const": "outcome.reset_retracted.v1" },
+            "topic": { "const": "outcome" },
+            "supersedes_event_id": {
+              "type": "string",
+              "pattern": "^pub_[a-f0-9]{64}$"
+            },
+            "source": { "required": ["outcome_ref"] }
+          }
+        },
+        {
+          "properties": {
+            "event_type": { "const": "outcome.verification_withdrawn.v1" },
+            "topic": { "const": "outcome" },
+            "supersedes_event_id": {
+              "type": "string",
+              "pattern": "^pub_[a-f0-9]{64}$"
+            },
+            "source": { "required": ["outcome_ref"] }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "recordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "revision"],
+      "properties": {
+        "record_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

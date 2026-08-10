@@ -1112,6 +1112,53 @@ test("hourly scheduler records success and does not overlap manual runs", async 
   assert.equal(state.last_timing.knowledge_cutoff, "2026-07-22T18:30:00.000Z");
 });
 
+test("scheduler stop can wait for an in-flight pipeline to finish", async (t) => {
+  const store = await temporaryStore(t);
+  let markStarted;
+  let releaseRun;
+  const started = new Promise((resolve) => {
+    markStarted = resolve;
+  });
+  const gate = new Promise((resolve) => {
+    releaseRun = resolve;
+  });
+  const scheduler = startScheduler({
+    store,
+    config: {
+      runtime: { run_on_start: true, retrain_interval_hours: 24 },
+    },
+    now: () => new Date("2026-07-22T18:30:00Z"),
+    logger: { info() {}, error() {} },
+    run: async () => {
+      markStarted();
+      await gate;
+      return {
+        status: "completed",
+        training: {},
+        forecast: { prediction: { record_id: "pred_shutdown" } },
+        collection: {},
+        timing: { knowledge_cutoff: "2026-07-22T18:30:00.000Z" },
+      };
+    },
+  });
+  t.after(() => scheduler.stop());
+  await started;
+  scheduler.stop();
+  let idle = false;
+  const waiting = scheduler.waitForIdle().then(() => {
+    idle = true;
+  });
+  await Promise.resolve();
+  assert.equal(idle, false);
+  releaseRun();
+  await waiting;
+  assert.equal(idle, true);
+  assert.equal(
+    (await store.readState("runtime", {})).last_prediction_id,
+    "pred_shutdown",
+  );
+});
+
 test("scheduler final-state hooks run after success without becoming pipeline failures", async (t) => {
   const store = await temporaryStore(t);
   const callbacks = [];

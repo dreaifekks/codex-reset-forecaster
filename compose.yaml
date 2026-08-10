@@ -26,6 +26,13 @@ services:
       RESET_CONFIG: "${RESET_CONFIG:-/app/config/default.json}"
       RESET_SCHEDULER_ENABLED: "${RESET_SCHEDULER_ENABLED:-true}"
       RESET_RUN_ON_START: "${RESET_RUN_ON_START:-true}"
+      RESET_PUBLIC_BASE_URL: "${RESET_PUBLIC_BASE_URL:-https://codexreset.dreaife.tokyo}"
+      RESET_PUBLICATION_ENABLED: "${RESET_PUBLICATION_ENABLED:-false}"
+      WEB_PUSH_ENABLED: "${WEB_PUSH_ENABLED:-false}"
+      WEB_PUSH_VAPID_KEYS_FILE: "${WEB_PUSH_VAPID_KEYS_FILE:-/run/secrets/web-push-vapid.json}"
+      WEB_PUSH_VAPID_SUBJECT: "${WEB_PUSH_VAPID_SUBJECT:-}"
+      TRAFFIC_MONITOR_ENABLED: "${TRAFFIC_MONITOR_ENABLED:-true}"
+      FORECASTER_OPERATIONS_TOKEN_FILE: "${FORECASTER_OPERATIONS_TOKEN_FILE:-}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -33,7 +40,60 @@ services:
       - ./config:/app/config:ro
       - "${X_BEARER_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/x-bearer-token:ro"
       - "${X_SEARCH_GATEWAY_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/x-search-gateway-token:ro"
-    stop_grace_period: 30s
+      - "${WEB_PUSH_VAPID_KEYS_FILE_HOST:-/dev/null}:/run/secrets/web-push-vapid.json:ro"
+      - "${FORECASTER_OPERATIONS_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/forecaster-operations-token:ro"
+    stop_grace_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  reset-forecaster-bot:
+    profiles: ["telegram"]
+    build: .
+    restart: unless-stopped
+    user: "${RESET_UID:-1000}:${RESET_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    command: ["node", "src/telegram-bot.mjs"]
+    environment:
+      TELEGRAM_BOT_TOKEN_FILE: "/run/secrets/telegram-bot-token"
+      TELEGRAM_BOT_API_BASE: "${TELEGRAM_BOT_API_BASE:-https://api.telegram.org}"
+      FORECASTER_API_BASE: "http://reset-forecaster:8787"
+      FORECASTER_PUBLIC_BASE_URL: "${RESET_PUBLIC_BASE_URL:-https://codexreset.dreaife.tokyo}"
+      TELEGRAM_ADMIN_USER_IDS: "${TELEGRAM_ADMIN_USER_IDS:-}"
+      TELEGRAM_BLOCKED_USER_IDS: "${TELEGRAM_BLOCKED_USER_IDS:-}"
+      TELEGRAM_ALLOWED_GROUP_CHAT_IDS: "${TELEGRAM_ALLOWED_GROUP_CHAT_IDS:-}"
+      TELEGRAM_NOTIFICATION_CHAT_IDS: "${TELEGRAM_NOTIFICATION_CHAT_IDS:-}"
+      TELEGRAM_EXPERIMENTAL_CHAT_IDS: "${TELEGRAM_EXPERIMENTAL_CHAT_IDS:-}"
+      TELEGRAM_COMMAND_RATE_LIMIT: "${TELEGRAM_COMMAND_RATE_LIMIT:-12}"
+      TELEGRAM_COMMAND_RATE_WINDOW_SECONDS: "${TELEGRAM_COMMAND_RATE_WINDOW_SECONDS:-60}"
+      TELEGRAM_FORECAST_INPUT_POLL_INTERVAL_MS: "${TELEGRAM_FORECAST_INPUT_POLL_INTERVAL_MS:-30000}"
+      FORECASTER_OPERATIONS_TOKEN_FILE: "${FORECASTER_OPERATIONS_TOKEN_FILE:-}"
+      TELEGRAM_OPERATIONS_ALERTS_ENABLED: "${TELEGRAM_OPERATIONS_ALERTS_ENABLED:-false}"
+      TELEGRAM_OPERATIONS_ALERT_POLL_INTERVAL_MS: "${TELEGRAM_OPERATIONS_ALERT_POLL_INTERVAL_MS:-60000}"
+      TELEGRAM_DISPLAY_TIME_ZONE: "${TELEGRAM_DISPLAY_TIME_ZONE:-UTC}"
+      TELEGRAM_BOT_DATA_DIR: "/bot-data"
+    depends_on:
+      reset-forecaster:
+        condition: service_healthy
+    volumes:
+      - reset-forecaster-bot-data:/bot-data
+      - "${TELEGRAM_BOT_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro"
+      - "${FORECASTER_OPERATIONS_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/forecaster-operations-token:ro"
+    healthcheck:
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+      test: ["CMD", "node", "src/telegram-healthcheck.mjs"]
+    stop_grace_period: 35s
     logging:
       driver: json-file
       options:
@@ -44,3 +104,5 @@ volumes:
   reset-forecaster-data:
     external: true
     name: "${RESET_DATA_VOLUME:-codex-reset-forecaster-data-v1}"
+  reset-forecaster-bot-data:
+    name: "${TELEGRAM_BOT_DATA_VOLUME:-codex-reset-forecaster-bot-data-v1}"

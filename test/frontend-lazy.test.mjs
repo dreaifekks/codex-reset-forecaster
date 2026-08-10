@@ -4,6 +4,14 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import {
+  NOTIFICATION_HORIZON_HOURS,
+  calibrationAt,
+  createNotificationCalibrationCache,
+  formatNotificationHorizon,
+  nearestHorizonIndex,
+  normalizeCalibrationPayload,
+} from "../public/notification-preferences.js";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -63,6 +71,7 @@ class FakeElement {
 
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
+    if (name === "open") this.open = true;
   }
 
   getAttribute(name) {
@@ -71,6 +80,7 @@ class FakeElement {
 
   removeAttribute(name) {
     this.attributes.delete(name);
+    if (name === "open") this.open = false;
   }
 
   querySelector() {
@@ -108,6 +118,74 @@ function jsonResponse(data, { ok = true, status = ok ? 200 : 500 } = {}) {
       return data;
     },
   };
+}
+
+function calibrationResponse(horizonHours) {
+  return jsonResponse({
+    schema_version: "notification-threshold-calibration/1",
+    horizon_hours: horizonHours,
+    status: "available",
+    sample_count: 40,
+    min_sample_count: 20,
+    event_count: 4,
+    min_event_count: 1,
+    points: [
+      {
+        probability: 0.2,
+        density: 0.5,
+        confidence_above: 0.4,
+        sample_count_above: 30,
+        point_sample_gate: {
+          minimum_windows: 20,
+          evaluated_windows: 30,
+          passed: true,
+        },
+      },
+      {
+        probability: 0.8,
+        density: 0.25,
+        confidence_above: 0.7,
+        sample_count_above: 20,
+        point_sample_gate: {
+          minimum_windows: 20,
+          evaluated_windows: 20,
+          passed: true,
+        },
+      },
+    ],
+  });
+}
+
+function createManualTimers() {
+  let nextId = 0;
+  const pending = new Map();
+  return {
+    setTimeout(callback, delay) {
+      const id = ++nextId;
+      pending.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) {
+      pending.delete(id);
+    },
+    count(delay) {
+      return [...pending.values()].filter((timer) => timer.delay === delay).length;
+    },
+    runNext(delay) {
+      const match = [...pending.entries()].find(([, timer]) => timer.delay === delay);
+      if (!match) return false;
+      const [id, timer] = match;
+      pending.delete(id);
+      timer.callback();
+      return true;
+    },
+  };
+}
+
+async function settleAsyncWork() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 async function createHarness(fetchImpl, {
@@ -149,7 +227,10 @@ async function createHarness(fetchImpl, {
     },
   };
   const window = {
-    location: { origin: "https://forecast.example" },
+    location: {
+      href: "https://forecast.example/",
+      origin: "https://forecast.example",
+    },
     innerWidth: 1280,
     innerHeight: 800,
     addEventListener(type, listener) {
@@ -184,12 +265,17 @@ async function createHarness(fetchImpl, {
         }
       };
 
-  const source = await fs.readFile(
+  const moduleSource = await fs.readFile(
     path.join(projectRoot, "public", "app.js"),
     "utf8",
   );
+  const source = moduleSource.replace(
+    /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js";\s*/,
+    "",
+  );
+  assert.notEqual(source, moduleSource, "test harness must bind frontend imports");
   const instrumented = source.replace(
-    /\nvoid load\(\);\s*$/,
+    /\nvoid initializeWebPushControls\(\);\s*\n\s*void load\(\);\s*$/,
     `
 globalThis.__frontendLazyTest = {
   predictionRefKey,
@@ -200,6 +286,15 @@ globalThis.__frontendLazyTest = {
   loadEvidence,
   load,
   scheduleCadenceRefresh,
+  loadNotificationCalibration,
+  scheduleNotificationCalibration,
+  openNotificationDialog,
+  closeNotificationDialog,
+  selectNotificationHorizon(hours) {
+    notificationHorizon.value = String(nearestHorizonIndex(hours));
+    renderNotificationValues();
+    scheduleNotificationCalibration();
+  },
   setEvidenceState({ visible, key, cutoff, loaded = null }) {
     evidenceVisible = visible;
     cachedForecastKey = key;
@@ -212,12 +307,16 @@ globalThis.__frontendLazyTest = {
       cachedForecast,
       evidenceLoadedForKey,
       evidenceVisible,
+      notificationCalibrationHorizon: notificationCalibration?.horizon_hours ?? null,
+      notificationCalibrationGeneration,
+      notificationDialogOpen: notificationDialog.open,
     };
   },
 };`,
   );
   assert.notEqual(instrumented, source, "test harness must suppress automatic load");
   const context = vm.createContext({
+    AbortController,
     AbortSignal,
     Date: ContextDate,
     IntersectionObserver: FakeIntersectionObserver,
@@ -226,6 +325,12 @@ globalThis.__frontendLazyTest = {
     document,
     fetch: fetchImpl,
     navigator: { onLine: true },
+    NOTIFICATION_HORIZON_HOURS,
+    calibrationAt,
+    createNotificationCalibrationCache,
+    formatNotificationHorizon,
+    nearestHorizonIndex,
+    normalizeCalibrationPayload,
     setTimeout: setTimeoutImpl,
     clearTimeout: clearTimeoutImpl,
     window,
@@ -240,6 +345,111 @@ globalThis.__frontendLazyTest = {
     windowListeners,
   };
 }
+
+test("notification calibration stays dialog-lazy, debounces horizons, and reuses a session cache", async () => {
+  const timers = createManualTimers();
+  const calibrationCalls = [];
+  const harness = await createHarness(async (url) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 7,
+      });
+    }
+    if (url.startsWith("/api/notification-preferences/calibration?")) {
+      const hours = Number(new URL(url, "https://forecast.example").searchParams.get("horizon_hours"));
+      calibrationCalls.push(hours);
+      return calibrationResponse(hours);
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  assert.deepEqual(calibrationCalls, []);
+  assert.equal(timers.count(220), 0, "a closed dialog must not queue calibration work");
+
+  harness.app.openNotificationDialog();
+  assert.deepEqual(calibrationCalls, [], "opening queues, but does not bypass the debounce");
+  assert.equal(timers.count(220), 1);
+  assert.equal(timers.runNext(220), true);
+  await settleAsyncWork();
+  assert.deepEqual(calibrationCalls, [24]);
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
+
+  harness.app.selectNotificationHorizon(28);
+  harness.app.selectNotificationHorizon(32);
+  assert.deepEqual(calibrationCalls, [24]);
+  assert.equal(timers.count(220), 1, "rapid input keeps only the final horizon timer");
+  assert.equal(timers.runNext(220), true);
+  await settleAsyncWork();
+  assert.deepEqual(calibrationCalls, [24, 32]);
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 32);
+
+  harness.app.selectNotificationHorizon(24);
+  assert.deepEqual(calibrationCalls, [24, 32]);
+  assert.equal(timers.count(220), 0, "a cached horizon renders without another wait");
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
+
+  harness.app.selectNotificationHorizon(28);
+  assert.equal(timers.count(220), 1);
+  harness.app.closeNotificationDialog();
+  assert.equal(timers.count(220), 0, "closing invalidates the pending debounce");
+  assert.equal(harness.app.state().notificationDialogOpen, false);
+  assert.deepEqual(calibrationCalls, [24, 32]);
+});
+
+test("an aborted calibration generation cannot overwrite or seed the selected horizon", async () => {
+  const timers = createManualTimers();
+  const calibrationCalls = [];
+  let releaseHorizon24;
+  const horizon24Response = new Promise((resolve) => {
+    releaseHorizon24 = resolve;
+  });
+  const harness = await createHarness(async (url) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 8,
+      });
+    }
+    const hours = Number(new URL(url, "https://forecast.example").searchParams.get("horizon_hours"));
+    calibrationCalls.push(hours);
+    return hours === 24 ? horizon24Response : calibrationResponse(hours);
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  harness.app.openNotificationDialog();
+  timers.runNext(220);
+  await Promise.resolve();
+  assert.deepEqual(calibrationCalls, [24]);
+
+  harness.app.selectNotificationHorizon(28);
+  timers.runNext(220);
+  await settleAsyncWork();
+  assert.deepEqual(calibrationCalls, [24, 28]);
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 28);
+
+  releaseHorizon24(calibrationResponse(24));
+  await settleAsyncWork();
+  assert.equal(
+    harness.app.state().notificationCalibrationHorizon,
+    28,
+    "the old response must not replace the selected horizon",
+  );
+
+  harness.app.selectNotificationHorizon(24);
+  assert.equal(
+    timers.count(220),
+    1,
+    "a response from an aborted generation must not populate the cache",
+  );
+});
 
 test("forecast snapshot loader validates same-origin refs, singleflights, and replaces cache atomically", async () => {
   const calls = [];

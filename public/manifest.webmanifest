@@ -1,0 +1,19 @@
+{
+  "name": "Codex 重置预测",
+  "short_name": "Codex 重置",
+  "description": "Codex 全平台重置预测与已确认历史。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

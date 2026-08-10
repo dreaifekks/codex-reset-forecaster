@@ -1,0 +1,68 @@
+{
+  "schema_version": "publication-event/1",
+  "event_id": "pub_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "event_type": "outcome.reset_confirmed.v1",
+  "entity_key": "reset_outcome:out_example_001",
+  "topic": "outcome",
+  "emitted_at": "2026-07-23T09:51:05Z",
+  "expires_at": "2026-07-24T09:48:00Z",
+  "experimental": false,
+  "supersedes_event_id": null,
+  "policy": {
+    "version": "publication-policy/1",
+    "hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "source": {
+    "outcome_ref": {
+      "record_id": "out_example_001",
+      "revision": 1
+    },
+    "verification_ref": {
+      "record_id": "obs_official_example_001",
+      "revision": 1
+    }
+  },
+  "report": {
+    "outcome": {
+      "outcome_ref": {
+        "record_id": "out_example_001",
+        "revision": 1
+      },
+      "status": "confirmed",
+      "occurred_time_range": {
+        "start": "2026-07-23T09:31:00Z",
+        "end": "2026-07-23T09:39:00Z",
+        "boundary": "[start,end)",
+        "precision": "interval_observed",
+        "timezone_basis": "UTC",
+        "original_text": null
+      },
+      "known_at": "2026-07-23T09:48:00Z",
+      "label_grade": "gold",
+      "source": {
+        "observation_ref": {
+          "record_id": "obs_official_example_001",
+          "revision": 1
+        },
+        "canonical_url": "https://x.com/thsottiaux/status/1234567890123456789",
+        "display_handle": "@thsottiaux",
+        "text": "We have reset Codex usage limits across all paid plans.",
+        "published_at": "2026-07-23T09:48:00Z"
+      }
+    },
+    "correction_kind": "confirmed",
+    "default_delivery": true
+  },
+  "title": "Codex 重置已确认",
+  "summary": "当前 outcome 合同确认发生时间为 2026-07-23T09:31:00Z 至 2026-07-23T09:39:00Z。",
+  "url": "https://codexreset.example/accuracy",
+  "notification": {
+    "title": "Codex 重置已确认",
+    "body": "当前 outcome 合同确认发生时间为 2026-07-23T09:31:00Z 至 2026-07-23T09:39:00Z。",
+    "url": "https://codexreset.example/accuracy",
+    "tag": "outcome-out_example_001"
+  },
+  "sequence": 1,
+  "revision": 1,
+  "supersedes": null
+}

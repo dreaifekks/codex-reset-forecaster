@@ -160,6 +160,70 @@ whole half-open window. A later outcome, superseding/revoked coverage assertion,
 or coverage backfill creates a new revision that supersedes the exact earlier
 settlement.
 
+## Non-canonical publication events
+
+`publication-event/1` is a delivery projection, not a canonical record type. It is
+stored append-only with `store.appendAudit("publication-event", event)` and follows
+`schemas/publication-event.schema.json`, not the canonical
+`reset-intel/0.2` envelope. It must never enter training, feature construction,
+outcome adjudication, settlement, or coverage calculations.
+
+Each event carries a global integer `sequence`, stable `event_id` and `entity_key`,
+one of the topics `authority`, `outcome`, or `experimental_probability`, exact
+canonical source references, the publication policy version/hash, a channel-neutral
+report, and compact notification text. Stable topics set
+`report.default_delivery=true`; experimental probability events set it to false.
+`event_id` is the delivery idempotency key. Ledger rows themselves remain revision
+1 with `supersedes: null`; a correction's `supersedes_event_id` is the explicit link
+to the prior publication event.
+
+Publication events describe transitions, not truth inferred by the channel:
+
+- an authority-window event references an exact signal and prediction but states
+  that the reset is not confirmed;
+- a probability-watch event references an exact eligible prediction and remains
+  experimental;
+- only an eligible exact `reset_outcome` revision can produce
+  `outcome.reset_confirmed.v1`;
+- newer outcome revisions append `reset_corrected`, `reset_retracted`, or
+  `verification_withdrawn` events. Verification withdrawal means the current exact
+  verification no longer passes; it is not a negative outcome.
+
+The complete delivery, baseline, and correction semantics are in
+`docs/notifications.md`. `examples/publication-event.json` is intentionally
+validated separately from canonical examples.
+
+`notification-forecast-input-stream/2` is bounded non-canonical projection state
+used only to evaluate personalized presentation rules. Each
+`notification-forecast-input/2` identifies one eligible prediction and carries
+its model `issued_at`, actual projection `emitted_at`, knowledge cutoff, expiry,
+serving stage, 168 cumulative hourly probabilities, and the exact current outcome
+revision gate. `issued_at` and `emitted_at` are never substituted for each other.
+`notification-preferences/1` stores an integer `horizon_hours` (`1..168`) and
+`probability_threshold` (`0.01..0.99`).
+Neither the stream, subscriber preferences, per-channel watch state, nor the
+historical threshold profile is a ninth canonical record or a publication event.
+The threshold profile is computed only from as-issued current-release predictions,
+eligible outcomes, and complete label coverage; its historical hit rate is not
+model confidence. Threshold selection is strict (`probability > threshold`), and
+the compact point estimate is withheld below 20 non-overlapping windows while its
+Wilson interval and sample gate remain explicit.
+
+## Non-canonical operations state
+
+`traffic-monitor-state/2` is bounded, mutable runtime telemetry rather than an
+intelligence or publication record. It contains only UTC minute/day counters,
+low-cardinality route classes, latency/runtime histograms, capacity policy state,
+and a separate operations alert cursor. It must never enter collection evidence,
+features, labels, forecasts, outcomes, calibration, or `publication-event/1`.
+Operations alerts are administrator delivery jobs only; ordinary feed, Web Push,
+and Telegram subscriptions cannot consume them. No IP address, user agent, query,
+raw path, Push capability, or Telegram identity belongs in this state.
+Version 1 state is migrated by retaining only traffic aggregates and resetting the
+pressure incident and operations-alert stream. This prevents a stricter policy or
+older alert shape from being treated as current evidence; Bot cursor recovery then
+records the gap and starts a new local stream generation.
+
 ## Time semantics
 
 The following values must never be substituted for one another:
@@ -176,6 +240,8 @@ The following values must never be substituted for one another:
 | `known_at` | Time the outcome became known to the system |
 | `replay_available_at` | Optional independently attested historical availability used only for an explicitly labeled archive replay; never a replacement for `known_at` |
 | `knowledge_cutoff` | Latest information a forecast may use |
+| `emitted_at` | Publication-only time when a non-canonical event was appended; not the source or outcome time |
+| `expires_at` | Publication-only delivery deadline; expiry suppresses late sends but does not delete the event |
 
 All canonical times are RFC 3339 UTC. All ranges are half-open `[start, end)`.
 As-of comparisons preserve the timestamp's full millisecond precision whether a

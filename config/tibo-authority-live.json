@@ -53,6 +53,10 @@
   "runtime": {
     "scheduler_enabled": true,
     "run_on_start": true,
+    "public_base_url": "https://codexreset.dreaife.tokyo",
+    "publication": {
+      "enabled": true
+    },
     "provisional_bootstrap": {
       "enabled": true,
       "minimum_outcomes": 10

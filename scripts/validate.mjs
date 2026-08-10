@@ -22,6 +22,16 @@ import { assertCanonicalRecord } from "../src/core/validate-record.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = path.join(root, "schemas", "reset-intel.schema.json");
 const providerSchemaPath = path.join(root, "schemas", "provider-config.schema.json");
+const publicationSchemaPath = path.join(
+  root,
+  "schemas",
+  "publication-event.schema.json",
+);
+const publicationExamplePath = path.join(
+  root,
+  "examples",
+  "publication-event.json",
+);
 const examplesDir = path.join(root, "examples");
 const allowedTypes = new Set([
   "raw_observation",
@@ -74,6 +84,120 @@ function validateRange(range, label) {
   if (!isUtc(range.start) || !isUtc(range.end)) fail(`${label}: range timestamps must be UTC`);
   if (Date.parse(range.start) >= Date.parse(range.end)) fail(`${label}: range start must precede end`);
   if (range.boundary !== "[start,end)") fail(`${label}: boundary must be [start,end)`);
+}
+
+function validateRecordRef(reference, label) {
+  if (
+    !reference ||
+    typeof reference.record_id !== "string" ||
+    reference.record_id.length === 0 ||
+    !Number.isInteger(reference.revision) ||
+    reference.revision < 1
+  ) {
+    fail(`${label}: invalid exact record reference`);
+  }
+}
+
+function validatePublicationEvent(event, fileName) {
+  const eventContract = new Map([
+    ["forecast.authority_window.opened.v1", {
+      topic: "authority",
+      refs: ["prediction_ref", "signal_ref"],
+      supersedes: false,
+    }],
+    ["forecast.reset_watch.opened.v1", {
+      topic: "experimental_probability",
+      refs: ["prediction_ref"],
+      supersedes: false,
+    }],
+    ["forecast.reset_watch.closed.v1", {
+      topic: "experimental_probability",
+      refs: ["prediction_ref"],
+      supersedes: true,
+    }],
+    ["outcome.reset_confirmed.v1", {
+      topic: "outcome",
+      refs: ["outcome_ref", "verification_ref"],
+      supersedes: false,
+    }],
+    ["outcome.reset_corrected.v1", {
+      topic: "outcome",
+      refs: ["outcome_ref", "verification_ref"],
+      supersedes: true,
+    }],
+    ["outcome.reset_retracted.v1", {
+      topic: "outcome",
+      refs: ["outcome_ref"],
+      supersedes: true,
+    }],
+    ["outcome.verification_withdrawn.v1", {
+      topic: "outcome",
+      refs: ["outcome_ref"],
+      supersedes: true,
+    }],
+  ]).get(event.event_type);
+  if (
+    event.schema_version !== "publication-event/1" ||
+    Object.hasOwn(event, "record_type") ||
+    !/^pub_[a-f0-9]{64}$/.test(event.event_id ?? "") ||
+    !eventContract ||
+    !Number.isSafeInteger(event.sequence) ||
+    event.sequence < 1 ||
+    event.revision !== 1 ||
+    event.supersedes !== null ||
+    !isUtc(event.emitted_at) ||
+    !isUtc(event.expires_at) ||
+    Date.parse(event.expires_at) <= Date.parse(event.emitted_at)
+  ) {
+    fail(`${fileName}: invalid non-canonical publication envelope`);
+  }
+  if (event.topic !== eventContract.topic) {
+    fail(`${fileName}: event type and publication topic are inconsistent`);
+  }
+  const hasSupersededEvent = /^pub_[a-f0-9]{64}$/.test(
+    event.supersedes_event_id ?? "",
+  );
+  if (
+    hasSupersededEvent !== eventContract.supersedes ||
+    (!eventContract.supersedes && event.supersedes_event_id !== null)
+  ) {
+    fail(`${fileName}: invalid publication correction link`);
+  }
+  const experimental = event.topic === "experimental_probability";
+  if (
+    event.experimental !== experimental ||
+    event.report?.default_delivery !== !experimental
+  ) {
+    fail(`${fileName}: topic delivery class is inconsistent`);
+  }
+  if (
+    event.policy?.version !== "publication-policy/1" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.policy?.hash ?? "")
+  ) {
+    fail(`${fileName}: publication policy binding is invalid`);
+  }
+  const references = Object.entries(event.source ?? {})
+    .filter(([, reference]) => reference !== null);
+  if (references.length === 0) {
+    fail(`${fileName}: publication source requires an exact canonical reference`);
+  }
+  for (const [name, reference] of references) {
+    validateRecordRef(reference, `${fileName}: source.${name}`);
+  }
+  for (const name of eventContract.refs) {
+    validateRecordRef(event.source?.[name], `${fileName}: source.${name}`);
+  }
+  if (
+    typeof event.notification?.title !== "string" ||
+    typeof event.notification?.body !== "string" ||
+    typeof event.notification?.url !== "string" ||
+    typeof event.notification?.tag !== "string" ||
+    event.title !== event.notification.title ||
+    event.summary !== event.notification.body ||
+    event.url !== event.notification.url
+  ) {
+    fail(`${fileName}: notification projection is incomplete or inconsistent`);
+  }
 }
 
 function closeEnough(left, right, tolerance = 1e-9) {
@@ -198,6 +322,18 @@ if (
   fail("schemas/reset-intel.schema.json is missing core definitions");
 }
 const providerSchema = readJson(providerSchemaPath);
+const publicationSchema = readJson(publicationSchemaPath);
+if (
+  publicationSchema.$schema !==
+    "https://json-schema.org/draft/2020-12/schema" ||
+  publicationSchema.$id !== "publication-event.schema.json" ||
+  publicationSchema.properties?.schema_version?.const !==
+    "publication-event/1" ||
+  publicationSchema.properties?.topic?.enum?.length !== 3 ||
+  !publicationSchema.$defs?.recordRef
+) {
+  fail("schemas/publication-event.schema.json is missing the publication contract");
+}
 if (
   providerSchema.$schema !== "https://json-schema.org/draft/2020-12/schema" ||
   !providerSchema.$defs?.xOutcomeExhaustivenessContract ||
@@ -347,7 +483,12 @@ if (
   fail("model features must exclude community resonance and retain competitor release context");
 }
 
-const exampleFiles = fs.readdirSync(examplesDir).filter((name) => name.endsWith(".json")).sort();
+const publicationExample = readJson(publicationExamplePath);
+validatePublicationEvent(publicationExample, "publication-event.json");
+
+const exampleFiles = fs.readdirSync(examplesDir)
+  .filter((name) => name.endsWith(".json") && name !== "publication-event.json")
+  .sort();
 if (exampleFiles.length === 0) fail("No JSON examples found");
 
 for (const fileName of exampleFiles) {
@@ -533,4 +674,7 @@ for (const fileName of exampleFiles) {
   }
 }
 
-console.log(`Validated schema and ${exampleFiles.length} example records.`);
+console.log(
+  `Validated schemas, ${exampleFiles.length} canonical example records, and ` +
+  "1 non-canonical publication event.",
+);

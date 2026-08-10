@@ -1286,7 +1286,12 @@ export class JsonlStore {
   async writeState(name, value) {
     const target = path.join(this.stateDir, `${name}.json`);
     const temporary = `${target}.${process.pid}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await fs.writeFile(
+      temporary,
+      `${JSON.stringify(value, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await fs.chmod(temporary, 0o600);
     await fs.rename(temporary, target);
   }
 

@@ -12,8 +12,9 @@ The repository contains the contracts plus a zero-dependency Node.js prototype:
 direct X, RSSHub X timeline, X Search Gateway, historical-monitor, and fixture
 adapters; append-only records and acquisition audit data; deterministic extraction
 and adjudication; feature snapshots; a regularized hourly hazard model; a
-walk-forward promotion gate; JSON APIs; and forecast plus confirmed-history pages.
-Personal quota integration remains deferred.
+walk-forward promotion gate; JSON APIs; forecast plus confirmed-history pages; and
+a channel-neutral publication ledger for Atom, Web Push, and Telegram. Personal
+quota integration remains deferred.
 
 The operating policy separates immediate usefulness from validated performance. A
 first deployment batch-fits a clearly labeled `provisional` bootstrap from the
@@ -36,6 +37,12 @@ been validated.
   selected qualifying outcome during the next four hours.
 - The website derives its next-4-hour, next-24-hour, and seven-day `[7][24]`
   heatmaps from the same 168-slot forecast rather than producing separate models.
+- Notifications are a non-canonical projection. Stable delivery includes exact
+  authority windows and confirmed outcomes/corrections; probability threshold
+  watches remain experimental opt-in and can never be presented as outcomes.
+  The website and Telegram bot are result UI/read models: they may lazily fetch
+  and cache only the needed forecast projections, but cannot write canonical
+  records or contribute to training, labels, calibration, or publication triggers.
 - Provider adapters only collect and normalize observations. Watchdogs, X feeds,
   official status pages, user-report sources, and other vendors are
   interchangeable providers rather than the core model.
@@ -118,7 +125,10 @@ The first website release covers:
 - a small, strongly regularized hourly hazard model;
 - a single 168-hour forecast rendered as 4-hour, 24-hour, and seven-day heatmaps;
 - immutable prediction history, internal evaluation for promotion, and a public
-  history page containing only confirmed reset results and their sources.
+  history page containing only confirmed reset results and their sources;
+- append-only publication events consumed by the default Atom feed, optional Web
+  Push, and one public role-aware Telegram bot, with experimental probability alerts kept
+  outside default delivery.
 
 The MVP does not include user accounts, personal five-hour or weekly quota state,
 reset-voucher inventory, or personalized voucher recommendations. Those remain a
@@ -136,6 +146,7 @@ providers
   -> 10-minute as-of refreshes of hourly-slot feature snapshots
   -> hourly hazard and rolling four-hour forecast
   -> confirmed outcomes
+  -> non-canonical publication events for delivery channels
   -> immediate historical batch bootstrap when needed
   -> append-only prediction settlements and background causal/as-issued validation
   -> at-most-daily batch train/evaluate attempts
@@ -153,6 +164,7 @@ displayed as unvalidated and cannot inherit an exploratory or replay score as an
 AGENTS.md                    Repository boundaries and working rules
 docs/architecture.md        System components and lifecycle
 docs/data-contract.md       Canonical records, timestamps, and provenance
+docs/notifications.md       Publication events, delivery topics, and channel safety
 docs/model-contract.md      Forecast target, model, training, and evaluation
 docs/product-requirements.md
                              Confirmed MVP scope and website surfaces
@@ -162,7 +174,9 @@ docs/implementation-status.md
                              Requirement-to-verification matrix and external gates
 schemas/reset-intel.schema.json
                              JSON Schema for the canonical record envelope
-examples/                   Provider-neutral example records
+schemas/publication-event.schema.json
+                             Non-canonical publication event schema
+examples/                   Canonical records plus a separate publication example
 scripts/validate.mjs        Zero-dependency contract checks
 ```
 
@@ -184,6 +198,41 @@ See `docs/operations.md` before enabling live X collection. Synthetic demo resul
 validate implementation mechanics only and are never accepted as real-world model
 accuracy. The dedicated demo start command loads the same frozen model contract
 used by `demo:seed`; ordinary `npm start` deliberately keeps the live contract.
+
+The public stable Atom feed is `/feed.xml`; `/feeds/experimental.xml` explicitly
+adds the shared model probability-watch events. The page's notification dialog can
+also generate a parameterized `/feeds/probability.xml` URL and apply the same
+versioned `1..168h` horizon plus `1%..99%` threshold rule to opt-in Web Push and
+Telegram (`/subscribe probability 24h 60%`; `/subscribe experimental` remains a
+`4h/50%` compatibility alias).
+Historical threshold reliability is shown separately from forecast probability and
+uses strict-above-threshold samples, a per-point 20-window gate, and Wilson
+intervals; it is labeled preliminary until the configured global sample gates pass.
+The parameterized Atom URL includes an explicit current baseline cursor and keeps
+entries for 24 hours independently of Web Push expiry. Web Push and
+Telegram are safe-disabled until
+their external key/token files and required administrator settings are configured.
+Ordinary private-chat Bot users do not need an allowlist. Public Web Push also
+requires edge rate limiting plus an anti-automation challenge on subscription
+mutations; same-origin headers alone are not an abuse control. The first successful
+pipeline generation after publication is enabled establishes a baseline and sends
+no historical backlog. See
+`docs/notifications.md` for the event and subscription contract.
+
+The notification dialog waits 220 ms after opening or a horizon change before
+loading that horizon's historical profile and caches each result in the current
+page session for ten minutes. Telegram requests sparse forecast-input views for
+only the distinct horizons used by active dynamic rules; without such a rule it
+reads only the tail cursor and outcome gate. The core projection continues to
+retain the complete 168-point curve.
+
+Origin request monitoring is a separate operations plane, not a model input. It
+keeps privacy-preserving minute and UTC-day aggregates, shows daily growth to the
+Bot administrator with `/traffic`, and emits only sustained capacity state
+transitions. Ordinary users can use the Bot in their own private chat without
+pre-registration; administrator operations data never enters the publication
+ledger or ordinary subscriptions. See `docs/operations.md` for token setup and
+thresholds.
 
 To import the historical monitor as outcome-discovery evidence under the default
 archive profile (network access required):
@@ -227,8 +276,9 @@ and restart commands.
 
 ## Status
 
-Version `0.5.1` with canonical contract `reset-intel/0.2` implements the website
-prototype and keeps the personal optimizer as a post-MVP TODO. Synthetic fixtures
+Version `0.6.0` with canonical contract `reset-intel/0.2` implements the website,
+notification read models, and operations monitoring while keeping the personal
+optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the
 older inferred-archive-coverage policy is incompatible with the current feature,
 deduplication, coverage, and evaluation contracts and must not be served as current
