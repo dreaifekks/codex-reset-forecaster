@@ -90,6 +90,108 @@ test("calibration payload keeps density separate from historical reliability", (
     level: 0.95,
     method: "wilson_score",
   });
+  assert.equal(calibration.distribution_summary, null, "legacy payloads remain valid");
+});
+
+test("calibration payload strictly normalizes the optional distribution profile", () => {
+  const distributionSummary = {
+    mean_probability: 0.4,
+    standard_deviation: 0.1,
+    observed_range: { lower: 0.01, upper: 0.96 },
+    display_range: {
+      lower: 0.05,
+      upper: 0.8,
+      standard_deviations: 4,
+      clipped_below: 2,
+      clipped_above: 3,
+    },
+    suggested_threshold: {
+      probability: 0.6,
+      standard_deviations: 2,
+    },
+  };
+  const calibration = normalizeCalibrationPayload({
+    horizon_hours: 24,
+    status: "available",
+    sample_count: 80,
+    min_sample_count: 20,
+    event_count: 8,
+    min_event_count: 1,
+    distribution_summary: distributionSummary,
+    points: [
+      { probability: 0.05, density: 0.1 },
+      { probability: 0.8, density: 0.1 },
+    ],
+  }, 24);
+
+  assert.deepEqual(calibration.distribution_summary, distributionSummary);
+  assert.throws(
+    () => normalizeCalibrationPayload({
+      ...calibration,
+      distribution_summary: {
+        ...distributionSummary,
+        display_range: {
+          ...distributionSummary.display_range,
+          standard_deviations: "4",
+        },
+      },
+    }, 24),
+    /分布摘要无效/,
+  );
+  assert.throws(
+    () => normalizeCalibrationPayload({
+      ...calibration,
+      distribution_summary: {
+        ...distributionSummary,
+        display_range: {
+          ...distributionSummary.display_range,
+          lower: "0.05",
+        },
+      },
+    }, 24),
+    /显示范围无效/,
+  );
+  assert.throws(
+    () => normalizeCalibrationPayload({
+      ...calibration,
+      distribution_summary: {
+        ...distributionSummary,
+        suggested_threshold: {
+          probability: null,
+          standard_deviations: 2,
+        },
+      },
+    }, 24),
+    /分布摘要无效/,
+  );
+});
+
+test("an explicitly empty distribution profile remains compatible with no-data windows", () => {
+  const calibration = normalizeCalibrationPayload({
+    horizon_hours: 4,
+    status: "insufficient_data",
+    distribution_summary: {
+      mean_probability: null,
+      standard_deviation: null,
+      observed_range: { lower: null, upper: null },
+      display_range: {
+        lower: null,
+        upper: null,
+        standard_deviations: 4,
+        clipped_below: 0,
+        clipped_above: 0,
+      },
+      suggested_threshold: {
+        probability: null,
+        standard_deviations: 2,
+      },
+    },
+    points: [],
+  }, 4);
+
+  assert.equal(calibration.status, "insufficient");
+  assert.equal(calibration.distribution_summary.mean_probability, null);
+  assert.equal(calibration.distribution_summary.display_range.lower, null);
 });
 
 test("calibration is explicitly insufficient when the sample gate is not met", () => {

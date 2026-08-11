@@ -627,9 +627,26 @@ required `after` value is the silent baseline cursor obtained when the site crea
 the link; use `after=0` only when deliberately replaying retained projection
 history. The calibration endpoint returns as-issued
 historical density and threshold-above hit rate. Check `status`, `sample_count`, and
-`event_count`: `preliminary` is not validated confidence. These are output views;
-Atom autodiscovery remains limited to the stable feed. The RSSHub X timeline remains
-an unrelated input adapter.
+`event_count`: `preliminary` is not validated confidence. Its compact response also
+contains `distribution_summary`: exact eligible-row mean and population standard
+deviation, the visualization-only four-standard-deviation display range, clipped
+outlier counts, and the two-standard-deviation browser suggestion. Clipping never
+removes rows from the threshold calculations.
+
+The serving process asynchronously warms all 28 UI horizons from one worker context
+and writes the last-good derived snapshot to
+`state/probability-profile-snapshot.json`. This is mutable, non-canonical cache state
+and may be deleted to force a cold rebuild; never treat it as evidence or a label.
+Expired in-memory profiles are returned while a forced background rebuild runs.
+Successful pipeline completion triggers that rebuild, and the HTTP view adds a
+strong ETag plus `public, max-age=600, stale-while-revalidate=3600`. The browser uses
+`view=compact`; omitting it preserves the complete profile response. A cold system
+with no last-good snapshot returns `503` with `Retry-After: 5` while the independent
+warmup completes. The open browser dialog retries that signal for at most two
+minutes without binding any HTTP request to the scan, so neither that request nor a
+later browser drag synchronously owns it. These are output views; Atom autodiscovery remains
+limited to the stable feed. The RSSHub X timeline remains an unrelated input
+adapter.
 
 Outcome events expire at canonical `known_at` plus the configured outcome maximum
 delivery delay; a later-seen revision still advances projection state but is not

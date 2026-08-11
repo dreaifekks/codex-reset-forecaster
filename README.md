@@ -208,6 +208,13 @@ Telegram (`/subscribe probability 24h 60%`; `/subscribe experimental` remains a
 Historical threshold reliability is shown separately from forecast probability and
 uses strict-above-threshold samples, a per-point 20-window gate, and Wilson
 intervals; it is labeled preliminary until the configured global sample gates pass.
+The chart focuses on the historical mean plus or minus four population standard
+deviations instead of reserving most of its width for empty probability space, and
+reports how many outlying windows were clipped from the drawing. For a new browser
+preference only, the initial threshold suggestion is the historical mean plus two
+standard deviations, rounded up to a real one-percentage-point threshold. Saved or
+manually edited rules are never overwritten, and the channel-neutral `4h/50%`
+compatibility default remains unchanged.
 The parameterized Atom URL includes an explicit current baseline cursor and keeps
 entries for 24 hours independently of Web Push expiry. Web Push and
 Telegram are safe-disabled until
@@ -222,12 +229,20 @@ pipeline generation after publication is enabled establishes a baseline and send
 no historical backlog. See
 `docs/notifications.md` for the event and subscription contract.
 
-The notification dialog waits 220 ms after opening or a horizon change before
-loading that horizon's historical profile and caches each result in the current
-page session for ten minutes. Telegram requests sparse forecast-input views for
-only the distinct horizons used by active dynamic rules; without such a rule it
-reads only the tail cursor and outcome gate. The core projection continues to
-retain the complete 168-point curve.
+The server builds all 28 slider horizons from one read-only historical context,
+persists a lineage-bound last-good snapshot, and refreshes it in the background at
+startup and after a successful pipeline run. Expired values remain immediately
+readable while a forced refresh runs, so a browser drag never owns the historical
+file scan. The browser's explicit compact HTTP projection has a ten-minute public
+cache plus a bounded stale-while-revalidate window; omitting that view keeps the
+complete profile contract for existing consumers. The page also keeps an
+exact-horizon ten-minute cache and flushes the final slider value immediately on
+release. On a cache miss, an already rendered chart stays visible but becomes
+non-interactive until the selected horizon is ready, then the new chart replaces it
+atomically; only the first chart uses the full loading state. Telegram requests
+sparse forecast-input views for only the distinct horizons used by active dynamic
+rules; without such a rule it reads only the tail cursor and outcome gate. The core
+projection continues to retain the complete 168-point curve.
 
 Origin request monitoring is a separate operations plane, not a model input. It
 keeps privacy-preserving minute and UTC-day aggregates, shows daily growth to the
@@ -279,7 +294,7 @@ and restart commands.
 
 ## Status
 
-Version `0.6.1` with canonical contract `reset-intel/0.2` implements the website,
+Version `0.7.0` with canonical contract `reset-intel/0.2` implements the website,
 notification read models, and operations monitoring while keeping the personal
 optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the

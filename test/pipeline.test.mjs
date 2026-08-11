@@ -512,8 +512,12 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(appScript, /实时来源正常/);
   assert.match(appScript, /负标签按审计延迟成熟/);
   assert.doesNotMatch(appScript, /data_quality\?\.score/);
-  assert.match(page, /app\.js\?v=subscription-preferences-1/);
-  assert.match(page, /styles\.css\?v=subscription-preferences-1/);
+  assert.match(page, /app\.js\?v=subscription-preferences-3/);
+  assert.match(page, /styles\.css\?v=subscription-preferences-3/);
+  assert.match(
+    appScript,
+    /notification-preferences\.js\?v=subscription-preferences-3/,
+  );
   assert.match(page, /滚动到此处后加载核心信号/);
   assert.match(appScript, /current_prediction_ref/);
   assert.match(appScript, /snapshot_url/);

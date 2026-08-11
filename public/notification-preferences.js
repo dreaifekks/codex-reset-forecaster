@@ -111,10 +111,31 @@ function nonNegativeInteger(value) {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
+function strictUnitInterval(value) {
+  return typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      value <= 1
+    ? value
+    : null;
+}
+
+function strictNonNegative(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function strictNonNegativeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
 function confidenceInterval(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const lower = unitInterval(value.lower);
-  const upper = unitInterval(value.upper);
+  const lower = strictUnitInterval(value.lower);
+  const upper = strictUnitInterval(value.upper);
   const level = unitInterval(value.level);
   if (
     lower === null ||
@@ -125,6 +146,117 @@ function confidenceInterval(value) {
     value.method.length === 0
   ) return null;
   return { lower, upper, level, method: value.method };
+}
+
+function probabilityRange(value, label, { allowPoint = true } = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`历史概率分布的${label}无效`);
+  }
+  const lower = strictUnitInterval(value.lower);
+  const upper = strictUnitInterval(value.upper);
+  if (
+    lower === null ||
+    upper === null ||
+    lower > upper ||
+    (!allowPoint && lower === upper)
+  ) {
+    throw new TypeError(`历史概率分布的${label}无效`);
+  }
+  return { lower, upper };
+}
+
+function normalizeDistributionSummary(value) {
+  // Older calibration responses did not expose a distribution profile. Keep
+  // those responses usable, but reject a partially present profile rather than
+  // silently falling back to a misleading 0%-100% plot.
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("历史概率分布摘要无效");
+  }
+  const displayStandardDeviations = value.display_range?.standard_deviations;
+  const clippedBelow = strictNonNegativeInteger(
+    value.display_range?.clipped_below,
+  );
+  const clippedAbove = strictNonNegativeInteger(
+    value.display_range?.clipped_above,
+  );
+  const suggestedStandardDeviations =
+    value.suggested_threshold?.standard_deviations;
+  const isEmptyProfile = value.mean_probability === null &&
+    value.standard_deviation === null &&
+    value.observed_range?.lower === null &&
+    value.observed_range?.upper === null &&
+    value.display_range?.lower === null &&
+    value.display_range?.upper === null &&
+    value.suggested_threshold?.probability === null;
+  if (isEmptyProfile) {
+    if (
+      displayStandardDeviations !== 4 ||
+      clippedBelow !== 0 ||
+      clippedAbove !== 0 ||
+      suggestedStandardDeviations !== 2
+    ) {
+      throw new TypeError("历史概率分布摘要无效");
+    }
+    return {
+      mean_probability: null,
+      standard_deviation: null,
+      observed_range: { lower: null, upper: null },
+      display_range: {
+        lower: null,
+        upper: null,
+        standard_deviations: 4,
+        clipped_below: 0,
+        clipped_above: 0,
+      },
+      suggested_threshold: {
+        probability: null,
+        standard_deviations: 2,
+      },
+    };
+  }
+  const meanProbability = strictUnitInterval(value.mean_probability);
+  const standardDeviation = strictNonNegative(value.standard_deviation);
+  const observedRange = probabilityRange(value.observed_range, "观测范围");
+  const displayRange = probabilityRange(value.display_range, "显示范围", {
+    allowPoint: false,
+  });
+  const suggestedProbability = strictUnitInterval(
+    value.suggested_threshold?.probability,
+  );
+  if (
+    meanProbability === null ||
+    standardDeviation === null ||
+    standardDeviation > 1 ||
+    meanProbability < observedRange.lower ||
+    meanProbability > observedRange.upper ||
+    meanProbability < displayRange.lower ||
+    meanProbability > displayRange.upper ||
+    displayStandardDeviations !== 4 ||
+    clippedBelow === null ||
+    clippedAbove === null ||
+    suggestedProbability === null ||
+    suggestedProbability < displayRange.lower ||
+    suggestedProbability > displayRange.upper ||
+    suggestedStandardDeviations !== 2
+  ) {
+    throw new TypeError("历史概率分布摘要无效");
+  }
+  return {
+    mean_probability: meanProbability,
+    standard_deviation: standardDeviation,
+    observed_range: observedRange,
+    display_range: {
+      ...displayRange,
+      standard_deviations: 4,
+      clipped_below: clippedBelow,
+      clipped_above: clippedAbove,
+    },
+    suggested_threshold: {
+      probability: suggestedProbability,
+      standard_deviations: 2,
+    },
+  };
 }
 
 export function normalizeCalibrationPayload(payload, expectedHorizonHours) {
@@ -144,6 +276,9 @@ export function normalizeCalibrationPayload(payload, expectedHorizonHours) {
   const minimumSampleCount = nonNegativeInteger(payload.min_sample_count) ?? 20;
   const eventCount = nonNegativeInteger(payload.event_count) ?? 0;
   const minimumEventCount = nonNegativeInteger(payload.min_event_count) ?? 1;
+  const distributionSummary = normalizeDistributionSummary(
+    payload.distribution_summary,
+  );
   const byProbability = new Map();
   for (const source of Array.isArray(payload.points) ? payload.points : []) {
     const probability = unitInterval(source?.probability ?? source?.threshold);
@@ -202,6 +337,7 @@ export function normalizeCalibrationPayload(payload, expectedHorizonHours) {
     min_sample_count: minimumSampleCount,
     event_count: eventCount,
     min_event_count: minimumEventCount,
+    distribution_summary: distributionSummary,
     points,
   };
 }

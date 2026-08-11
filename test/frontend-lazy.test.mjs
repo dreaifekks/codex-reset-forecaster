@@ -49,13 +49,25 @@ class FakeElement {
     this.style = {};
     this.children = [];
     this.attributes = new Map();
+    this.listeners = new Map();
+    this.bounds = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
     this.hidden = false;
     this.open = false;
     this.textContent = "";
     this.innerHTML = "";
   }
 
-  addEventListener() {}
+  addEventListener(type, listener) {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  dispatchEvent(event) {
+    event.target ??= this;
+    for (const listener of this.listeners.get(event.type) ?? []) listener(event);
+    return true;
+  }
 
   append(...children) {
     this.children.push(...children);
@@ -106,29 +118,62 @@ class FakeElement {
   focus() {}
 
   getBoundingClientRect() {
-    return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+    return this.bounds;
   }
 }
 
-function jsonResponse(data, { ok = true, status = ok ? 200 : 500 } = {}) {
+function jsonResponse(data, {
+  ok = true,
+  status = ok ? 200 : 500,
+  headers = {},
+} = {}) {
+  const normalizedHeaders = new Map(
+    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), String(value)]),
+  );
   return {
     ok,
     status,
+    headers: {
+      get(name) {
+        return normalizedHeaders.get(String(name).toLowerCase()) ?? null;
+      },
+    },
     async json() {
       return data;
     },
   };
 }
 
-function calibrationResponse(horizonHours) {
+function calibrationResponse(horizonHours, {
+  suggestedThreshold = 0.7,
+  displayLower = 0.1,
+  displayUpper = 0.9,
+} = {}) {
   return jsonResponse({
-    schema_version: "notification-threshold-calibration/1",
+    schema_version: "notification-threshold-calibration-compact/1",
+    profile_schema_version: "notification-threshold-calibration/1",
     horizon_hours: horizonHours,
     status: "available",
     sample_count: 40,
     min_sample_count: 20,
     event_count: 4,
     min_event_count: 1,
+    distribution_summary: {
+      mean_probability: 0.5,
+      standard_deviation: 0.1,
+      observed_range: { lower: 0.01, upper: 0.99 },
+      display_range: {
+        lower: displayLower,
+        upper: displayUpper,
+        standard_deviations: 4,
+        clipped_below: 3,
+        clipped_above: 2,
+      },
+      suggested_threshold: {
+        probability: suggestedThreshold,
+        standard_deviations: 2,
+      },
+    },
     points: [
       {
         probability: 0.2,
@@ -192,6 +237,7 @@ async function createHarness(fetchImpl, {
   nowMs = null,
   setTimeoutImpl = setTimeout,
   clearTimeoutImpl = clearTimeout,
+  storedPreferences = null,
 } = {}) {
   const elements = new Map();
   const evidenceSections = [
@@ -202,6 +248,21 @@ async function createHarness(fetchImpl, {
   const documentListeners = new Map();
   const windowListeners = new Map();
   const observerInstances = [];
+  const storage = new Map();
+  if (storedPreferences !== null) {
+    storage.set(
+      "codex-reset-notification-preferences/1",
+      JSON.stringify(storedPreferences),
+    );
+  }
+  const localStorage = {
+    getItem(key) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key, value) {
+      storage.set(key, String(value));
+    },
+  };
   const body = new FakeElement("body");
   const document = {
     body,
@@ -270,7 +331,7 @@ async function createHarness(fetchImpl, {
     "utf8",
   );
   const source = moduleSource.replace(
-    /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js";\s*/,
+    /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js\?v=subscription-preferences-3";\s*/,
     "",
   );
   assert.notEqual(source, moduleSource, "test harness must bind frontend imports");
@@ -290,10 +351,26 @@ globalThis.__frontendLazyTest = {
   scheduleNotificationCalibration,
   openNotificationDialog,
   closeNotificationDialog,
-  selectNotificationHorizon(hours) {
+  enableWebPush,
+  restoreLocalNotificationPreferences,
+  saveLocalNotificationPreferences,
+  renderNotificationCalibration,
+  calibrationCoordinates,
+  calibrationThresholdForEvent,
+  selectNotificationHorizon(hours, eventType = "input") {
     notificationHorizon.value = String(nearestHorizonIndex(hours));
-    renderNotificationValues();
-    scheduleNotificationCalibration();
+    notificationHorizon.dispatchEvent({ type: eventType });
+  },
+  selectNotificationThreshold(percentage) {
+    notificationThreshold.value = String(percentage);
+    notificationThreshold.dispatchEvent({ type: "input" });
+  },
+  selectCalibrationPoint(clientX) {
+    calibrationHitArea.dispatchEvent({ type: "pointerdown", clientX });
+  },
+  setNotificationRuntime({ registration, config = null }) {
+    notificationRegistration = registration;
+    notificationPublicConfig = config;
   },
   setEvidenceState({ visible, key, cutoff, loaded = null }) {
     evidenceVisible = visible;
@@ -310,6 +387,19 @@ globalThis.__frontendLazyTest = {
       notificationCalibrationHorizon: notificationCalibration?.horizon_hours ?? null,
       notificationCalibrationGeneration,
       notificationDialogOpen: notificationDialog.open,
+      notificationCalibrationRequests: notificationCalibrationRequests.size,
+      notificationThresholdPristine,
+      notificationThresholdValue: notificationThreshold.value,
+      calibrationSummary: calibrationSummary.textContent,
+      calibrationSample: calibrationSample.textContent,
+      calibrationPlotState: calibrationPlot.dataset.state,
+      calibrationRefreshState: calibrationPlot.dataset.refreshState ?? null,
+      calibrationCurvePath: calibrationCurve.getAttribute("d"),
+      calibrationAxisLower: calibrationAxisLower.textContent,
+      calibrationAxisUpper: calibrationAxisUpper.textContent,
+      calibrationMarkerHidden: calibrationMarker.hidden,
+      calibrationCrosshairHidden: calibrationCrosshair.hidden,
+      calibrationTooltipHidden: calibrationTooltip.hidden,
     };
   },
 };`,
@@ -320,11 +410,18 @@ globalThis.__frontendLazyTest = {
     AbortSignal,
     Date: ContextDate,
     IntersectionObserver: FakeIntersectionObserver,
+    Notification: {
+      permission: "granted",
+      async requestPermission() {
+        return "granted";
+      },
+    },
     URL,
     console,
     document,
     fetch: fetchImpl,
     navigator: { onLine: true },
+    localStorage,
     NOTIFICATION_HORIZON_HOURS,
     calibrationAt,
     createNotificationCalibrationCache,
@@ -339,6 +436,7 @@ globalThis.__frontendLazyTest = {
   return {
     app: context.__frontendLazyTest,
     elements,
+    localStorage,
     evidenceSections,
     observerInstances,
     documentListeners,
@@ -349,7 +447,7 @@ globalThis.__frontendLazyTest = {
 test("notification calibration stays dialog-lazy, debounces horizons, and reuses a session cache", async () => {
   const timers = createManualTimers();
   const calibrationCalls = [];
-  const harness = await createHarness(async (url) => {
+  const harness = await createHarness(async (url, options) => {
     if (url === "/api/notification-preferences/baseline") {
       return jsonResponse({
         schema_version: "notification-feed-baseline/1",
@@ -357,8 +455,10 @@ test("notification calibration stays dialog-lazy, debounces horizons, and reuses
       });
     }
     if (url.startsWith("/api/notification-preferences/calibration?")) {
-      const hours = Number(new URL(url, "https://forecast.example").searchParams.get("horizon_hours"));
-      calibrationCalls.push(hours);
+      const requestUrl = new URL(url, "https://forecast.example");
+      assert.equal(requestUrl.searchParams.get("view"), "compact");
+      const hours = Number(requestUrl.searchParams.get("horizon_hours"));
+      calibrationCalls.push({ hours, cache: options.cache });
       return calibrationResponse(hours);
     }
     throw new Error(`unexpected request: ${url}`);
@@ -376,47 +476,157 @@ test("notification calibration stays dialog-lazy, debounces horizons, and reuses
   assert.equal(timers.count(220), 1);
   assert.equal(timers.runNext(220), true);
   await settleAsyncWork();
-  assert.deepEqual(calibrationCalls, [24]);
+  assert.deepEqual(calibrationCalls, [{ hours: 24, cache: "default" }]);
   assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
 
   harness.app.selectNotificationHorizon(28);
   harness.app.selectNotificationHorizon(32);
-  assert.deepEqual(calibrationCalls, [24]);
+  assert.deepEqual(calibrationCalls, [{ hours: 24, cache: "default" }]);
   assert.equal(timers.count(220), 1, "rapid input keeps only the final horizon timer");
   assert.equal(timers.runNext(220), true);
   await settleAsyncWork();
-  assert.deepEqual(calibrationCalls, [24, 32]);
+  assert.deepEqual(calibrationCalls, [
+    { hours: 24, cache: "default" },
+    { hours: 32, cache: "default" },
+  ]);
   assert.equal(harness.app.state().notificationCalibrationHorizon, 32);
 
   harness.app.selectNotificationHorizon(24);
-  assert.deepEqual(calibrationCalls, [24, 32]);
+  assert.deepEqual(calibrationCalls, [
+    { hours: 24, cache: "default" },
+    { hours: 32, cache: "default" },
+  ]);
   assert.equal(timers.count(220), 0, "a cached horizon renders without another wait");
   assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
 
   harness.app.selectNotificationHorizon(28);
   assert.equal(timers.count(220), 1);
+  harness.app.selectNotificationHorizon(28, "change");
+  assert.equal(timers.count(220), 0, "change flushes the final slider position");
+  await settleAsyncWork();
+  assert.deepEqual(calibrationCalls, [
+    { hours: 24, cache: "default" },
+    { hours: 32, cache: "default" },
+    { hours: 28, cache: "default" },
+  ]);
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 28);
+
+  harness.app.selectNotificationHorizon(36);
+  assert.equal(timers.count(220), 1);
   harness.app.closeNotificationDialog();
   assert.equal(timers.count(220), 0, "closing invalidates the pending debounce");
   assert.equal(harness.app.state().notificationDialogOpen, false);
-  assert.deepEqual(calibrationCalls, [24, 32]);
+  assert.deepEqual(calibrationCalls, [
+    { hours: 24, cache: "default" },
+    { hours: 32, cache: "default" },
+    { hours: 28, cache: "default" },
+  ]);
 });
 
-test("an aborted calibration generation cannot overwrite or seed the selected horizon", async () => {
+test("horizon changes keep the previous chart visible until the exact target is ready", async () => {
+  const timers = createManualTimers();
+  const calibrationCalls = [];
+  let releaseHorizon28;
+  const horizon28Response = new Promise((resolve) => {
+    releaseHorizon28 = resolve;
+  });
+  const harness = await createHarness(async (url) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 11,
+      });
+    }
+    const requestUrl = new URL(url, "https://forecast.example");
+    const hours = Number(requestUrl.searchParams.get("horizon_hours"));
+    calibrationCalls.push(hours);
+    return hours === 28 ? horizon28Response : calibrationResponse(hours);
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  harness.app.openNotificationDialog();
+  assert.equal(timers.runNext(220), true);
+  await settleAsyncWork();
+  const previous = harness.app.state();
+  assert.equal(previous.calibrationPlotState, "ready");
+  assert.equal(previous.notificationCalibrationHorizon, 24);
+  assert.equal(previous.notificationThresholdValue, "70");
+
+  harness.app.selectNotificationHorizon(28);
+  let pending = harness.app.state();
+  assert.equal(pending.calibrationPlotState, "ready", "debounce must not show the empty loading state");
+  assert.equal(pending.calibrationRefreshState, "updating");
+  assert.equal(pending.calibrationCurvePath, previous.calibrationCurvePath);
+  assert.equal(pending.calibrationAxisLower, previous.calibrationAxisLower);
+  assert.equal(pending.calibrationAxisUpper, previous.calibrationAxisUpper);
+  assert.match(pending.calibrationSample, /仍显示 1 天（24 小时）.*切换到 28 小时/);
+  assert.equal(pending.calibrationMarkerHidden, true);
+  assert.equal(pending.calibrationCrosshairHidden, true);
+  assert.equal(pending.calibrationTooltipHidden, true);
+
+  const hitArea = harness.elements.get("#calibration-hit-area");
+  hitArea.bounds = { left: 0, right: 100, width: 100, top: 0, bottom: 100, height: 100 };
+  harness.app.selectCalibrationPoint(50);
+  assert.equal(
+    harness.app.state().notificationThresholdValue,
+    "70",
+    "the stale chart cannot change the threshold",
+  );
+
+  assert.equal(timers.runNext(220), true);
+  await Promise.resolve();
+  assert.deepEqual(calibrationCalls, [24, 28]);
+  pending = harness.app.state();
+  assert.equal(pending.calibrationPlotState, "ready", "network wait also preserves the old chart");
+  assert.equal(pending.calibrationCurvePath, previous.calibrationCurvePath);
+
+  releaseHorizon28(calibrationResponse(28, {
+    suggestedThreshold: 0.8,
+    displayLower: 0.05,
+    displayUpper: 0.95,
+  }));
+  await settleAsyncWork();
+  const replaced = harness.app.state();
+  assert.equal(replaced.notificationCalibrationHorizon, 28);
+  assert.equal(replaced.calibrationPlotState, "ready");
+  assert.equal(replaced.calibrationRefreshState, null);
+  assert.notEqual(replaced.calibrationCurvePath, previous.calibrationCurvePath);
+  assert.equal(replaced.calibrationAxisLower, "5%");
+  assert.equal(replaced.calibrationAxisUpper, "95%");
+  assert.equal(replaced.notificationThresholdValue, "80");
+
+  harness.app.selectNotificationHorizon(24);
+  const cached = harness.app.state();
+  assert.equal(cached.notificationCalibrationHorizon, 24);
+  assert.equal(cached.calibrationPlotState, "ready");
+  assert.equal(cached.calibrationRefreshState, null);
+  assert.equal(cached.calibrationCurvePath, previous.calibrationCurvePath);
+  assert.equal(timers.count(220), 0, "an exact cached target swaps synchronously");
+});
+
+test("a stale calibration response seeds only its exact horizon without replacing the view", async () => {
   const timers = createManualTimers();
   const calibrationCalls = [];
   let releaseHorizon24;
   const horizon24Response = new Promise((resolve) => {
     releaseHorizon24 = resolve;
   });
-  const harness = await createHarness(async (url) => {
+  let horizon24Signal;
+  const harness = await createHarness(async (url, options) => {
     if (url === "/api/notification-preferences/baseline") {
       return jsonResponse({
         schema_version: "notification-feed-baseline/1",
         cursor: 8,
       });
     }
-    const hours = Number(new URL(url, "https://forecast.example").searchParams.get("horizon_hours"));
+    const requestUrl = new URL(url, "https://forecast.example");
+    assert.equal(requestUrl.searchParams.get("view"), "compact");
+    const hours = Number(requestUrl.searchParams.get("horizon_hours"));
     calibrationCalls.push(hours);
+    if (hours === 24) horizon24Signal = options.signal;
     return hours === 24 ? horizon24Response : calibrationResponse(hours);
   }, {
     setTimeoutImpl: timers.setTimeout,
@@ -430,6 +640,7 @@ test("an aborted calibration generation cannot overwrite or seed the selected ho
   assert.deepEqual(calibrationCalls, [24]);
 
   harness.app.selectNotificationHorizon(28);
+  assert.equal(horizon24Signal.aborted, false, "switching horizons keeps the request alive");
   timers.runNext(220);
   await settleAsyncWork();
   assert.deepEqual(calibrationCalls, [24, 28]);
@@ -444,11 +655,288 @@ test("an aborted calibration generation cannot overwrite or seed the selected ho
   );
 
   harness.app.selectNotificationHorizon(24);
-  assert.equal(
-    timers.count(220),
-    1,
-    "a response from an aborted generation must not populate the cache",
+  assert.equal(timers.count(220), 0, "the completed exact-horizon response is cached");
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
+  assert.deepEqual(calibrationCalls, [24, 28]);
+});
+
+test("a cold profile warm retries without leaving the dialog in a permanent error", async () => {
+  const timers = createManualTimers();
+  let attempts = 0;
+  const harness = await createHarness(async (url) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 9,
+      });
+    }
+    attempts += 1;
+    if (attempts === 1) {
+      return jsonResponse({
+        error: "notification_calibration_warming",
+        message: "历史可靠度正在后台预热，请几秒后重试。",
+      }, {
+        ok: false,
+        status: 503,
+        headers: { "retry-after": "5" },
+      });
+    }
+    return calibrationResponse(24);
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  harness.app.openNotificationDialog();
+  assert.equal(timers.runNext(220), true);
+  await settleAsyncWork();
+  assert.equal(attempts, 1);
+  assert.equal(timers.count(5_000), 1);
+  assert.match(
+    harness.elements.get("#calibration-state").textContent,
+    /后台预热/,
   );
+
+  assert.equal(timers.runNext(5_000), true);
+  await settleAsyncWork();
+  assert.equal(attempts, 2);
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
+});
+
+test("warm retries and failures preserve an already rendered horizon", async () => {
+  const timers = createManualTimers();
+  let targetAttempts = 0;
+  const harness = await createHarness(async (url) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 12,
+      });
+    }
+    const requestUrl = new URL(url, "https://forecast.example");
+    const hours = Number(requestUrl.searchParams.get("horizon_hours"));
+    if (hours === 24) return calibrationResponse(24);
+    targetAttempts += 1;
+    if (targetAttempts === 1) {
+      return jsonResponse({
+        error: "notification_calibration_warming",
+        message: "历史可靠度正在后台预热，请几秒后重试。",
+      }, {
+        ok: false,
+        status: 503,
+        headers: { "retry-after": "5" },
+      });
+    }
+    return jsonResponse({ message: "profile unavailable" }, {
+      ok: false,
+      status: 500,
+    });
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  harness.app.openNotificationDialog();
+  assert.equal(timers.runNext(220), true);
+  await settleAsyncWork();
+  const previous = harness.app.state();
+
+  harness.app.selectNotificationHorizon(28, "change");
+  await settleAsyncWork();
+  const warming = harness.app.state();
+  assert.equal(targetAttempts, 1);
+  assert.equal(warming.notificationCalibrationHorizon, 24);
+  assert.equal(warming.calibrationPlotState, "ready");
+  assert.equal(warming.calibrationRefreshState, "warming");
+  assert.equal(warming.calibrationCurvePath, previous.calibrationCurvePath);
+  assert.match(warming.calibrationSample, /仍显示 1 天（24 小时）.*后台预热中/);
+  assert.equal(timers.count(5_000), 1);
+
+  assert.equal(timers.runNext(5_000), true);
+  await settleAsyncWork();
+  const failed = harness.app.state();
+  assert.equal(targetAttempts, 2);
+  assert.equal(failed.notificationCalibrationHorizon, 24);
+  assert.equal(failed.calibrationPlotState, "ready");
+  assert.equal(failed.calibrationRefreshState, "error");
+  assert.equal(failed.calibrationCurvePath, previous.calibrationCurvePath);
+  assert.match(failed.calibrationSample, /28 小时.*加载失败.*仍显示 1 天（24 小时）/);
+  assert.match(failed.calibrationSummary, /profile unavailable.*当前图表未被替换/);
+  assert.equal(failed.notificationThresholdValue, "70");
+  assert.equal(failed.calibrationMarkerHidden, true);
+});
+
+test("a profile suggestion initializes only a pristine threshold", async () => {
+  const harness = await createHarness(async () => jsonResponse({}));
+  const first = normalizeCalibrationPayload(
+    await calibrationResponse(24, { suggestedThreshold: 0.7 }).json(),
+    24,
+  );
+  harness.app.renderNotificationCalibration(first);
+  assert.equal(harness.app.state().notificationThresholdValue, "70");
+  assert.equal(harness.app.state().notificationThresholdPristine, true);
+
+  harness.app.selectNotificationThreshold(65);
+  const next = normalizeCalibrationPayload(
+    await calibrationResponse(28, { suggestedThreshold: 0.8 }).json(),
+    28,
+  );
+  harness.app.renderNotificationCalibration(next);
+  assert.equal(harness.app.state().notificationThresholdValue, "65");
+  assert.equal(harness.app.state().notificationThresholdPristine, false);
+});
+
+test("saved thresholds remain authoritative in restored and current page state", async () => {
+  const saved = {
+    topics: ["experimental_probability"],
+    preferences: {
+      schema_version: "notification-preferences/1",
+      horizon_hours: 24,
+      probability_threshold: 0.55,
+    },
+  };
+  const restored = await createHarness(async () => jsonResponse({}), {
+    storedPreferences: saved,
+  });
+  assert.equal(restored.app.restoreLocalNotificationPreferences(), true);
+  restored.app.renderNotificationCalibration(normalizeCalibrationPayload(
+    await calibrationResponse(24, { suggestedThreshold: 0.7 }).json(),
+    24,
+  ));
+  assert.equal(restored.app.state().notificationThresholdValue, "55");
+  assert.equal(restored.app.state().notificationThresholdPristine, false);
+
+  const current = await createHarness(async () => jsonResponse({}));
+  current.app.renderNotificationCalibration(normalizeCalibrationPayload(
+    await calibrationResponse(24, { suggestedThreshold: 0.7 }).json(),
+    24,
+  ));
+  current.app.saveLocalNotificationPreferences();
+  current.app.renderNotificationCalibration(normalizeCalibrationPayload(
+    await calibrationResponse(28, { suggestedThreshold: 0.8 }).json(),
+    28,
+  ));
+  assert.equal(current.app.state().notificationThresholdValue, "70");
+  assert.equal(current.app.state().notificationThresholdPristine, false);
+});
+
+test("an in-flight save freezes one threshold for the server and local mirror", async () => {
+  let releaseSave = null;
+  let submitted = null;
+  const pendingSave = new Promise((resolve) => {
+    releaseSave = resolve;
+  });
+  const harness = await createHarness(async (url, options) => {
+    if (url === "/api/web-push/subscriptions" && options.method === "POST") {
+      submitted = JSON.parse(options.body);
+      return pendingSave;
+    }
+    throw new Error(`unexpected request: ${url}`);
+  });
+  const subscription = {
+    toJSON() {
+      return {
+        endpoint: "https://push.example/subscription",
+        keys: { p256dh: "key", auth: "auth" },
+      };
+    },
+    async unsubscribe() {
+      return true;
+    },
+  };
+  harness.app.setNotificationRuntime({
+    registration: {
+      pushManager: {
+        async getSubscription() {
+          return subscription;
+        },
+      },
+    },
+  });
+  harness.elements.get("#notification-topic-probability").checked = true;
+  harness.elements.get("#notification-horizon").value = String(
+    nearestHorizonIndex(24),
+  );
+  harness.elements.get("#notification-threshold").value = "50";
+
+  const saving = harness.app.enableWebPush();
+  await settleAsyncWork();
+  assert.equal(submitted.preferences.probability_threshold, 0.5);
+  assert.equal(harness.app.state().notificationThresholdPristine, false);
+  assert.equal(harness.elements.get("#notification-horizon").disabled, true);
+  assert.equal(harness.elements.get("#notification-threshold").disabled, true);
+  assert.equal(
+    harness.elements.get("#notification-topic-probability").disabled,
+    true,
+  );
+
+  harness.app.renderNotificationCalibration(normalizeCalibrationPayload(
+    await calibrationResponse(24, { suggestedThreshold: 0.2 }).json(),
+    24,
+  ));
+  assert.equal(
+    harness.app.state().notificationThresholdValue,
+    "50",
+    "a late profile must not rewrite the submitted threshold",
+  );
+
+  releaseSave(jsonResponse({ ok: true }));
+  await saving;
+  const local = JSON.parse(harness.localStorage.getItem(
+    "codex-reset-notification-preferences/1",
+  ));
+  assert.equal(local.preferences.probability_threshold, 0.5);
+  assert.deepEqual(local.preferences, submitted.preferences);
+  assert.equal(harness.elements.get("#notification-threshold").disabled, false);
+});
+
+test("a saved threshold outside the cropped chart is reported without edge snapping", async () => {
+  const harness = await createHarness(async () => jsonResponse({}), {
+    storedPreferences: {
+      topics: ["experimental_probability"],
+      preferences: {
+        schema_version: "notification-preferences/1",
+        horizon_hours: 24,
+        probability_threshold: 0.5,
+      },
+    },
+  });
+  harness.app.restoreLocalNotificationPreferences();
+  harness.app.renderNotificationCalibration({
+    schema_version: "notification-threshold-calibration-compact/1",
+    horizon_hours: 24,
+    status: "available",
+    sample_count: 100,
+    min_sample_count: 20,
+    event_count: 10,
+    min_event_count: 1,
+    distribution_summary: {
+      mean_probability: 0.2,
+      standard_deviation: 0.025,
+      observed_range: { lower: 0.01, upper: 0.8 },
+      display_range: {
+        lower: 0.1,
+        upper: 0.3,
+        standard_deviations: 4,
+        clipped_below: 1,
+        clipped_above: 1,
+      },
+      suggested_threshold: { probability: 0.25, standard_deviations: 2 },
+    },
+    points: [
+      { probability: 0.1, density: 0.2 },
+      { probability: 0.2, density: 1 },
+      { probability: 0.3, density: 0.2 },
+    ],
+  });
+
+  const state = harness.app.state();
+  assert.equal(state.notificationThresholdValue, "50");
+  assert.equal(state.calibrationMarkerHidden, true);
+  assert.equal(state.calibrationCrosshairHidden, true);
+  assert.match(state.calibrationSummary, /50%.*10%–30%.*仍按 50% 触发/);
 });
 
 test("forecast snapshot loader validates same-origin refs, singleflights, and replaces cache atomically", async () => {

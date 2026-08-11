@@ -5,7 +5,7 @@ import {
   formatNotificationHorizon,
   nearestHorizonIndex,
   normalizeCalibrationPayload,
-} from "./notification-preferences.js";
+} from "./notification-preferences.js?v=subscription-preferences-3";
 
 const percent = (value, digits = 0) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "—";
@@ -1617,6 +1617,9 @@ const calibrationHitArea = document.querySelector("#calibration-hit-area");
 const calibrationTooltip = document.querySelector("#calibration-tooltip");
 const calibrationState = document.querySelector("#calibration-state");
 const calibrationSample = document.querySelector("#calibration-sample");
+const calibrationAxisLower = document.querySelector("#calibration-axis-lower");
+const calibrationAxisUpper = document.querySelector("#calibration-axis-upper");
+const calibrationRangeNote = document.querySelector("#calibration-range-note");
 const calibrationSummary = document.querySelector("#calibration-summary");
 const personalizedFeedUrl = document.querySelector("#personalized-feed-url");
 const personalizedFeedCopy = document.querySelector("#personalized-feed-copy");
@@ -1630,9 +1633,11 @@ let notificationRegistration = null;
 let notificationPublicConfig = null;
 let notificationCalibration = null;
 const notificationCalibrationCache = createNotificationCalibrationCache();
-let notificationCalibrationRequest = null;
+const notificationCalibrationRequests = new Map();
 let notificationCalibrationTimer = null;
 let notificationCalibrationGeneration = 0;
+let notificationThresholdPristine = true;
+let notificationThresholdHasProfileSuggestion = false;
 let notificationDialogTrigger = null;
 let notificationFeedBaselineCursor = null;
 let notificationFeedBaselineRequest = null;
@@ -1675,11 +1680,15 @@ function selectedNotificationPreferences() {
   };
 }
 
-function saveLocalNotificationPreferences() {
+function saveLocalNotificationPreferences({
+  topics = selectedNotificationTopics(),
+  preferences = selectedNotificationPreferences(),
+} = {}) {
+  notificationThresholdPristine = false;
   try {
     localStorage.setItem(NOTIFICATION_PREFERENCES_STORAGE_KEY, JSON.stringify({
-      topics: selectedNotificationTopics(),
-      preferences: selectedNotificationPreferences(),
+      topics,
+      preferences,
     }));
   } catch {
     // Local persistence is a convenience; the server remains authoritative.
@@ -1710,8 +1719,10 @@ function restoreLocalNotificationPreferences() {
       const threshold = Number(preferences.probability_threshold);
       if (Number.isFinite(threshold) && threshold >= 0.01 && threshold <= 0.99) {
         notificationThreshold.value = String(Math.round(threshold * 100));
+        notificationThresholdPristine = false;
+        return true;
       }
-      return true;
+      return false;
     }
   } catch {
     // Ignore unavailable or malformed browser storage.
@@ -1728,6 +1739,8 @@ function applyPublicNotificationDefaults(config) {
     notificationHorizon.value = String(nearestHorizonIndex(defaultHorizon));
   }
   if (
+    notificationThresholdPristine &&
+    !notificationThresholdHasProfileSuggestion &&
     Number.isFinite(defaultThreshold) &&
     defaultThreshold >= 0.01 &&
     defaultThreshold <= 0.99
@@ -1845,31 +1858,133 @@ function clearCalibrationGraphic() {
   calibrationTooltip.hidden = true;
 }
 
+function calibrationDisplayRange(calibration = notificationCalibration) {
+  const lower = calibration?.distribution_summary?.display_range?.lower;
+  const upper = calibration?.distribution_summary?.display_range?.upper;
+  return Number.isFinite(lower) &&
+      Number.isFinite(upper) &&
+      lower >= 0 &&
+      upper <= 1 &&
+      lower < upper
+    ? { lower, upper }
+    : { lower: 0, upper: 1 };
+}
+
+function calibrationAxisPercent(value) {
+  const percentage = value * 100;
+  return `${Math.abs(percentage - Math.round(percentage)) < 1e-9
+    ? Math.round(percentage)
+    : percentage.toFixed(1)}%`;
+}
+
+function renderCalibrationRange(calibration = null) {
+  const profile = calibration?.distribution_summary;
+  const range = calibrationDisplayRange(calibration);
+  calibrationAxisLower.textContent = calibrationAxisPercent(range.lower);
+  calibrationAxisUpper.textContent = calibrationAxisPercent(range.upper);
+  if (!Number.isFinite(profile?.mean_probability)) {
+    calibrationRangeNote.textContent = calibration
+      ? "当前时间窗没有可用的分布档案，图表暂按完整 0%–100% 范围显示。"
+      : "加载分布档案后，图表会保留均值 ±4σ，并从画面中裁掉区间外的离群窗口。";
+    return;
+  }
+  const clippedBelow = profile.display_range.clipped_below;
+  const clippedAbove = profile.display_range.clipped_above;
+  const clippedTotal = clippedBelow + clippedAbove;
+  const rangeText = `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)}`;
+  calibrationRangeNote.textContent = clippedTotal > 0
+    ? `显示均值 ±4σ（${rangeText}）；已从图像裁掉 ${clippedTotal} 个区间外离群窗口（低端 ${clippedBelow} / 高端 ${clippedAbove}）。`
+    : `显示均值 ±4σ（${rangeText}）；当前没有区间外离群窗口需要裁掉。`;
+}
+
+function clearCalibrationRefreshState() {
+  delete calibrationPlot.dataset.refreshState;
+  calibrationPlot.removeAttribute("aria-busy");
+}
+
+function setCalibrationRefreshState(targetHours, phase = "updating", detail = "") {
+  if (!notificationCalibration || calibrationPlot.dataset.state !== "ready") {
+    return false;
+  }
+  const displayedHours = notificationCalibration.horizon_hours;
+  calibrationPlot.dataset.refreshState = phase;
+  if (phase === "error") calibrationPlot.removeAttribute("aria-busy");
+  else calibrationPlot.setAttribute("aria-busy", "true");
+  calibrationCrosshair.hidden = true;
+  calibrationMarker.hidden = true;
+  calibrationTooltip.hidden = true;
+
+  const displayed = formatNotificationHorizon(displayedHours);
+  const target = formatNotificationHorizon(targetHours);
+  if (phase === "warming") {
+    calibrationSample.textContent = `仍显示 ${displayed} · ${target} 后台预热中`;
+    calibrationSummary.textContent =
+      "目标时间窗的历史档案仍在后台生成；完成前保留当前图表。";
+  } else if (phase === "error") {
+    calibrationSample.textContent = `${target} 加载失败 · 仍显示 ${displayed}`;
+    calibrationSummary.textContent =
+      `目标时间窗暂时加载失败${detail ? `：${detail}` : ""}；当前图表未被替换。`;
+  } else if (displayedHours === targetHours) {
+    calibrationSample.textContent = `仍显示 ${displayed} · 正在刷新`;
+    calibrationSummary.textContent = "正在刷新当前时间窗；旧图会保留到新数据就绪。";
+  } else {
+    calibrationSample.textContent = `仍显示 ${displayed} · 正在切换到 ${target}`;
+    calibrationSummary.textContent =
+      "正在读取目标时间窗；旧图仅作暂时参考，新数据就绪后会一次替换。";
+  }
+  return true;
+}
+
 function setCalibrationState(state, message, sampleText = "等待历史数据") {
+  clearCalibrationRefreshState();
   calibrationPlot.dataset.state = state;
   calibrationState.textContent = message;
   calibrationSample.textContent = sampleText;
-  if (state !== "ready") clearCalibrationGraphic();
+  if (state !== "ready") {
+    clearCalibrationGraphic();
+    renderCalibrationRange();
+  }
 }
 
-function calibrationCoordinates(points) {
+function calibrationCoordinates(calibration) {
+  const range = calibrationDisplayRange(calibration);
+  const points = calibration.points.filter((point) =>
+    point.probability >= range.lower - 1e-12 &&
+    point.probability <= range.upper + 1e-12
+  );
   const maximumDensity = Math.max(...points.map((point) => point.density), 0);
   if (!(maximumDensity > 0)) return [];
   return points.map((point) => ({
     ...point,
-    x: 20 + point.probability * 560,
+    x: 20 + ((point.probability - range.lower) /
+      (range.upper - range.lower)) * 560,
     y: 165 - (point.density / maximumDensity) * 132,
   }));
 }
 
+function applySuggestedNotificationThreshold(calibration) {
+  const suggested = calibration?.distribution_summary
+    ?.suggested_threshold?.probability;
+  if (!notificationThresholdPristine || !Number.isFinite(suggested)) {
+    return false;
+  }
+  const percentage = Math.min(99, Math.max(1, Math.round(suggested * 100)));
+  notificationThreshold.value = String(percentage);
+  notificationThresholdHasProfileSuggestion = true;
+  renderNotificationValues();
+  return true;
+}
+
 function renderCalibrationGraphic(calibration) {
-  const coordinates = calibrationCoordinates(calibration.points);
+  renderCalibrationRange(calibration);
+  const coordinates = calibrationCoordinates(calibration);
   if (coordinates.length < 2) {
     setCalibrationState(
       "insufficient",
       "当前时间窗的历史样本不足，无法判断门槛可靠度。",
       `${calibration.sample_count} 个窗口 · ${calibration.event_count} 次重置`,
     );
+    renderCalibrationRange(calibration);
     calibrationSummary.textContent = "样本不足，当前不能判断哪个概率门槛更可靠。";
     return;
   }
@@ -1931,18 +2046,32 @@ function calibrationCopy(point, threshold) {
 }
 
 function showCalibrationPoint(threshold) {
-  if (!notificationCalibration || calibrationPlot.dataset.state !== "ready") return;
-  const point = calibrationAt(notificationCalibration.points, threshold);
+  if (
+    !notificationCalibration ||
+    calibrationPlot.dataset.state !== "ready" ||
+    calibrationPlot.dataset.refreshState ||
+    notificationCalibration.horizon_hours !== horizonHours()
+  ) return;
+  const selectedThreshold = Math.min(1, Math.max(0, Number(threshold) || 0));
+  const range = calibrationDisplayRange(notificationCalibration);
+  if (
+    selectedThreshold < range.lower - 1e-12 ||
+    selectedThreshold > range.upper + 1e-12
+  ) {
+    calibrationCrosshair.hidden = true;
+    calibrationMarker.hidden = true;
+    calibrationTooltip.hidden = true;
+    calibrationSummary.textContent =
+      `当前门槛 ${calibrationAxisPercent(selectedThreshold)} 位于图表显示区间 ` +
+      `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)} 之外；` +
+      `通知仍按 ${calibrationAxisPercent(selectedThreshold)} 触发。`;
+    return;
+  }
+  const coordinates = calibrationCoordinates(notificationCalibration);
+  const point = calibrationAt(coordinates, selectedThreshold);
   if (!point) return;
-  const coordinates = calibrationCoordinates(notificationCalibration.points);
-  const maximumDensity = Math.max(
-    ...notificationCalibration.points.map((item) => item.density),
-    0,
-  );
-  const x = 20 + point.probability * 560;
-  const y = maximumDensity > 0
-    ? 165 - ((point.density ?? 0) / maximumDensity) * 132
-    : coordinates.at(-1)?.y ?? 165;
+  const x = point.x;
+  const y = point.y;
   calibrationCrosshair.setAttribute("x1", x.toFixed(2));
   calibrationCrosshair.setAttribute("x2", x.toFixed(2));
   calibrationCrosshair.hidden = false;
@@ -1965,19 +2094,35 @@ function showCalibrationPoint(threshold) {
 }
 
 function calibrationThresholdForEvent(event) {
+  if (
+    !notificationCalibration ||
+    calibrationPlot.dataset.state !== "ready" ||
+    calibrationPlot.dataset.refreshState ||
+    notificationCalibration.horizon_hours !== horizonHours()
+  ) {
+    return null;
+  }
   const bounds = calibrationHitArea.getBoundingClientRect();
   if (!(bounds.width > 0)) return null;
-  return Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+  const ratio = Math.min(
+    1,
+    Math.max(0, (event.clientX - bounds.left) / bounds.width),
+  );
+  const range = calibrationDisplayRange(notificationCalibration);
+  return range.lower + ratio * (range.upper - range.lower);
 }
 
 function renderNotificationCalibration(calibration) {
+  clearCalibrationRefreshState();
   notificationCalibration = calibration;
+  applySuggestedNotificationThreshold(calibration);
   if (calibration.status === "insufficient") {
     setCalibrationState(
       "insufficient",
       "当前时间窗的历史样本不足，无法判断哪个概率门槛更可靠。",
       `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`,
     );
+    renderCalibrationRange(calibration);
     calibrationSummary.textContent = "样本不足，当前不可判断历史命中率。";
     return;
   }
@@ -1990,76 +2135,126 @@ function notificationCalibrationMatchesSelection(hours, generation) {
     horizonHours() === hours;
 }
 
-function notificationCalibrationIsCurrent(hours, generation, controller = null) {
-  return notificationCalibrationMatchesSelection(hours, generation) &&
-    !(controller?.signal.aborted);
+function requestNotificationCalibration(hours) {
+  const inFlight = notificationCalibrationRequests.get(hours);
+  if (inFlight) return inFlight.promise;
+
+  const controller = new AbortController();
+  const request = { controller, promise: null };
+  notificationCalibrationRequests.set(hours, request);
+  request.promise = (async () => {
+    let timedOut = false;
+    try {
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, 15_000);
+      const response = await fetch(
+        `/api/notification-preferences/calibration?horizon_hours=${hours}&view=compact`,
+        {
+          cache: "default",
+          signal: controller.signal,
+        },
+      ).finally(() => clearTimeout(timeout));
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const error = new Error(
+          payload?.message ?? payload?.error ?? `HTTP ${response.status}`,
+        );
+        error.code = payload?.error ?? null;
+        const retryAfterSeconds = Number(
+          response.headers?.get?.("retry-after"),
+        );
+        if (
+          response.status === 503 &&
+          Number.isFinite(retryAfterSeconds) &&
+          retryAfterSeconds > 0
+        ) {
+          error.retryAfterMs = Math.min(
+            10_000,
+            Math.max(1_000, retryAfterSeconds * 1_000),
+          );
+        }
+        throw error;
+      }
+      const calibration = normalizeCalibrationPayload(payload, hours);
+      // Cache by the response's exact horizon even when the user has moved on
+      // or closed the dialog. A later visit can then render immediately.
+      notificationCalibrationCache.set(hours, calibration);
+      return calibration;
+    } catch (error) {
+      if (timedOut) throw new Error("请求超时");
+      throw error;
+    } finally {
+      if (notificationCalibrationRequests.get(hours) === request) {
+        notificationCalibrationRequests.delete(hours);
+      }
+    }
+  })();
+  return request.promise;
 }
 
 async function loadNotificationCalibration(
   hours = horizonHours(),
   generation = notificationCalibrationGeneration,
+  { warmRetry = 0 } = {},
 ) {
-  if (!notificationCalibrationIsCurrent(hours, generation)) return null;
+  if (!notificationCalibrationMatchesSelection(hours, generation)) return null;
   const cached = notificationCalibrationCache.get(hours);
   if (cached) {
     renderNotificationCalibration(cached);
     return cached;
   }
-  notificationCalibrationRequest?.controller.abort();
-  const controller = new AbortController();
-  const request = { controller, generation, horizon_hours: hours };
-  notificationCalibrationRequest = request;
-  notificationCalibration = null;
-  setCalibrationState("loading", "正在读取该时间窗的历史预测与重置记录…");
-  calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
-  let timedOut = false;
+  if (!setCalibrationRefreshState(hours)) {
+    notificationCalibration = null;
+    setCalibrationState("loading", "正在读取该时间窗的历史预测与重置记录…");
+    calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+  }
   try {
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, 15_000);
-    const response = await fetch(
-      `/api/notification-preferences/calibration?horizon_hours=${hours}`,
-      {
-        cache: "no-store",
-        signal: controller.signal,
-      },
-    ).finally(() => clearTimeout(timeout));
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(payload?.message ?? payload?.error ?? `HTTP ${response.status}`);
-    }
-    const calibration = normalizeCalibrationPayload(payload, hours);
-    if (!notificationCalibrationIsCurrent(hours, generation, controller)) return null;
-    notificationCalibrationCache.set(hours, calibration);
+    const calibration = await requestNotificationCalibration(hours);
+    if (!notificationCalibrationMatchesSelection(hours, generation)) return null;
     renderNotificationCalibration(calibration);
     return calibration;
   } catch (error) {
+    if (!notificationCalibrationMatchesSelection(hours, generation)) return null;
     if (
-      !notificationCalibrationMatchesSelection(hours, generation) ||
-      (controller.signal.aborted && !timedOut)
-    ) return null;
-    const reason = timedOut ? "请求超时" : error.message;
-    setCalibrationState(
-      "error",
-      `历史可靠度暂时加载失败：${reason}`,
-      "加载失败",
-    );
-    calibrationSummary.textContent = "无法读取历史记录，仍可手动设置通知门槛。";
-    return null;
-  } finally {
-    if (notificationCalibrationRequest === request) {
-      notificationCalibrationRequest = null;
+      notificationDialog.open &&
+      Number.isFinite(error.retryAfterMs) &&
+      warmRetry < 24
+    ) {
+      if (!setCalibrationRefreshState(hours, "warming")) {
+        setCalibrationState(
+          "loading",
+          "历史可靠度正在后台预热，完成后会自动显示…",
+          "后台预热中",
+        );
+        calibrationSummary.textContent = "首次冷启动不会阻塞页面；正在等待后台历史档案。";
+      }
+      notificationCalibrationTimer = setTimeout(() => {
+        notificationCalibrationTimer = null;
+        if (!notificationCalibrationMatchesSelection(hours, generation)) return;
+        void loadNotificationCalibration(hours, generation, {
+          warmRetry: warmRetry + 1,
+        });
+      }, error.retryAfterMs);
+      return null;
     }
+    if (!setCalibrationRefreshState(hours, "error", error.message)) {
+      setCalibrationState(
+        "error",
+        `历史可靠度暂时加载失败：${error.message}`,
+        "加载失败",
+      );
+      calibrationSummary.textContent = "无法读取历史记录，仍可手动设置通知门槛。";
+    }
+    return null;
   }
 }
 
-function scheduleNotificationCalibration() {
+function scheduleNotificationCalibration({ immediate = false } = {}) {
   if (!notificationDialog.open) return;
   clearTimeout(notificationCalibrationTimer);
   notificationCalibrationTimer = null;
-  notificationCalibrationRequest?.controller.abort();
-  notificationCalibrationRequest = null;
   const hours = horizonHours();
   const generation = ++notificationCalibrationGeneration;
   const cached = notificationCalibrationCache.get(hours);
@@ -2067,13 +2262,24 @@ function scheduleNotificationCalibration() {
     renderNotificationCalibration(cached);
     return;
   }
-  notificationCalibration = null;
-  setCalibrationState("loading", "选择停稳后加载该时间窗的历史记录…");
-  calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+  if (!setCalibrationRefreshState(hours)) {
+    notificationCalibration = null;
+    setCalibrationState(
+      "loading",
+      immediate
+        ? "正在读取该时间窗的历史预测与重置记录…"
+        : "选择停稳后加载该时间窗的历史记录…",
+    );
+    calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+  }
+  if (immediate) {
+    void loadNotificationCalibration(hours, generation);
+    return;
+  }
   notificationCalibrationTimer = setTimeout(
     () => {
       notificationCalibrationTimer = null;
-      if (!notificationCalibrationIsCurrent(hours, generation)) return;
+      if (!notificationCalibrationMatchesSelection(hours, generation)) return;
       void loadNotificationCalibration(hours, generation);
     },
     220,
@@ -2106,6 +2312,16 @@ function setNotificationBusy(busy) {
   notificationEnable.disabled = busy;
   notificationDisable.disabled = busy;
   notificationCancel.disabled = busy;
+  notificationHorizon.disabled = busy;
+  notificationThreshold.disabled = busy;
+  for (const selector of [
+    "#notification-topic-authority",
+    "#notification-topic-outcome",
+    "#notification-topic-probability",
+  ]) {
+    const input = document.querySelector(selector);
+    if (input) input.disabled = busy;
+  }
 }
 
 async function refreshNotificationControls(message = null) {
@@ -2141,6 +2357,10 @@ async function enableWebPush() {
     }
     const serialized = subscription.toJSON();
     const preferences = selectedNotificationPreferences();
+    // Freeze the user's submitted choice before yielding to the network. A
+    // late calibration response must not rewrite either the request or the
+    // local mirror while this save is in flight.
+    notificationThresholdPristine = false;
     try {
       await webPushJson("/api/web-push/subscriptions", {
         method: "POST",
@@ -2150,7 +2370,7 @@ async function enableWebPush() {
       if (created) await subscription.unsubscribe().catch(() => false);
       throw error;
     }
-    saveLocalNotificationPreferences();
+    saveLocalNotificationPreferences({ topics, preferences });
     await refreshNotificationControls(
       "通知设置已保存；个性化规则会从现在开始应用。",
     );
@@ -2233,8 +2453,6 @@ function closeNotificationDialog() {
   clearTimeout(notificationCalibrationTimer);
   notificationCalibrationTimer = null;
   notificationCalibrationGeneration += 1;
-  notificationCalibrationRequest?.controller.abort();
-  notificationCalibrationRequest = null;
   notificationFeedBaselineRequest?.abort();
   notificationDialogTrigger?.focus?.();
   notificationDialogTrigger = null;
@@ -2258,7 +2476,12 @@ notificationHorizon?.addEventListener("input", () => {
   renderNotificationValues();
   scheduleNotificationCalibration();
 });
+notificationHorizon?.addEventListener("change", () => {
+  renderNotificationValues();
+  scheduleNotificationCalibration({ immediate: true });
+});
 notificationThreshold?.addEventListener("input", () => {
+  notificationThresholdPristine = false;
   renderNotificationValues();
   showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
 });
@@ -2272,8 +2495,12 @@ calibrationHitArea?.addEventListener("pointerleave", () => {
 calibrationHitArea?.addEventListener("pointerdown", (event) => {
   const selected = calibrationThresholdForEvent(event);
   if (selected === null) return;
-  const point = calibrationAt(notificationCalibration?.points ?? [], selected);
+  const point = calibrationAt(
+    calibrationCoordinates(notificationCalibration),
+    selected,
+  );
   const threshold = Math.min(0.99, Math.max(0.01, point?.probability ?? selected));
+  notificationThresholdPristine = false;
   notificationThreshold.value = String(Math.round(threshold * 100));
   renderNotificationValues();
   showCalibrationPoint(threshold);

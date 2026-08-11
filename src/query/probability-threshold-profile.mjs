@@ -35,6 +35,11 @@ export const NOTIFICATION_THRESHOLD_CALIBRATION_VERSION =
 const HOUR_MS = 3_600_000;
 const DEFAULT_BIN_COUNT = 20;
 const DEFAULT_THRESHOLD_STEP = 0.01;
+const PROBABILITY_GRID_SCALE = 100;
+const PROBABILITY_GRID_EPSILON = 1e-10;
+const DISPLAY_STANDARD_DEVIATIONS = 4;
+const SUGGESTED_THRESHOLD_STANDARD_DEVIATIONS = 2;
+const MINIMUM_DISPLAY_RANGE = 0.05;
 export const PROBABILITY_PROFILE_POINT_MINIMUM_WINDOWS = 20;
 
 function finiteTimestamp(value) {
@@ -284,6 +289,130 @@ function distributionFor(rows, binCount) {
   };
 }
 
+function floorProbabilityGridIndex(value) {
+  return Math.floor(
+    value * PROBABILITY_GRID_SCALE + PROBABILITY_GRID_EPSILON,
+  );
+}
+
+function ceilProbabilityGridIndex(value) {
+  return Math.ceil(
+    value * PROBABILITY_GRID_SCALE - PROBABILITY_GRID_EPSILON,
+  );
+}
+
+function distributionSummaryFor(rows) {
+  if (rows.length === 0) {
+    return {
+      mean_probability: null,
+      standard_deviation: null,
+      observed_range: {
+        lower: null,
+        upper: null,
+      },
+      display_range: {
+        lower: null,
+        upper: null,
+        standard_deviations: DISPLAY_STANDARD_DEVIATIONS,
+        clipped_below: 0,
+        clipped_above: 0,
+      },
+      suggested_threshold: {
+        probability: null,
+        standard_deviations: SUGGESTED_THRESHOLD_STANDARD_DEVIATIONS,
+      },
+    };
+  }
+
+  // Welford's algorithm keeps the calculation on the original eligible-row
+  // probabilities and avoids introducing histogram or grid-rounding error.
+  let mean = 0;
+  let squaredDifferenceSum = 0;
+  let observedLower = Infinity;
+  let observedUpper = -Infinity;
+  rows.forEach((row, index) => {
+    const probability = row.probability;
+    const count = index + 1;
+    const difference = probability - mean;
+    mean += difference / count;
+    squaredDifferenceSum += difference * (probability - mean);
+    observedLower = Math.min(observedLower, probability);
+    observedUpper = Math.max(observedUpper, probability);
+  });
+  const standardDeviation = Math.sqrt(
+    Math.max(0, squaredDifferenceSum / rows.length),
+  );
+
+  let displayLowerIndex = floorProbabilityGridIndex(Math.max(
+    0,
+    mean - DISPLAY_STANDARD_DEVIATIONS * standardDeviation,
+  ));
+  let displayUpperIndex = ceilProbabilityGridIndex(Math.min(
+    1,
+    mean + DISPLAY_STANDARD_DEVIATIONS * standardDeviation,
+  ));
+
+  const minimumDisplayGridSteps =
+    MINIMUM_DISPLAY_RANGE * PROBABILITY_GRID_SCALE;
+  if (displayUpperIndex - displayLowerIndex < minimumDisplayGridSteps) {
+    const missingSteps = minimumDisplayGridSteps -
+      (displayUpperIndex - displayLowerIndex);
+    displayLowerIndex = Math.max(
+      0,
+      Math.floor(displayLowerIndex - missingSteps / 2),
+    );
+    displayUpperIndex = Math.min(
+      PROBABILITY_GRID_SCALE,
+      Math.ceil(displayUpperIndex + missingSteps / 2),
+    );
+  }
+  // Symmetric expansion can still be truncated by the probability boundary.
+  // Shift the remaining width to the side that has room while staying on-grid.
+  if (displayUpperIndex - displayLowerIndex < minimumDisplayGridSteps) {
+    if (displayLowerIndex === 0) {
+      displayUpperIndex = minimumDisplayGridSteps;
+    } else {
+      displayLowerIndex = PROBABILITY_GRID_SCALE - minimumDisplayGridSteps;
+    }
+  }
+  const displayLower = displayLowerIndex / PROBABILITY_GRID_SCALE;
+  const displayUpper = displayUpperIndex / PROBABILITY_GRID_SCALE;
+
+  const suggestedProbability = Math.min(
+    0.99,
+    Math.max(
+      0.01,
+      ceilProbabilityGridIndex(
+        mean + SUGGESTED_THRESHOLD_STANDARD_DEVIATIONS * standardDeviation,
+      ) / PROBABILITY_GRID_SCALE,
+    ),
+  );
+
+  return {
+    mean_probability: mean,
+    standard_deviation: standardDeviation,
+    observed_range: {
+      lower: observedLower,
+      upper: observedUpper,
+    },
+    display_range: {
+      lower: displayLower,
+      upper: displayUpper,
+      standard_deviations: DISPLAY_STANDARD_DEVIATIONS,
+      clipped_below: rows.filter((row) =>
+        row.probability < displayLower
+      ).length,
+      clipped_above: rows.filter((row) =>
+        row.probability > displayUpper
+      ).length,
+    },
+    suggested_threshold: {
+      probability: suggestedProbability,
+      standard_deviations: SUGGESTED_THRESHOLD_STANDARD_DEVIATIONS,
+    },
+  };
+}
+
 function quantile(sorted, probability) {
   if (sorted.length === 0) return null;
   const index = (sorted.length - 1) * probability;
@@ -409,6 +538,7 @@ function emptyProfile({
   binCount = DEFAULT_BIN_COUNT,
 }) {
   const distribution = distributionFor([], binCount);
+  const distributionSummary = distributionSummaryFor([]);
   return {
     schema_version: NOTIFICATION_THRESHOLD_CALIBRATION_VERSION,
     detail_schema_version: PROBABILITY_THRESHOLD_PROFILE_VERSION,
@@ -433,6 +563,7 @@ function emptyProfile({
       passed: false,
     },
     exclusions: {},
+    distribution_summary: distributionSummary,
     distribution,
     threshold_curve: [],
     lineage,
@@ -458,6 +589,10 @@ function profileSemantics() {
       "compact transport alias for historical_hit_rate_above; it is not extraction confidence, epistemic confidence, or forecast probability",
     density:
       "boundary-reflected Gaussian kernel density over eligible as-issued probabilities",
+    display_range:
+      "visualization-only range over eligible as-issued probabilities; clipped rows remain included in all statistics, samples, and threshold calculations",
+    suggested_threshold:
+      "mean plus two population standard deviations, rounded up to a real one-percent threshold point and bounded to 0.01 through 0.99",
     threshold_comparison: "probability strictly greater than threshold",
     excluded_metrics: [
       "extraction_confidence",
@@ -551,6 +686,7 @@ export function buildProbabilityThresholdProfile({
   };
   gate.passed = gate.windows_passed && gate.events_passed;
   const distribution = distributionFor(rows, binCount);
+  const distributionSummary = distributionSummaryFor(rows);
   const curve = thresholdCurve(rows, scorableOutcomeKeys, thresholdStep);
   return {
     schema_version: NOTIFICATION_THRESHOLD_CALIBRATION_VERSION,
@@ -582,6 +718,7 @@ export function buildProbabilityThresholdProfile({
       last_window_start: rows.at(-1)?.window_start ?? null,
     },
     exclusions,
+    distribution_summary: distributionSummary,
     distribution,
     threshold_curve: curve,
     lineage: {

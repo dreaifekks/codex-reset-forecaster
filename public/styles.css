@@ -469,11 +469,18 @@ nav a.active {
 }
 
 .calibration-heading p,
+.calibration-range-note,
 .calibration-summary {
   margin: 5px 0 0;
   color: #8d8d97;
   font-size: 9px;
   line-height: 1.5;
+}
+
+.calibration-range-note {
+  min-height: 14px;
+  color: #a1a1aa;
+  font-family: var(--font-mono);
 }
 
 .calibration-sample {
@@ -533,6 +540,30 @@ nav a.active {
   fill: transparent;
   cursor: crosshair;
   touch-action: none;
+}
+
+.calibration-plot[data-refresh-state] .calibration-area,
+.calibration-plot[data-refresh-state] .calibration-curve {
+  opacity: 0.58;
+}
+
+.calibration-plot[data-refresh-state="error"] .calibration-area,
+.calibration-plot[data-refresh-state="error"] .calibration-curve {
+  opacity: 0.74;
+}
+
+.calibration-plot[data-refresh-state] .calibration-hit-area {
+  cursor: progress;
+  pointer-events: none;
+}
+
+.calibration-plot[data-refresh-state="error"] .calibration-hit-area {
+  cursor: not-allowed;
+}
+
+.calibration-plot[data-refresh-state="updating"] + .calibration-range-note,
+.calibration-plot[data-refresh-state="warming"] + .calibration-range-note {
+  color: #d4d4d8;
 }
 
 .calibration-state {

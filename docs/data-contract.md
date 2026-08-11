@@ -207,7 +207,18 @@ The threshold profile is computed only from as-issued current-release prediction
 eligible outcomes, and complete label coverage; its historical hit rate is not
 model confidence. Threshold selection is strict (`probability > threshold`), and
 the compact point estimate is withheld below 20 non-overlapping windows while its
-Wilson interval and sample gate remain explicit.
+Wilson interval and sample gate remain explicit. `distribution_summary` is derived
+display metadata over those same eligible rows: it uses the population standard
+deviation, limits the drawing to a four-standard-deviation range, counts rather than
+discards visually clipped rows, and exposes a two-standard-deviation browser
+suggestion. None of those values changes a stored preference, forecast, outcome, or
+label.
+
+The default calibration endpoint preserves the complete
+`notification-threshold-calibration/1` profile. Its explicit `view=compact`
+transport is `notification-threshold-calibration-compact/1` and carries the source
+contract in `profile_schema_version`; transport projection is not a canonical data
+revision.
 
 ## Non-canonical operations state
 

@@ -11,14 +11,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
-    <link rel="stylesheet" href="/styles.css?v=subscription-preferences-1">
+    <link rel="stylesheet" href="/styles.css?v=subscription-preferences-3">
     <script
       defer
       src="https://vibecafe.ai/telemetry/v1.js"
       data-vc-product-id="cms37qho500000bl2g4vpcf9b"
       data-vc-auth-key="vc_web__qNoqm01G9r2-8F-e7i7NC7xD4WmbnNBhsvDYfg59mk"
     ></script>
-    <script src="/app.js?v=subscription-preferences-1" type="module"></script>
+    <script src="/app.js?v=subscription-preferences-3" type="module"></script>
   </head>
   <body>
     <header class="site-header">
@@ -279,13 +279,13 @@
             <div class="probability-range-labels" aria-hidden="true">
               <span>1%</span><span>25%</span><span>50%</span><span>75%</span><span>99%</span>
             </div>
-            <p class="notification-control-help" id="notification-threshold-help">只有所选时间窗内的累计概率超过此门槛，才发送实验概率提醒。</p>
+            <p class="notification-control-help" id="notification-threshold-help">只有所选时间窗内的累计概率超过此门槛，才发送实验概率提醒。新设置会先采用分布均值 +2σ 的建议值；手动调整后不再覆盖。</p>
 
             <section class="calibration-card" aria-labelledby="calibration-title">
               <div class="calibration-heading">
                 <div>
                   <h3 id="calibration-title">历史概率分布与可靠度</h3>
-                  <p>拱形表示历史预测分布；虚线位置显示超过该概率时的历史命中率。</p>
+                  <p>曲线聚焦均值 ±4σ 的历史预测分布；虚线位置显示超过该概率时的历史命中率。</p>
                 </div>
                 <span class="calibration-sample" id="calibration-sample">等待历史数据</span>
               </div>
@@ -306,8 +306,9 @@
                 </svg>
                 <div class="calibration-tooltip" id="calibration-tooltip" hidden></div>
                 <p class="calibration-state" id="calibration-state" role="status" aria-live="polite">选择时间窗后加载历史记录。</p>
-                <div class="calibration-axis" aria-hidden="true"><span>0%</span><span>预测概率</span><span>100%</span></div>
+                <div class="calibration-axis" aria-hidden="true"><span id="calibration-axis-lower">0%</span><span>预测概率</span><span id="calibration-axis-upper">100%</span></div>
               </div>
+              <p class="calibration-range-note" id="calibration-range-note">加载分布档案后，图表会保留均值 ±4σ，并从画面中裁掉区间外的离群窗口。</p>
               <p class="calibration-summary" id="calibration-summary" aria-live="polite">历史可靠度仅用于辅助选择门槛，不是模型置信度。</p>
             </section>
           </section>

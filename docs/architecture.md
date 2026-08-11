@@ -391,10 +391,19 @@ projection. The core stream still retains all 168 cumulative hourly points for
 deterministic replay. Read APIs may lazily project only the points a current view
 or subscription needs, and clients may cache those derived results, but neither
 the projection nor access pattern can write canonical data, enter training or
-labels, or become a publication trigger. The browser requests one calibration
-profile only after the dialog is open and its selected horizon has been still for
-220 ms, then keeps a per-horizon in-memory cache for ten minutes in that page
-session.
+labels, or become a publication trigger. A read-only worker loads one historical
+context and generates the 28 notification-slider horizons as a batch. The origin
+keeps those profiles in a lineage-bound persistent last-good snapshot, starts a
+background warmup at process launch, and forces another background generation after
+a successful pipeline. An expired profile is served immediately while the batch is
+revalidated; the browser selects an explicit compact HTTP transport view, while the
+query without that view retains the complete profile contract. That view and the
+browser's exact-horizon page cache add bounded ten-minute reuse. Moving the slider remains debounced, while committing its
+final value flushes the request without that delay. A miss uses view-level
+stale-while-refresh: the prior chart stays visible but non-interactive until the
+exact selected horizon is ready, avoiding a blank loading transition. Historical display bounds and a
+two-standard-deviation UI suggestion are derived read-model metadata only; they do
+not alter forecasts, labels, or subscriber state.
 
 Telegram collects the distinct horizons used by current dynamic rules and repeats
 the `horizon_hours` query parameter once per requested point. The HTTP response is

@@ -181,16 +181,41 @@ The website advertises the stable feed with Atom autodiscovery metadata. Its
 notification configuration dialog controls the same horizon/threshold pair for
 Web Push and generates the matching parameterized Atom URL only after the cheap
 baseline endpoint returns the current cursor; failure never produces a replaying
-fallback link. Opening the dialog schedules the selected horizon's calibration
-request after a 220 ms settle delay; moving the horizon restarts that delay, and a
-ten-minute per-horizon in-memory cache is reused only within the current page
-session. The historical chart uses as-issued predictions and eligible
-covered outcomes. Its density is separate from the strictly-threshold-above
-historical reset rate. Hovering snaps to a real one-percentage-point profile point.
-A point estimate is hidden until that point has at least 20 non-overlapping
-windows; eligible points retain their Wilson 95% interval. `preliminary` or
-insufficient samples must never be labeled as model confidence or validated
-reliability.
+fallback link. The server generates all 28 slider horizons from one read-only
+historical context, retains a lineage-bound last-good snapshot across process
+restarts, and refreshes it asynchronously at startup and after each successful
+pipeline run. Expiry uses stale-while-revalidate: the prior valid horizon is returned
+immediately while one forced background refresh regenerates the whole set. The
+browser requests the explicit `view=compact` transport projection, which is publicly
+cacheable for ten minutes with a bounded stale window; omitting `view` retains the
+complete existing profile response. The browser also retains its own exact-horizon
+ten-minute page cache. Range
+input remains debounced while it moves, but the final `change` value bypasses that
+delay; a completed exact-horizon request may seed only that horizon and may never
+replace another selected view. A cache miss never blanks an already rendered chart:
+the prior horizon remains visibly marked as a temporary, non-interactive reference
+until the exact selected horizon replaces it atomically. Only a dialog with no
+rendered profile uses the full loading state.
+
+On a first-ever startup with no last-good snapshot, HTTP reads fail fast with `503`
+and `Retry-After: 5` while the independent background warm continues; a request is
+never attached to the worker's longer cold-scan budget. While the same dialog and
+horizon remain selected, the browser follows that bounded retry signal for at most
+two minutes and replaces the warming state when the profile becomes available.
+
+The historical chart uses as-issued predictions and eligible covered outcomes. Its
+density is separate from the strictly-threshold-above historical reset rate. The
+drawing is focused to the historical mean plus or minus four population standard
+deviations on the existing one-percentage-point grid; clipped outlying windows are
+counted visibly but remain in every statistic, sample gate, and threshold result.
+For a browser with no saved preference or manual threshold edit, the initial UI
+suggestion is the mean plus two standard deviations, rounded upward to a real 1%
+point. It does not change the channel-neutral `4h/50%` compatibility default and
+never overwrites a saved or manually selected rule. Hovering continues to snap to a
+real one-percentage-point profile point. A point estimate is hidden until that point
+has at least 20 non-overlapping windows; eligible points retain their Wilson 95%
+interval. `preliminary` or insufficient samples must never be labeled as model
+confidence or validated reliability.
 
 Atom entry IDs and channel delivery keys use `event_id`. Atom `published` and
 `updated` use `emitted_at`; they must not imply when an underlying reset occurred.

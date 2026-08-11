@@ -68,6 +68,10 @@ const SERVING_SNAPSHOT_DEFAULT_CADENCE_MINUTES = 10;
 const SERVING_SNAPSHOT_CADENCE_MULTIPLIER = 3;
 const IMMUTABLE_SNAPSHOT_CACHE_CONTROL =
   "public, max-age=31536000, immutable";
+const NOTIFICATION_CALIBRATION_CACHE_CONTROL =
+  "public, max-age=600, stale-while-revalidate=3600";
+const NOTIFICATION_CALIBRATION_COMPACT_VERSION =
+  "notification-threshold-calibration-compact/1";
 const DYNAMIC_FORECAST_BLOCKERS = new Set([
   "forecast_missing",
   "forecast_fresh",
@@ -168,6 +172,55 @@ function sendImmutableJson(request, response, value, etag) {
   }
   response.writeHead(200, headers);
   response.end(request.method === "HEAD" ? undefined : JSON.stringify(value));
+}
+
+function sendCacheableJson(request, response, value) {
+  const body = JSON.stringify(value);
+  const etag = `"${hashLabel(body).slice("sha256:".length)}"`;
+  const headers = {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": NOTIFICATION_CALIBRATION_CACHE_CONTROL,
+    etag,
+  };
+  if (ifNoneMatch(request.headers["if-none-match"], etag)) {
+    response.writeHead(304, headers);
+    response.end();
+    return;
+  }
+  response.writeHead(200, headers);
+  response.end(request.method === "HEAD" ? undefined : body);
+}
+
+function projectNotificationCalibration(profile) {
+  if (!profile || typeof profile !== "object") {
+    throw new TypeError("Probability calibration profile is invalid");
+  }
+  return {
+    schema_version: NOTIFICATION_CALIBRATION_COMPACT_VERSION,
+    profile_schema_version: profile.schema_version,
+    detail_schema_version: profile.detail_schema_version,
+    reason: profile.reason,
+    preliminary: profile.preliminary,
+    horizon_hours: profile.horizon_hours,
+    evaluation_cutoff: profile.evaluation_cutoff,
+    model_release: profile.model_release,
+    status: profile.status,
+    sample_count: profile.sample_count,
+    min_sample_count: profile.min_sample_count,
+    event_count: profile.event_count,
+    min_event_count: profile.min_event_count,
+    sample_gate: profile.sample_gate,
+    distribution_summary: profile.distribution_summary,
+    points: (Array.isArray(profile.points) ? profile.points : []).map((point) => ({
+      probability: point.probability,
+      density: point.density,
+      confidence_above: point.confidence_above,
+      historical_hit_rate_above: point.historical_hit_rate_above,
+      sample_count_above: point.sample_count_above,
+      confidence_interval: point.confidence_interval,
+      point_sample_gate: point.point_sample_gate,
+    })),
+  };
 }
 
 function sendAtom(request, response, value) {
@@ -1045,7 +1098,9 @@ export function createRequestHandler({
         error.code = "probability_profile_provider_unavailable";
         throw error;
       }
-    : (horizonHours) => probabilityProfileProvider.get(horizonHours);
+    : (horizonHours) => probabilityProfileProvider.get(horizonHours, {
+        waitForWarm: false,
+      });
   let servingSnapshotInFlight = null;
 
   async function materializeServingSnapshot(materializedAt) {
@@ -1326,14 +1381,28 @@ export function createRequestHandler({
           if (
             !url.searchParams.has("horizon_hours") ||
             url.searchParams.getAll("horizon_hours").length !== 1 ||
-            [...url.searchParams.keys()].some((key) => key !== "horizon_hours")
+            url.searchParams.getAll("view").length > 1 ||
+            [...url.searchParams.keys()].some((key) =>
+              !["horizon_hours", "view"].includes(key)
+            )
           ) {
             throw new RangeError("horizon_hours is required");
+          }
+          const view = url.searchParams.get("view");
+          if (view !== null && view !== "compact") {
+            throw new RangeError("view must be compact when provided");
           }
           const horizonHours = parseProbabilityProfileHorizon(
             url.searchParams.get("horizon_hours"),
           );
-          sendJson(response, 200, await probabilityProfileFor(horizonHours));
+          const profile = await probabilityProfileFor(horizonHours);
+          sendCacheableJson(
+            request,
+            response,
+            view === "compact"
+              ? projectNotificationCalibration(profile)
+              : profile,
+          );
         } catch (error) {
           if (error instanceof RangeError) {
             sendJson(response, 400, {
@@ -1342,9 +1411,17 @@ export function createRequestHandler({
             });
             return;
           }
+          const warming = error?.code === "probability_profile_warming";
+          if (warming) {
+            response.setHeader("retry-after", "5");
+          }
           sendSemanticUnavailable(response, {
-            error: "notification_calibration_unavailable",
-            message: error.message,
+            error: warming
+              ? "notification_calibration_warming"
+              : "notification_calibration_unavailable",
+            message: warming
+              ? "历史可靠度正在后台预热，请几秒后重试。"
+              : error.message,
           });
         }
         return;

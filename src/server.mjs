@@ -15,6 +15,7 @@ import {
 import { createWebPushRuntime } from "./web-push/runtime.mjs";
 import { createOperationsRuntime } from "./operations/runtime.mjs";
 import {
+  PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
   createProbabilityProfileWorkerProvider,
 } from "./query/probability-profile-worker.mjs";
 
@@ -23,6 +24,17 @@ const config = await loadConfig({
   overrides: demoMode ? DEMO_CONFIG_OVERRIDES : {},
 });
 const store = await new JsonlStore(config.runtime.data_dir).init();
+let probabilityProfileSeed = null;
+try {
+  probabilityProfileSeed = await store.readState(
+    PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
+    null,
+  );
+} catch (error) {
+  process.stderr.write(
+    `Probability profile snapshot seed failed: ${error.stack ?? error.message}\n`,
+  );
+}
 const operationsRuntime = await createOperationsRuntime({ store });
 const publicationLedger = createPublicationLedger(store);
 const publicationProjector = createPublicationProjector({
@@ -45,6 +57,15 @@ const webPushRuntime = await createWebPushRuntime({
 const probabilityProfileProvider = createProbabilityProfileWorkerProvider({
   dataDir: config.runtime.data_dir,
   config,
+  seedSnapshot: probabilityProfileSeed,
+  onSnapshot: (snapshot) => store.writeState(
+    PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
+    snapshot,
+  ).catch((error) => {
+    process.stderr.write(
+      `Probability profile snapshot persistence failed: ${error.stack ?? error.message}\n`,
+    );
+  }),
 });
 const requestHandler = createRequestHandler({
   store,
@@ -60,7 +81,17 @@ const server = http.createServer(requestHandler);
 let scheduler = null;
 let shuttingDown = false;
 
+function refreshProbabilityProfiles({ force = false, reason }) {
+  void probabilityProfileProvider.warm(undefined, { force }).catch((error) => {
+    if (shuttingDown) return;
+    process.stderr.write(
+      `Probability profile ${reason} failed: ${error.stack ?? error.message}\n`,
+    );
+  });
+}
+
 async function initializeRuntime() {
+  refreshProbabilityProfiles({ reason: "startup warmup" });
   let snapshot = null;
   try {
     snapshot = await requestHandler.refreshServingSnapshot(new Date());
@@ -104,6 +135,12 @@ async function initializeRuntime() {
     config,
     afterState: async ({ finished_at: finishedAt, status }) => {
       const finished = new Date(finishedAt);
+      if (status === "success") {
+        refreshProbabilityProfiles({
+          force: true,
+          reason: "post-pipeline refresh",
+        });
+      }
       const currentSnapshot = await requestHandler.refreshServingSnapshot(finished);
       const publication = await publicationProjector.project({
         snapshot: currentSnapshot,

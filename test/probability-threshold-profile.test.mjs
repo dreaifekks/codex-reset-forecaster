@@ -139,6 +139,32 @@ function issuedEvaluationFixture(appConfig, predictions) {
   return { artifact, rowSampleRef, summary };
 }
 
+function profileForProbabilities(probabilities) {
+  const start = Date.parse("2026-08-01T00:00:00.000Z");
+  const predictions = probabilities.map((probability, index) => prediction({
+    id: `distribution_${index}`,
+    anchor: new Date(start + index * HOUR_MS).toISOString(),
+    hazard: probability,
+  }));
+  return buildProbabilityThresholdProfile({
+    predictions,
+    outcomes: [],
+    coverageIntervals: probabilities.length === 0
+      ? []
+      : [{
+        start: new Date(start).toISOString(),
+        end: new Date(start + probabilities.length * HOUR_MS).toISOString(),
+      }],
+    evaluationCutoff: new Date(
+      start + (probabilities.length + 1) * HOUR_MS,
+    ).toISOString(),
+    horizonHours: 1,
+    modelRelease: MODEL_RELEASE,
+    minimumWindows: 1,
+    minimumEvents: 1,
+  });
+}
+
 test("arbitrary-horizon calibration uses cumulative as-issued probability and covered labels", () => {
   const predictions = [0, 4, 8].map((offset) => prediction({
     id: `pred_${offset}`,
@@ -226,6 +252,128 @@ test("overlap-aware confidence counts non-overlapping horizons separately from d
   assert.equal(profile.points[0].historical_hit_rate_above, 0);
   assert.equal(profile.sample_gate.windows_passed, true);
   assert.equal(profile.sample_gate.events_passed, false);
+});
+
+test("distribution summary uses every eligible probability before display clipping", () => {
+  const upperSkew = profileForProbabilities([...Array(24).fill(0), 1]);
+  const expectedStandardDeviation = Math.sqrt(0.96 / 25);
+
+  assert.ok(
+    Math.abs(upperSkew.distribution_summary.mean_probability - 0.04) < 1e-15,
+  );
+  assert.ok(
+    Math.abs(
+      upperSkew.distribution_summary.standard_deviation -
+        expectedStandardDeviation,
+    ) < 1e-15,
+  );
+  assert.deepEqual(upperSkew.distribution_summary.observed_range, {
+    lower: 0,
+    upper: 1,
+  });
+  assert.deepEqual(upperSkew.distribution_summary.display_range, {
+    lower: 0,
+    upper: 0.83,
+    standard_deviations: 4,
+    clipped_below: 0,
+    clipped_above: 1,
+  });
+  assert.deepEqual(upperSkew.distribution_summary.suggested_threshold, {
+    probability: 0.44,
+    standard_deviations: 2,
+  });
+  assert.equal(upperSkew.sample_count, 25);
+  assert.equal(
+    upperSkew.distribution.bins.reduce((sum, bin) => sum + bin.windows, 0),
+    25,
+  );
+  assert.match(
+    upperSkew.semantics.display_range,
+    /clipped rows remain included in all statistics, samples, and threshold calculations/,
+  );
+
+  const lowerSkew = profileForProbabilities([0, ...Array(24).fill(1)]);
+  assert.deepEqual(lowerSkew.distribution_summary.display_range, {
+    lower: 0.17,
+    upper: 1,
+    standard_deviations: 4,
+    clipped_below: 1,
+    clipped_above: 0,
+  });
+});
+
+test("constant distributions retain a useful five-point-or-wider display range", () => {
+  const profile = profileForProbabilities([0.5, 0.5, 0.5]);
+
+  assert.equal(profile.distribution_summary.mean_probability, 0.5);
+  assert.equal(profile.distribution_summary.standard_deviation, 0);
+  assert.deepEqual(profile.distribution_summary.observed_range, {
+    lower: 0.5,
+    upper: 0.5,
+  });
+  assert.deepEqual(profile.distribution_summary.display_range, {
+    lower: 0.47,
+    upper: 0.53,
+    standard_deviations: 4,
+    clipped_below: 0,
+    clipped_above: 0,
+  });
+  assert.deepEqual(profile.distribution_summary.suggested_threshold, {
+    probability: 0.5,
+    standard_deviations: 2,
+  });
+});
+
+test("distribution display and suggested threshold stay inside probability boundaries", () => {
+  const lowerBoundary = profileForProbabilities([0]);
+  assert.deepEqual(lowerBoundary.distribution_summary.display_range, {
+    lower: 0,
+    upper: 0.05,
+    standard_deviations: 4,
+    clipped_below: 0,
+    clipped_above: 0,
+  });
+  assert.equal(
+    lowerBoundary.distribution_summary.suggested_threshold.probability,
+    0.01,
+  );
+
+  const upperBoundary = profileForProbabilities([1]);
+  assert.deepEqual(upperBoundary.distribution_summary.display_range, {
+    lower: 0.95,
+    upper: 1,
+    standard_deviations: 4,
+    clipped_below: 0,
+    clipped_above: 0,
+  });
+  assert.equal(
+    upperBoundary.distribution_summary.suggested_threshold.probability,
+    0.99,
+  );
+});
+
+test("empty profiles keep a stable null and zero distribution summary", () => {
+  const profile = profileForProbabilities([]);
+
+  assert.deepEqual(profile.distribution_summary, {
+    mean_probability: null,
+    standard_deviation: null,
+    observed_range: {
+      lower: null,
+      upper: null,
+    },
+    display_range: {
+      lower: null,
+      upper: null,
+      standard_deviations: 4,
+      clipped_below: 0,
+      clipped_above: 0,
+    },
+    suggested_threshold: {
+      probability: null,
+      standard_deviations: 2,
+    },
+  });
 });
 
 test("point estimates require 20 independent windows and thresholds are strict", () => {
