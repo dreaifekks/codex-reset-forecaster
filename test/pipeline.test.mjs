@@ -31,6 +31,21 @@ import {
 } from "../src/runtime/readiness.mjs";
 import { hashLabel } from "../src/core/hash.mjs";
 
+test("repository license metadata and bundled GitHub mark stay attributable", async () => {
+  const [licenseText, packageText, lockText, notices, githubMark] = await Promise.all([
+    fs.readFile(new URL("../LICENSE", import.meta.url), "utf8"),
+    fs.readFile(new URL("../package.json", import.meta.url), "utf8"),
+    fs.readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
+    fs.readFile(new URL("../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8"),
+    fs.readFile(new URL("../public/github-mark.svg", import.meta.url), "utf8"),
+  ]);
+  assert.match(licenseText, /Apache License\s+Version 2\.0, January 2004/);
+  assert.equal(JSON.parse(packageText).license, "Apache-2.0");
+  assert.equal(JSON.parse(lockText).packages[""].license, "Apache-2.0");
+  assert.match(notices, /Primer Octicons/);
+  assert.match(githubMark, /viewBox="0 0 24 24"/);
+});
+
 test("evidence view keeps only Tibo and authoritative Codex or ChatGPT product events in core", () => {
   const config = {
     providers: {
@@ -512,11 +527,93 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(appScript, /实时来源正常/);
   assert.match(appScript, /负标签按审计延迟成熟/);
   assert.doesNotMatch(appScript, /data_quality\?\.score/);
-  assert.match(page, /app\.js\?v=subscription-preferences-3/);
-  assert.match(page, /styles\.css\?v=subscription-preferences-3/);
+  assert.match(page, /app\.js\?v=subscription-preferences-6/);
+  assert.match(page, /styles\.css\?v=subscription-preferences-6/);
+  assert.match(
+    page,
+    /href="https:\/\/t\.me\/codex_reset_7day_bot"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?>Telegram Bot<\/a>/,
+  );
   assert.match(
     appScript,
-    /notification-preferences\.js\?v=subscription-preferences-3/,
+    /notification-preferences\.js\?v=subscription-preferences-6/,
+  );
+  assert.match(
+    page,
+    /<header class="site-header">[\s\S]*?<div class="header-brand-group">[\s\S]*?class="brand"[\s\S]*?class="repository-link"[\s\S]*?href="https:\/\/github\.com\/dreaifekks\/codex-reset-forecaster"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?<img class="repository-mark"[\s\S]*?<\/div>\s*<nav aria-label="主导航">[\s\S]*?<\/header>\s*<main class="page-shell">/,
+  );
+  assert.match(
+    accuracyPage,
+    /<header class="site-header">[\s\S]*?<div class="header-brand-group">[\s\S]*?class="brand"[\s\S]*?class="repository-link"[\s\S]*?href="https:\/\/github\.com\/dreaifekks\/codex-reset-forecaster"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?<img class="repository-mark"[\s\S]*?<\/div>\s*<nav aria-label="主导航">[\s\S]*?<\/header>\s*<main class="page-shell">/,
+  );
+  const mainNavigation = page.match(/<nav aria-label="主导航">[\s\S]*?<\/nav>/)?.[0] ?? "";
+  const historyNavigation = accuracyPage.match(/<nav aria-label="主导航">[\s\S]*?<\/nav>/)?.[0] ?? "";
+  assert.equal((mainNavigation.match(/<a\b/g) ?? []).length, 2);
+  assert.equal((historyNavigation.match(/<a\b/g) ?? []).length, 2);
+  assert.doesNotMatch(`${mainNavigation}\n${historyNavigation}`, /github/i);
+  const mainHeading = page.match(/<section class="page-heading">[\s\S]*?<\/section>/)?.[0] ?? "";
+  const historyHeading = accuracyPage.match(/<section class="page-heading">[\s\S]*?<\/section>/)?.[0] ?? "";
+  assert.doesNotMatch(`${mainHeading}\n${historyHeading}`, /repository-link/);
+  assert.doesNotMatch(`${page}\n${accuracyPage}`, /repository-link-label|repository-url/);
+  assert.doesNotMatch(`${page}\n${accuracyPage}\n${styles}`, /repository-strip/);
+  assert.match(accuracyPage, /styles\.css\?v=forecast-lazy-2/);
+  assert.match(styles, /\.header-brand-group\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;/);
+  assert.match(styles, /\.repository-link\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
+  assert.match(styles, /\.page-shell\s*\{[\s\S]*?padding:\s*44px 24px 40px;/);
+  assert.match(styles, /\.repository-mark[\s\S]*?filter:\s*invert\(1\)/);
+  assert.match(page, /<legend>选择提醒内容<\/legend>/);
+  assert.match(page, /预测时间有变化/);
+  assert.match(page, /重置结果有更新/);
+  assert.match(page, /概率达到我的门槛/);
+  assert.match(page, /浏览器通知 · 也包含在稳定 Atom/);
+  assert.match(page, /浏览器通知 · 可生成个性化 Atom/);
+  assert.match(
+    page,
+    /id="notification-topic-probability"[^>]*aria-controls="notification-probability-rule"[^>]*aria-expanded="false"/,
+  );
+  assert.match(
+    page,
+    /id="notification-probability-rule"[^>]*data-enabled="false" hidden inert/,
+  );
+  assert.equal((page.match(/id="notification-threshold"/g) ?? []).length, 1);
+  const thresholdInput = page.match(
+    /<input\s+class="calibration-threshold-input"[\s\S]*?>/,
+  )?.[0] ?? "";
+  assert.notEqual(thresholdInput, "");
+  assert.doesNotMatch(thresholdInput, /\shidden(?:\s|>)|aria-hidden|tabindex="-1"/);
+  assert.match(
+    page,
+    /id="notification-threshold"[\s\S]*?type="range"[\s\S]*?min="1"[\s\S]*?max="99"[\s\S]*?step="1"/,
+  );
+  assert.match(
+    page,
+    /id="notification-probability-rule"[\s\S]*class="personalized-feed"[\s\S]*<\/section>\s*<aside class="feed-options"/,
+  );
+  assert.match(
+    page,
+    /href="\/feed\.xml" target="_blank" rel="noopener noreferrer">稳定事件流（权威时间窗 \+ 确认与修正）/,
+  );
+  assert.match(
+    page,
+    /href="\/feeds\/experimental\.xml" target="_blank" rel="noopener noreferrer">稳定事件 \+ 公共 4h 实验观察/,
+  );
+  assert.match(page, /公共实验源固定使用 4 小时 \/ 50% 的观察规则/);
+  assert.match(
+    styles,
+    /calibration-card:has\(\.calibration-threshold-input:focus-visible\)[\s\S]*outline: 2px solid #86efac/,
+  );
+  assert.match(
+    styles,
+    /\.calibration-crosshair\[hidden\],[\s\S]*?\.calibration-marker\[hidden\][\s\S]*?display:\s*none/,
+  );
+  assert.match(page, /id="calibration-threshold-range"/);
+  assert.match(page, /触发阈值 · 50%/);
+  assert.match(
+    styles,
+    /\.calibration-threshold-range\s*\{[\s\S]*?fill:\s*url\(#calibration-threshold-fill\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 680px\)[\s\S]*?\.feed-option-links\s*\{[\s\S]*?flex:\s*none/,
   );
   assert.match(page, /滚动到此处后加载核心信号/);
   assert.match(appScript, /current_prediction_ref/);

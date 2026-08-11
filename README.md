@@ -325,3 +325,8 @@ flattening all of its hours: policy `authority-timing-first-event-mixture/2`
 uses a `0.5`-power tempered baseline first-event shape inside the asserted
 window, with duration-uniform allocation only when the baseline has no usable
 mass.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). The bundled GitHub mark has its
+own attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

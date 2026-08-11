@@ -92,6 +92,10 @@ test("publication Atom feed escapes content and separates experimental alerts", 
   });
   assert.equal(experimental.event_count, 2);
   assert.match(experimental.body, /实验概率告警/);
+  assert.match(
+    experimental.body,
+    /公共固定 4 小时概率观察（50% 开启、30% 解除）/,
+  );
   assert.match(experimental.body, /alerts:experimental/);
   assert.notEqual(experimental.etag, ordinary.etag);
 

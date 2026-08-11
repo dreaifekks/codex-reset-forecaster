@@ -81,7 +81,7 @@ export function renderPublicationAtom(events, {
     "<feed xmlns=\"http://www.w3.org/2005/Atom\">",
     `  <id>urn:codex-reset-forecaster:alerts:${includeExperimental ? "experimental" : "stable"}</id>`,
     `  <title>${includeExperimental ? "Codex 重置预测实验告警" : "Codex 重置提醒"}</title>`,
-    `  <subtitle>${includeExperimental ? "包含显式选择的实验概率阈值告警。" : "权威未来时间窗、确认结果及其修正。"}</subtitle>`,
+    `  <subtitle>${includeExperimental ? "稳定事件，以及公共固定 4 小时概率观察（50% 开启、30% 解除）。" : "权威未来时间窗、确认结果及其修正。"}</subtitle>`,
     `  <link rel="self" href="${xml(new URL(feedPath, origin).href)}"/>`,
     `  <link rel="alternate" href="${xml(new URL("/", origin).href)}"/>`,
     `  <updated>${xml(updated)}</updated>`,

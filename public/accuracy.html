@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
-    <link rel="stylesheet" href="/styles.css?v=forecast-lazy-1">
+    <link rel="stylesheet" href="/styles.css?v=forecast-lazy-2">
     <script
       defer
       src="https://vibecafe.ai/telemetry/v1.js"
@@ -22,8 +22,23 @@
   <body>
     <header class="site-header">
       <div class="header-inner">
-        <a class="brand" href="/"><img class="brand-icon" src="/favicon.svg" alt=""><span>Codex 重置预测</span><span class="beta-badge">实验版</span></a>
-        <nav aria-label="主导航"><a href="/">预测</a><a class="active" href="/accuracy">历史结果</a></nav>
+        <div class="header-brand-group">
+          <a class="brand" href="/"><img class="brand-icon" src="/favicon.svg" alt=""><span>Codex 重置预测</span><span class="beta-badge">实验版</span></a>
+          <a
+            class="repository-link"
+            href="https://github.com/dreaifekks/codex-reset-forecaster"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="GitHub 仓库"
+            aria-label="在新标签页打开 GitHub 仓库"
+          >
+            <img class="repository-mark" src="/github-mark.svg" alt="">
+          </a>
+        </div>
+        <nav aria-label="主导航">
+          <a href="/">预测</a>
+          <a class="active" href="/accuracy">历史结果</a>
+        </nav>
       </div>
     </header>
     <main class="page-shell">

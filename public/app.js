@@ -5,7 +5,7 @@ import {
   formatNotificationHorizon,
   nearestHorizonIndex,
   normalizeCalibrationPayload,
-} from "./notification-preferences.js?v=subscription-preferences-3";
+} from "./notification-preferences.js?v=subscription-preferences-6";
 
 const percent = (value, digits = 0) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "—";
@@ -1613,7 +1613,13 @@ const calibrationArea = document.querySelector("#calibration-area");
 const calibrationCurve = document.querySelector("#calibration-curve");
 const calibrationCrosshair = document.querySelector("#calibration-crosshair");
 const calibrationMarker = document.querySelector("#calibration-marker");
+const calibrationThresholdRange = document.querySelector(
+  "#calibration-threshold-range",
+);
 const calibrationHitArea = document.querySelector("#calibration-hit-area");
+const calibrationThresholdPin = document.querySelector(
+  "#calibration-threshold-pin",
+);
 const calibrationTooltip = document.querySelector("#calibration-tooltip");
 const calibrationState = document.querySelector("#calibration-state");
 const calibrationSample = document.querySelector("#calibration-sample");
@@ -1641,6 +1647,9 @@ let notificationThresholdHasProfileSuggestion = false;
 let notificationDialogTrigger = null;
 let notificationFeedBaselineCursor = null;
 let notificationFeedBaselineRequest = null;
+let notificationControlsBusy = false;
+let calibrationThresholdDragging = false;
+let calibrationThresholdPointerId = null;
 
 function supportsWebPush() {
   return typeof navigator !== "undefined" &&
@@ -1809,14 +1818,19 @@ function renderNotificationValues() {
 }
 
 async function refreshPersonalizedFeedBaseline() {
+  if (!notificationDialog.open || !notificationProbabilityTopic.checked) return;
   notificationFeedBaselineRequest?.abort();
   const controller = new AbortController();
+  let timedOut = false;
   notificationFeedBaselineRequest = controller;
   notificationFeedBaselineCursor = null;
   personalizedFeedStatus.textContent = "正在从当前预测建立订阅基线…";
   renderNotificationValues();
   try {
-    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 8_000);
     const response = await fetch("/api/notification-preferences/baseline", {
       cache: "no-store",
       signal: controller.signal,
@@ -1832,17 +1846,26 @@ async function refreshPersonalizedFeedBaseline() {
     ) {
       throw new TypeError("订阅基线响应无效");
     }
-    if (controller.signal.aborted) return;
+    if (
+      controller.signal.aborted ||
+      !notificationDialog.open ||
+      !notificationProbabilityTopic.checked
+    ) return;
     notificationFeedBaselineCursor = payload.cursor;
     personalizedFeedStatus.textContent =
       "链接只会评估建立基线之后的新预测，不会回放过去的提醒。";
     renderNotificationValues();
   } catch (error) {
-    if (controller.signal.aborted) return;
+    if (
+      notificationFeedBaselineRequest !== controller ||
+      !notificationDialog.open ||
+      !notificationProbabilityTopic.checked ||
+      (controller.signal.aborted && !timedOut)
+    ) return;
     notificationFeedBaselineCursor = null;
     renderNotificationValues();
     personalizedFeedStatus.textContent =
-      `暂时无法建立安全基线，个性化 Atom 链接不可用：${error.message}`;
+      `暂时无法建立安全基线，个性化 Atom 链接不可用：${timedOut ? "请求超时" : error.message}`;
   } finally {
     if (notificationFeedBaselineRequest === controller) {
       notificationFeedBaselineRequest = null;
@@ -1850,11 +1873,24 @@ async function refreshPersonalizedFeedBaseline() {
   }
 }
 
+function setCalibrationSvgHidden(element, hidden) {
+  element.hidden = hidden;
+  if (hidden) element.setAttribute("hidden", "");
+  else element.removeAttribute("hidden");
+}
+
 function clearCalibrationGraphic() {
   calibrationArea.removeAttribute("d");
   calibrationCurve.removeAttribute("d");
-  calibrationCrosshair.hidden = true;
-  calibrationMarker.hidden = true;
+  setCalibrationSvgHidden(calibrationCrosshair, true);
+  delete calibrationCrosshair.dataset.outside;
+  setCalibrationSvgHidden(calibrationMarker, true);
+  setCalibrationSvgHidden(calibrationThresholdRange, true);
+  calibrationThresholdRange.setAttribute("width", "0");
+  delete calibrationThresholdRange.dataset.outside;
+  calibrationThresholdPin.hidden = true;
+  delete calibrationThresholdPin.dataset.outside;
+  delete calibrationThresholdPin.dataset.side;
   calibrationTooltip.hidden = true;
 }
 
@@ -1910,8 +1946,7 @@ function setCalibrationRefreshState(targetHours, phase = "updating", detail = ""
   calibrationPlot.dataset.refreshState = phase;
   if (phase === "error") calibrationPlot.removeAttribute("aria-busy");
   else calibrationPlot.setAttribute("aria-busy", "true");
-  calibrationCrosshair.hidden = true;
-  calibrationMarker.hidden = true;
+  setCalibrationSvgHidden(calibrationMarker, true);
   calibrationTooltip.hidden = true;
 
   const displayed = formatNotificationHorizon(displayedHours);
@@ -2045,8 +2080,38 @@ function calibrationCopy(point, threshold) {
   };
 }
 
+function showCalibrationThresholdPin(threshold, range, x = null) {
+  const below = threshold < range.lower - 1e-12;
+  const above = threshold > range.upper + 1e-12;
+  const outside = below || above;
+  const pinX = outside
+    ? below ? 20 : 580
+    : x ?? 20 + ((threshold - range.lower) / (range.upper - range.lower)) * 560;
+  calibrationThresholdPin.style.left = `${(pinX / 600) * 100}%`;
+  calibrationThresholdPin.textContent = outside
+    ? `触发阈值 · ${calibrationAxisPercent(threshold)} · 图外`
+    : `触发阈值 · ${calibrationAxisPercent(threshold)}`;
+  calibrationThresholdPin.hidden = false;
+  if (outside) {
+    calibrationThresholdPin.dataset.outside = "true";
+    calibrationThresholdPin.dataset.side = below ? "lower" : "upper";
+  } else {
+    delete calibrationThresholdPin.dataset.outside;
+    delete calibrationThresholdPin.dataset.side;
+  }
+}
+
+function showCalibrationThresholdRange(x, { outside = false } = {}) {
+  const boundedX = Math.min(580, Math.max(20, Number(x) || 20));
+  calibrationThresholdRange.setAttribute("width", (boundedX - 20).toFixed(2));
+  setCalibrationSvgHidden(calibrationThresholdRange, false);
+  if (outside) calibrationThresholdRange.dataset.outside = "true";
+  else delete calibrationThresholdRange.dataset.outside;
+}
+
 function showCalibrationPoint(threshold) {
   if (
+    !notificationProbabilityTopic.checked ||
     !notificationCalibration ||
     calibrationPlot.dataset.state !== "ready" ||
     calibrationPlot.dataset.refreshState ||
@@ -2058,9 +2123,15 @@ function showCalibrationPoint(threshold) {
     selectedThreshold < range.lower - 1e-12 ||
     selectedThreshold > range.upper + 1e-12
   ) {
-    calibrationCrosshair.hidden = true;
-    calibrationMarker.hidden = true;
+    const boundaryX = selectedThreshold < range.lower ? 20 : 580;
+    calibrationCrosshair.setAttribute("x1", boundaryX.toFixed(2));
+    calibrationCrosshair.setAttribute("x2", boundaryX.toFixed(2));
+    calibrationCrosshair.dataset.outside = "true";
+    setCalibrationSvgHidden(calibrationCrosshair, false);
+    setCalibrationSvgHidden(calibrationMarker, true);
     calibrationTooltip.hidden = true;
+    showCalibrationThresholdRange(boundaryX, { outside: true });
+    showCalibrationThresholdPin(selectedThreshold, range);
     calibrationSummary.textContent =
       `当前门槛 ${calibrationAxisPercent(selectedThreshold)} 位于图表显示区间 ` +
       `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)} 之外；` +
@@ -2072,12 +2143,15 @@ function showCalibrationPoint(threshold) {
   if (!point) return;
   const x = point.x;
   const y = point.y;
+  delete calibrationCrosshair.dataset.outside;
+  showCalibrationThresholdRange(x);
+  showCalibrationThresholdPin(selectedThreshold, range, x);
   calibrationCrosshair.setAttribute("x1", x.toFixed(2));
   calibrationCrosshair.setAttribute("x2", x.toFixed(2));
-  calibrationCrosshair.hidden = false;
+  setCalibrationSvgHidden(calibrationCrosshair, false);
   calibrationMarker.setAttribute("cx", x.toFixed(2));
   calibrationMarker.setAttribute("cy", y.toFixed(2));
-  calibrationMarker.hidden = false;
+  setCalibrationSvgHidden(calibrationMarker, false);
   const copy = calibrationCopy(point, point.probability);
   calibrationTooltip.replaceChildren();
   const title = document.createElement("strong");
@@ -2095,6 +2169,8 @@ function showCalibrationPoint(threshold) {
 
 function calibrationThresholdForEvent(event) {
   if (
+    !notificationProbabilityTopic.checked ||
+    notificationThreshold.disabled ||
     !notificationCalibration ||
     calibrationPlot.dataset.state !== "ready" ||
     calibrationPlot.dataset.refreshState ||
@@ -2110,6 +2186,32 @@ function calibrationThresholdForEvent(event) {
   );
   const range = calibrationDisplayRange(notificationCalibration);
   return range.lower + ratio * (range.upper - range.lower);
+}
+
+function updateThresholdFromCalibrationEvent(event) {
+  const selected = calibrationThresholdForEvent(event);
+  if (selected === null) return false;
+  const point = calibrationAt(
+    calibrationCoordinates(notificationCalibration),
+    selected,
+  );
+  const threshold = Math.min(0.99, Math.max(0.01, point?.probability ?? selected));
+  notificationThresholdPristine = false;
+  notificationThreshold.value = String(Math.round(threshold * 100));
+  renderNotificationValues();
+  showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
+  return true;
+}
+
+function stopCalibrationThresholdDrag() {
+  if (
+    calibrationThresholdPointerId !== null &&
+    calibrationHitArea.hasPointerCapture?.(calibrationThresholdPointerId)
+  ) {
+    calibrationHitArea.releasePointerCapture?.(calibrationThresholdPointerId);
+  }
+  calibrationThresholdDragging = false;
+  calibrationThresholdPointerId = null;
 }
 
 function renderNotificationCalibration(calibration) {
@@ -2131,6 +2233,7 @@ function renderNotificationCalibration(calibration) {
 
 function notificationCalibrationMatchesSelection(hours, generation) {
   return notificationDialog.open &&
+    notificationProbabilityTopic.checked &&
     generation === notificationCalibrationGeneration &&
     horizonHours() === hours;
 }
@@ -2219,6 +2322,7 @@ async function loadNotificationCalibration(
     if (!notificationCalibrationMatchesSelection(hours, generation)) return null;
     if (
       notificationDialog.open &&
+      notificationProbabilityTopic.checked &&
       Number.isFinite(error.retryAfterMs) &&
       warmRetry < 24
     ) {
@@ -2252,7 +2356,7 @@ async function loadNotificationCalibration(
 }
 
 function scheduleNotificationCalibration({ immediate = false } = {}) {
-  if (!notificationDialog.open) return;
+  if (!notificationDialog.open || !notificationProbabilityTopic.checked) return;
   clearTimeout(notificationCalibrationTimer);
   notificationCalibrationTimer = null;
   const hours = horizonHours();
@@ -2286,11 +2390,42 @@ function scheduleNotificationCalibration({ immediate = false } = {}) {
   );
 }
 
+function syncProbabilityRuleControls() {
+  const enabled = notificationProbabilityTopic.checked;
+  notificationProbabilityTopic.setAttribute("aria-expanded", String(enabled));
+  notificationProbabilityRule.hidden = !enabled;
+  notificationProbabilityRule.inert = !enabled;
+  notificationProbabilityRule.dataset.enabled = String(enabled);
+  if (enabled) notificationProbabilityRule.removeAttribute("inert");
+  else notificationProbabilityRule.setAttribute("inert", "");
+  notificationHorizon.disabled = notificationControlsBusy || !enabled;
+  notificationThreshold.disabled = notificationControlsBusy || !enabled;
+}
+
+function cancelProbabilityRuleWork() {
+  clearTimeout(notificationCalibrationTimer);
+  notificationCalibrationTimer = null;
+  notificationCalibrationGeneration += 1;
+  stopCalibrationThresholdDrag();
+  notificationFeedBaselineRequest?.abort();
+  notificationFeedBaselineCursor = null;
+  personalizedFeedStatus.textContent = "";
+  renderNotificationValues();
+}
+
 function updateProbabilityRule() {
   notificationProbabilityRule.dataset.pushEnabled = String(
     notificationProbabilityTopic.checked,
   );
-  if (notificationDialog.open) scheduleNotificationCalibration();
+  syncProbabilityRuleControls();
+  if (!notificationProbabilityTopic.checked) {
+    cancelProbabilityRuleWork();
+    return;
+  }
+  if (notificationDialog.open) {
+    void refreshPersonalizedFeedBaseline();
+    scheduleNotificationCalibration();
+  }
 }
 
 async function webPushJson(url, { method = "GET", body = null } = {}) {
@@ -2309,11 +2444,11 @@ async function webPushJson(url, { method = "GET", body = null } = {}) {
 }
 
 function setNotificationBusy(busy) {
+  notificationControlsBusy = busy;
   notificationEnable.disabled = busy;
   notificationDisable.disabled = busy;
   notificationCancel.disabled = busy;
-  notificationHorizon.disabled = busy;
-  notificationThreshold.disabled = busy;
+  syncProbabilityRuleControls();
   for (const selector of [
     "#notification-topic-authority",
     "#notification-topic-outcome",
@@ -2409,7 +2544,7 @@ async function initializeWebPushControls() {
   updateProbabilityRule();
   if (!supportsWebPush()) {
     notificationEnable.disabled = true;
-    notificationStatus.textContent = "此浏览器不支持 Web Push；仍可使用下方公共 Atom 事件流。";
+    notificationStatus.textContent = "此浏览器不支持 Web Push；仍可使用下方 Atom 订阅。";
     return;
   }
   try {
@@ -2418,7 +2553,7 @@ async function initializeWebPushControls() {
     renderNotificationValues();
     if (!config?.enabled || !config.application_server_key) {
       notificationEnable.disabled = true;
-      notificationStatus.textContent = "浏览器通知暂未开放；仍可查看规则或使用公共 Atom 事件流。";
+      notificationStatus.textContent = "浏览器通知暂未开放；仍可查看规则或使用 Atom 订阅。";
       return;
     }
     notificationPublicConfig = config;
@@ -2442,8 +2577,7 @@ function openNotificationDialog() {
     notificationDialog.setAttribute("open", "");
   }
   document.body.classList.add("subscription-dialog-open");
-  void refreshPersonalizedFeedBaseline();
-  scheduleNotificationCalibration();
+  updateProbabilityRule();
 }
 
 function closeNotificationDialog() {
@@ -2453,6 +2587,7 @@ function closeNotificationDialog() {
   clearTimeout(notificationCalibrationTimer);
   notificationCalibrationTimer = null;
   notificationCalibrationGeneration += 1;
+  stopCalibrationThresholdDrag();
   notificationFeedBaselineRequest?.abort();
   notificationDialogTrigger?.focus?.();
   notificationDialogTrigger = null;
@@ -2486,24 +2621,36 @@ notificationThreshold?.addEventListener("input", () => {
   showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
 });
 calibrationHitArea?.addEventListener("pointermove", (event) => {
-  const threshold = calibrationThresholdForEvent(event);
-  if (threshold !== null) showCalibrationPoint(threshold);
-});
-calibrationHitArea?.addEventListener("pointerleave", () => {
-  showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
+  if (!calibrationThresholdDragging) return;
+  if (
+    calibrationThresholdPointerId !== null &&
+    event.pointerId !== calibrationThresholdPointerId
+  ) return;
+  updateThresholdFromCalibrationEvent(event);
 });
 calibrationHitArea?.addEventListener("pointerdown", (event) => {
-  const selected = calibrationThresholdForEvent(event);
-  if (selected === null) return;
-  const point = calibrationAt(
-    calibrationCoordinates(notificationCalibration),
-    selected,
-  );
-  const threshold = Math.min(0.99, Math.max(0.01, point?.probability ?? selected));
-  notificationThresholdPristine = false;
-  notificationThreshold.value = String(Math.round(threshold * 100));
-  renderNotificationValues();
-  showCalibrationPoint(threshold);
+  if (!updateThresholdFromCalibrationEvent(event)) return;
+  event.preventDefault?.();
+  notificationThreshold.focus?.({ preventScroll: true });
+  calibrationThresholdDragging = true;
+  calibrationThresholdPointerId = Number.isFinite(event.pointerId)
+    ? event.pointerId
+    : null;
+  if (calibrationThresholdPointerId !== null) {
+    calibrationHitArea.setPointerCapture?.(calibrationThresholdPointerId);
+  }
+});
+calibrationHitArea?.addEventListener("pointerup", (event) => {
+  if (!calibrationThresholdDragging) return;
+  if (
+    calibrationThresholdPointerId !== null &&
+    event.pointerId !== calibrationThresholdPointerId
+  ) return;
+  updateThresholdFromCalibrationEvent(event);
+  stopCalibrationThresholdDrag();
+});
+calibrationHitArea?.addEventListener("pointercancel", () => {
+  stopCalibrationThresholdDrag();
 });
 personalizedFeedCopy?.addEventListener("click", async () => {
   if (!Number.isSafeInteger(notificationFeedBaselineCursor)) {

@@ -369,8 +369,11 @@ future assertion and explicitly say that it is not a confirmed reset. Only an
 eligible `reset_outcome` revision can create a confirmed outcome event. The
 `experimental_probability` topic applies hysteresis to a fresh, serving-ready,
 non-synthetic forecast and requires explicit subscription; it is never evidence or
-an outcome. Later canonical corrections append corrected, retracted, or
-verification-withdrawn events instead of changing earlier publication entries.
+an outcome. The shared public ledger uses the fixed next-four-hour `0.50` open and
+`0.30` close thresholds. Personalized Atom, Web Push, and dynamic Telegram rules
+reuse the topic name but evaluate their own horizon and threshold from the separate
+forecast-input projection. Later canonical corrections append corrected, retracted,
+or verification-withdrawn events instead of changing earlier publication entries.
 
 Personalized probability delivery is a second non-canonical projection, not a
 different model. Every fresh eligible prediction appends one bounded
@@ -387,9 +390,13 @@ the same rule, watch state, and per-channel input cursor. No surface may write
 canonical records or feed subscriber behavior back into the model.
 
 The website dialog and Telegram bot are result UI/read-model consumers of that
-projection. The core stream still retains all 168 cumulative hourly points for
-deterministic replay. Read APIs may lazily project only the points a current view
-or subscription needs, and clients may cache those derived results, but neither
+projection. The website probability checkbox changes only the Web Push topic. The
+page groups the shared probability controls and parameterized Atom generator under
+the same progressive disclosure, but the Atom HTTP route remains public and does
+not depend on Web Push support or subscription state. The core stream still retains
+all 168 cumulative hourly points for deterministic replay. Read APIs may lazily
+project only the points a current view or subscription needs, and clients may cache
+those derived results, but neither
 the projection nor access pattern can write canonical data, enter training or
 labels, or become a publication trigger. A read-only worker loads one historical
 context and generates the 28 notification-slider horizons as a batch. The origin

@@ -92,6 +92,12 @@ a {
   height: 20px;
 }
 
+.header-brand-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .beta-badge,
 .badge {
   display: inline-flex;
@@ -131,6 +137,42 @@ nav a {
   padding: 7px 10px;
   font-size: 13px;
   text-decoration: none;
+}
+
+.repository-link {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-items: center;
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+
+.repository-mark {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  filter: invert(1);
+  opacity: 0.62;
+  transition: opacity 120ms ease;
+}
+
+.repository-link:hover,
+.repository-link:focus-visible {
+  background: var(--muted);
+}
+
+.repository-link:focus-visible {
+  outline: 2px solid rgba(134, 239, 172, 0.85);
+  outline-offset: 2px;
+}
+
+.repository-link:hover .repository-mark,
+.repository-link:focus-visible .repository-mark {
+  opacity: 1;
 }
 
 nav a:hover,
@@ -208,6 +250,14 @@ nav a.active {
   font-weight: 650;
 }
 
+.notification-topics-help {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  color: #a1a1aa;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
 .notification-topics label {
   display: flex;
   align-items: flex-start;
@@ -237,6 +287,11 @@ nav a.active {
 .notification-topics strong,
 .notification-topics small {
   display: block;
+}
+
+.notification-topics .notification-topic-channel {
+  color: #86efac;
+  font-family: var(--font-mono);
 }
 
 .notification-topics strong {
@@ -358,6 +413,10 @@ nav a.active {
   transition: opacity 140ms ease;
 }
 
+.notification-rule[hidden] {
+  display: none;
+}
+
 .notification-control-heading {
   display: flex;
   align-items: baseline;
@@ -375,10 +434,6 @@ nav a.active {
   color: #86efac;
   font-family: var(--font-mono);
   font-size: 11px;
-}
-
-.probability-heading {
-  margin-top: 24px;
 }
 
 .notification-range {
@@ -429,17 +484,12 @@ nav a.active {
   transform: translateX(50%);
 }
 
-.probability-range-labels,
 .calibration-axis {
   display: flex;
   justify-content: space-between;
   color: #71717a;
   font-family: var(--font-mono);
   font-size: 8px;
-}
-
-.probability-range-labels {
-  margin: -2px 2px 0;
 }
 
 .notification-control-help {
@@ -460,6 +510,25 @@ nav a.active {
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
+}
+
+.calibration-heading-values {
+  display: flex;
+  align-items: flex-end;
+  flex: none;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.calibration-heading-values label {
+  color: #d4d4d8;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.calibration-heading-values output {
+  color: #86efac;
+  font-family: var(--font-mono);
 }
 
 .calibration-heading h3 {
@@ -496,6 +565,25 @@ nav a.active {
   margin-top: 9px;
 }
 
+.calibration-threshold-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.calibration-card:has(.calibration-threshold-input:focus-visible) .calibration-plot {
+  border-radius: 7px;
+  outline: 2px solid #86efac;
+  outline-offset: 3px;
+}
+
 .calibration-plot svg {
   display: block;
   width: 100%;
@@ -513,6 +601,11 @@ nav a.active {
   stroke: none;
 }
 
+.calibration-threshold-range {
+  fill: url(#calibration-threshold-fill);
+  pointer-events: none;
+}
+
 .calibration-curve {
   fill: none;
   stroke: #4ade80;
@@ -523,10 +616,14 @@ nav a.active {
 }
 
 .calibration-crosshair {
-  stroke: #d4d4d8;
-  stroke-dasharray: 5 5;
-  stroke-width: 1;
+  stroke: #86efac;
+  stroke-dasharray: 4 4;
+  stroke-width: 1.25;
   vector-effect: non-scaling-stroke;
+}
+
+.calibration-crosshair[data-outside="true"] {
+  stroke: #fbbf24;
 }
 
 .calibration-marker {
@@ -536,15 +633,27 @@ nav a.active {
   vector-effect: non-scaling-stroke;
 }
 
+.calibration-crosshair[hidden],
+.calibration-marker[hidden],
+.calibration-threshold-range[hidden] {
+  display: none;
+}
+
 .calibration-hit-area {
   fill: transparent;
-  cursor: crosshair;
+  cursor: ew-resize;
   touch-action: none;
 }
 
 .calibration-plot[data-refresh-state] .calibration-area,
-.calibration-plot[data-refresh-state] .calibration-curve {
+.calibration-plot[data-refresh-state] .calibration-curve,
+.calibration-plot[data-refresh-state] .calibration-threshold-range,
+.calibration-plot[data-refresh-state] .calibration-crosshair {
   opacity: 0.58;
+}
+
+.calibration-plot[data-refresh-state] .calibration-threshold-pin {
+  opacity: 0.72;
 }
 
 .calibration-plot[data-refresh-state="error"] .calibration-area,
@@ -595,6 +704,37 @@ nav a.active {
   right: 3.5%;
   bottom: 0;
   left: 3.5%;
+}
+
+.calibration-threshold-pin {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  border: 1px solid rgba(134, 239, 172, 0.7);
+  border-radius: 999px;
+  background: #0d1a12;
+  color: #bbf7d0;
+  padding: 3px 7px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.calibration-threshold-pin[data-outside="true"] {
+  border-color: rgba(251, 191, 36, 0.6);
+  color: #fde68a;
+}
+
+.calibration-threshold-pin[data-side="lower"] {
+  transform: translateX(0);
+}
+
+.calibration-threshold-pin[data-side="upper"] {
+  transform: translateX(-100%);
 }
 
 .calibration-tooltip {
@@ -648,6 +788,24 @@ nav a.active {
   line-height: 1.5;
 }
 
+.personalized-feed {
+  margin-top: 17px;
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+}
+
+.personalized-feed > strong {
+  color: #d4d4d8;
+  font-size: 10px;
+}
+
+.personalized-feed > p {
+  margin: 4px 0 0;
+  color: #8d8d97;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .personalized-feed-url-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -685,13 +843,13 @@ nav a.active {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
 }
 
 .feed-option-links {
   display: flex;
-  flex: none;
+  justify-content: flex-end;
+  flex: 0 1 410px;
+  flex-wrap: wrap;
   gap: 7px;
 }
 
@@ -702,6 +860,7 @@ nav a.active {
   color: #a1a1aa;
   padding: 7px 9px;
   font-size: 9px;
+  text-align: center;
   text-decoration: none;
 }
 
@@ -2001,6 +2160,10 @@ button:focus-visible {
     padding-left: 16px;
   }
 
+  .header-inner {
+    gap: 8px;
+  }
+
   .page-shell {
     padding-top: 32px;
   }
@@ -2134,6 +2297,8 @@ button:focus-visible {
 
   .feed-option-links {
     display: grid;
+    width: 100%;
+    flex: none;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

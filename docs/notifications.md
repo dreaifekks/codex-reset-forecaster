@@ -33,8 +33,12 @@ observation, candidate, extractor confidence, evidence count, LLM judgment, or
 forecast probability cannot.
 
 The fixed `publication-policy/1` probability watch remains the shared public
-experimental event stream. Personalized rules do not rewrite that ledger. Each
-fresh eligible forecast is also projected into the bounded, non-canonical
+experimental event stream. Its `experimental_probability` entries always use the
+public next-four-hour `0.50` open and `0.30` close thresholds; they do not use a
+visitor's rule. Parameterized Atom and personalized Web Push reuse the topic name
+for subscriber-specific upward crossings, but consume the forecast-input stream
+instead of rewriting or appending subscriber events to that ledger. Each fresh
+eligible forecast is also projected into the bounded, non-canonical
 `notification-forecast-input-stream/2`, containing its exact prediction reference,
 model issue time, actual projection `emitted_at`, knowledge cutoff, expiry,
 cumulative 1-through-168-hour probability curve, and exact outcome-revision gate.
@@ -144,12 +148,15 @@ publication ledger still preserves the confirmation and its withdrawal.
 
 ## Channels
 
-The same event ledger drives every channel:
+Stable publication events share one ledger across channels. Personalized
+probability Atom, Web Push, and dynamic Telegram delivery additionally consume the
+separate forecast-input stream:
 
 - `GET /feed.xml` is the default Atom 1.0 feed for `authority` and `outcome`.
   It is suitable for RSS/Atom readers and never includes probability watches.
 - `GET /feeds/experimental.xml` includes all three topics and is an explicit
-  experimental subscription.
+  experimental subscription. Its probability entries are the fixed public 4-hour
+  watch (`0.50` open, `0.30` close), not the visitor's personalized rule.
 - `GET /feeds/probability.xml?horizon_hours=<1..168>&probability_threshold=<0.01..0.99>&after=<baseline-sequence>`
   is a parameterized Atom view over eligible forecast inputs. It baselines the
   exact cursor embedded in the generated URL, emits only later upward crossings,
@@ -181,9 +188,14 @@ The website advertises the stable feed with Atom autodiscovery metadata. Its
 notification configuration dialog controls the same horizon/threshold pair for
 Web Push and generates the matching parameterized Atom URL only after the cheap
 baseline endpoint returns the current cursor; failure never produces a replaying
-fallback link. The server generates all 28 slider horizons from one read-only
-historical context, retains a lineage-bound last-good snapshot across process
-restarts, and refreshes it asynchronously at startup and after each successful
+fallback link. The probability checkbox changes only whether Web Push subscribes
+to `experimental_probability`. For progressive disclosure, the page shows or hides
+the shared probability controls and parameterized Atom generator together; that UI
+visibility is not authorization, and the parameterized HTTP feed remains publicly
+available independently of Web Push support or subscription state. The server
+generates all 28 slider horizons from one read-only historical context, retains a
+lineage-bound last-good snapshot across process restarts, and refreshes it
+asynchronously at startup and after each successful
 pipeline run. Expiry uses stale-while-revalidate: the prior valid horizon is returned
 immediately while one forced background refresh regenerates the whole set. The
 browser requests the explicit `view=compact` transport projection, which is publicly
@@ -211,8 +223,12 @@ counted visibly but remain in every statistic, sample gate, and threshold result
 For a browser with no saved preference or manual threshold edit, the initial UI
 suggestion is the mean plus two standard deviations, rounded upward to a real 1%
 point. It does not change the channel-neutral `4h/50%` compatibility default and
-never overwrites a saved or manually selected rule. Hovering continues to snap to a
-real one-percentage-point profile point. A point estimate is hidden until that point
+never overwrites a saved or manually selected rule. Clicking or dragging the chart,
+and keyboard edits on its range control, stay on real one-percentage-point profile
+points. The selected threshold stays visible as a labeled dashed line, with a
+subtle filled range from the displayed lower bound to that line; an out-of-domain
+saved threshold is pinned to the nearest chart edge and labeled as outside rather
+than being clamped. A point estimate is hidden until that point
 has at least 20 non-overlapping windows; eligible points retain their Wilson 95%
 interval. `preliminary` or insufficient samples must never be labeled as model
 confidence or validated reliability.

@@ -55,6 +55,12 @@ class FakeElement {
     this.open = false;
     this.textContent = "";
     this.innerHTML = "";
+    this.checked = false;
+    this.disabled = false;
+    this.inert = false;
+    this.value = "";
+    this.focused = false;
+    this.pointerCaptures = new Set();
   }
 
   addEventListener(type, listener) {
@@ -90,6 +96,14 @@ class FakeElement {
     return this.attributes.get(name) ?? null;
   }
 
+  get href() {
+    return this.getAttribute("href") ?? "";
+  }
+
+  set href(value) {
+    this.setAttribute("href", value);
+  }
+
   removeAttribute(name) {
     this.attributes.delete(name);
     if (name === "open") this.open = false;
@@ -115,7 +129,21 @@ class FakeElement {
     return false;
   }
 
-  focus() {}
+  focus() {
+    this.focused = true;
+  }
+
+  setPointerCapture(pointerId) {
+    this.pointerCaptures.add(pointerId);
+  }
+
+  releasePointerCapture(pointerId) {
+    this.pointerCaptures.delete(pointerId);
+  }
+
+  hasPointerCapture(pointerId) {
+    return this.pointerCaptures.has(pointerId);
+  }
 
   getBoundingClientRect() {
     return this.bounds;
@@ -238,8 +266,22 @@ async function createHarness(fetchImpl, {
   setTimeoutImpl = setTimeout,
   clearTimeoutImpl = clearTimeout,
   storedPreferences = null,
+  probabilityTopicChecked = false,
 } = {}) {
   const elements = new Map();
+  const probabilityTopic = new FakeElement("input");
+  probabilityTopic.checked = probabilityTopicChecked;
+  elements.set("#notification-topic-probability", probabilityTopic);
+  for (const selector of [
+    "#calibration-crosshair",
+    "#calibration-marker",
+    "#calibration-threshold-range",
+  ]) {
+    const element = new FakeElement();
+    element.hidden = true;
+    element.setAttribute("hidden", "");
+    elements.set(selector, element);
+  }
   const evidenceSections = [
     new FakeElement("section"),
     new FakeElement("section"),
@@ -331,7 +373,7 @@ async function createHarness(fetchImpl, {
     "utf8",
   );
   const source = moduleSource.replace(
-    /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js\?v=subscription-preferences-3";\s*/,
+    /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js\?v=[^"]+";\s*/,
     "",
   );
   assert.notEqual(source, moduleSource, "test harness must bind frontend imports");
@@ -349,6 +391,8 @@ globalThis.__frontendLazyTest = {
   scheduleCadenceRefresh,
   loadNotificationCalibration,
   scheduleNotificationCalibration,
+  updateProbabilityRule,
+  setNotificationBusy,
   openNotificationDialog,
   closeNotificationDialog,
   enableWebPush,
@@ -365,8 +409,25 @@ globalThis.__frontendLazyTest = {
     notificationThreshold.value = String(percentage);
     notificationThreshold.dispatchEvent({ type: "input" });
   },
+  toggleProbabilityTopic(checked) {
+    notificationProbabilityTopic.checked = checked;
+    notificationProbabilityTopic.dispatchEvent({ type: "change" });
+  },
   selectCalibrationPoint(clientX) {
-    calibrationHitArea.dispatchEvent({ type: "pointerdown", clientX });
+    calibrationHitArea.dispatchEvent({ type: "pointerdown", clientX, pointerId: 1 });
+    calibrationHitArea.dispatchEvent({ type: "pointerup", clientX, pointerId: 1 });
+  },
+  moveCalibrationPointer(clientX, pointerId = 1) {
+    calibrationHitArea.dispatchEvent({ type: "pointermove", clientX, pointerId });
+  },
+  startCalibrationDrag(clientX, pointerId = 1) {
+    calibrationHitArea.dispatchEvent({ type: "pointerdown", clientX, pointerId });
+  },
+  endCalibrationDrag(clientX, pointerId = 1) {
+    calibrationHitArea.dispatchEvent({ type: "pointerup", clientX, pointerId });
+  },
+  cancelCalibrationDrag(pointerId = 1) {
+    calibrationHitArea.dispatchEvent({ type: "pointercancel", pointerId });
   },
   setNotificationRuntime({ registration, config = null }) {
     notificationRegistration = registration;
@@ -398,8 +459,32 @@ globalThis.__frontendLazyTest = {
       calibrationAxisLower: calibrationAxisLower.textContent,
       calibrationAxisUpper: calibrationAxisUpper.textContent,
       calibrationMarkerHidden: calibrationMarker.hidden,
+      calibrationMarkerHiddenAttribute:
+        calibrationMarker.getAttribute("hidden") !== null,
       calibrationCrosshairHidden: calibrationCrosshair.hidden,
+      calibrationCrosshairHiddenAttribute:
+        calibrationCrosshair.getAttribute("hidden") !== null,
+      calibrationCrosshairX: calibrationCrosshair.getAttribute("x1"),
+      calibrationCrosshairOutside: calibrationCrosshair.dataset.outside ?? null,
+      calibrationThresholdRangeHidden: calibrationThresholdRange.hidden,
+      calibrationThresholdRangeHiddenAttribute:
+        calibrationThresholdRange.getAttribute("hidden") !== null,
+      calibrationThresholdRangeWidth: calibrationThresholdRange.getAttribute("width"),
+      calibrationThresholdRangeOutside: calibrationThresholdRange.dataset.outside ?? null,
       calibrationTooltipHidden: calibrationTooltip.hidden,
+      calibrationThresholdPinHidden: calibrationThresholdPin.hidden,
+      calibrationThresholdPinText: calibrationThresholdPin.textContent,
+      calibrationThresholdPinOutside: calibrationThresholdPin.dataset.outside ?? null,
+      probabilityRuleHidden: notificationProbabilityRule.hidden,
+      probabilityRuleInert: notificationProbabilityRule.inert,
+      probabilityRuleEnabled: notificationProbabilityRule.dataset.enabled,
+      probabilityTopicExpanded: notificationProbabilityTopic.getAttribute("aria-expanded"),
+      notificationHorizonDisabled: notificationHorizon.disabled,
+      notificationThresholdDisabled: notificationThreshold.disabled,
+      notificationFeedBaselinePending: notificationFeedBaselineRequest !== null,
+      personalizedFeedUrl: personalizedFeedUrl.value,
+      personalizedFeedCopyDisabled: personalizedFeedCopy.disabled,
+      personalizedFeedOpenHref: personalizedFeedOpen.getAttribute("href"),
     };
   },
 };`,
@@ -433,6 +518,7 @@ globalThis.__frontendLazyTest = {
     window,
   });
   new vm.Script(instrumented, { filename: "public/app.js" }).runInContext(context);
+  context.__frontendLazyTest.updateProbabilityRule();
   return {
     app: context.__frontendLazyTest,
     elements,
@@ -465,6 +551,7 @@ test("notification calibration stays dialog-lazy, debounces horizons, and reuses
   }, {
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
   });
 
   harness.app.selectNotificationHorizon(24);
@@ -523,6 +610,175 @@ test("notification calibration stays dialog-lazy, debounces horizons, and reuses
   ]);
 });
 
+test("an unchecked probability topic hides and disables its whole rule without loading", async () => {
+  const timers = createManualTimers();
+  const calls = [];
+  const harness = await createHarness(async (url) => {
+    calls.push(url);
+    return jsonResponse({
+      schema_version: "notification-feed-baseline/1",
+      cursor: 4,
+    });
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: false,
+  });
+
+  harness.app.openNotificationDialog();
+  await settleAsyncWork();
+  const hidden = harness.app.state();
+  assert.equal(hidden.probabilityRuleHidden, true);
+  assert.equal(hidden.probabilityRuleInert, true);
+  assert.equal(hidden.probabilityRuleEnabled, "false");
+  assert.equal(hidden.probabilityTopicExpanded, "false");
+  assert.equal(hidden.notificationHorizonDisabled, true);
+  assert.equal(hidden.notificationThresholdDisabled, true);
+  assert.deepEqual(calls, []);
+  assert.equal(timers.count(220), 0);
+
+  harness.app.setNotificationBusy(true);
+  harness.app.setNotificationBusy(false);
+  assert.equal(
+    harness.app.state().notificationThresholdDisabled,
+    true,
+    "busy cleanup must not re-enable a hidden probability rule",
+  );
+
+  harness.app.toggleProbabilityTopic(true);
+  await settleAsyncWork();
+  const shown = harness.app.state();
+  assert.equal(shown.probabilityRuleHidden, false);
+  assert.equal(shown.probabilityRuleInert, false);
+  assert.equal(shown.probabilityTopicExpanded, "true");
+  assert.equal(shown.notificationHorizonDisabled, false);
+  assert.equal(shown.notificationThresholdDisabled, false);
+  assert.deepEqual(calls, ["/api/notification-preferences/baseline"]);
+  assert.equal(timers.count(220), 1);
+});
+
+test("a baseline response arriving after uncheck cannot recreate a personalized Atom link", async () => {
+  const timers = createManualTimers();
+  let releaseBaseline;
+  let baselineSignal;
+  const pendingBaseline = new Promise((resolve) => {
+    releaseBaseline = resolve;
+  });
+  const harness = await createHarness(async (url, options) => {
+    assert.equal(url, "/api/notification-preferences/baseline");
+    baselineSignal = options.signal;
+    return pendingBaseline;
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
+  });
+
+  harness.app.openNotificationDialog();
+  await Promise.resolve();
+  assert.equal(harness.app.state().notificationFeedBaselinePending, true);
+  harness.app.toggleProbabilityTopic(false);
+  assert.equal(baselineSignal.aborted, true);
+  assert.equal(harness.app.state().personalizedFeedUrl, "");
+  assert.equal(harness.app.state().personalizedFeedCopyDisabled, true);
+  assert.equal(harness.app.state().personalizedFeedOpenHref, null);
+
+  releaseBaseline(jsonResponse({
+    schema_version: "notification-feed-baseline/1",
+    cursor: 99,
+  }));
+  await settleAsyncWork();
+  const settled = harness.app.state();
+  assert.equal(settled.notificationFeedBaselinePending, false);
+  assert.equal(settled.personalizedFeedUrl, "");
+  assert.equal(settled.personalizedFeedCopyDisabled, true);
+  assert.equal(settled.personalizedFeedOpenHref, null);
+});
+
+test("a personalized Atom baseline timeout leaves an explicit unavailable state", async () => {
+  const timers = createManualTimers();
+  const harness = await createHarness(async (url, options) => {
+    assert.equal(url, "/api/notification-preferences/baseline");
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        reject(new Error("aborted"));
+      }, { once: true });
+    });
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
+  });
+
+  harness.app.openNotificationDialog();
+  await Promise.resolve();
+  assert.equal(timers.count(8_000), 1);
+  assert.equal(timers.runNext(8_000), true);
+  await settleAsyncWork();
+
+  const settled = harness.app.state();
+  assert.equal(settled.notificationFeedBaselinePending, false);
+  assert.equal(settled.personalizedFeedUrl, "");
+  assert.equal(settled.personalizedFeedCopyDisabled, true);
+  assert.equal(settled.personalizedFeedOpenHref, null);
+  assert.match(
+    harness.elements.get("#personalized-feed-status").textContent,
+    /链接不可用：请求超时/,
+  );
+});
+
+test("unchecking during calibration invalidates rendering but preserves the exact cache", async () => {
+  const timers = createManualTimers();
+  let releaseCalibration;
+  let calibrationSignal;
+  let calibrationCalls = 0;
+  const pendingCalibration = new Promise((resolve) => {
+    releaseCalibration = resolve;
+  });
+  const harness = await createHarness(async (url, options) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 5,
+      });
+    }
+    calibrationCalls += 1;
+    calibrationSignal = options.signal;
+    return pendingCalibration;
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  harness.app.openNotificationDialog();
+  assert.equal(timers.runNext(220), true);
+  await Promise.resolve();
+  assert.equal(calibrationCalls, 1);
+
+  harness.app.toggleProbabilityTopic(false);
+  const hidden = harness.app.state();
+  assert.equal(hidden.probabilityRuleHidden, true);
+  assert.equal(hidden.notificationThresholdDisabled, true);
+  assert.equal(calibrationSignal.aborted, false, "calibration remains available for exact-cache fill");
+  assert.equal(timers.count(220), 0);
+
+  releaseCalibration(calibrationResponse(24));
+  await settleAsyncWork();
+  assert.equal(
+    harness.app.state().notificationCalibrationHorizon,
+    null,
+    "a completed hidden-rule request must not render",
+  );
+
+  harness.app.toggleProbabilityTopic(true);
+  await settleAsyncWork();
+  assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
+  assert.equal(calibrationCalls, 1, "re-enabling renders the exact cached horizon");
+  assert.equal(timers.count(220), 0);
+});
+
 test("horizon changes keep the previous chart visible until the exact target is ready", async () => {
   const timers = createManualTimers();
   const calibrationCalls = [];
@@ -544,6 +800,7 @@ test("horizon changes keep the previous chart visible until the exact target is 
   }, {
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
   });
 
   harness.app.selectNotificationHorizon(24);
@@ -564,7 +821,13 @@ test("horizon changes keep the previous chart visible until the exact target is 
   assert.equal(pending.calibrationAxisUpper, previous.calibrationAxisUpper);
   assert.match(pending.calibrationSample, /仍显示 1 天（24 小时）.*切换到 28 小时/);
   assert.equal(pending.calibrationMarkerHidden, true);
-  assert.equal(pending.calibrationCrosshairHidden, true);
+  assert.equal(
+    pending.calibrationCrosshairHidden,
+    false,
+    "the selected threshold line remains visible on the retained chart",
+  );
+  assert.equal(pending.calibrationThresholdRangeHidden, false);
+  assert.equal(pending.calibrationThresholdPinHidden, false);
   assert.equal(pending.calibrationTooltipHidden, true);
 
   const hitArea = harness.elements.get("#calibration-hit-area");
@@ -631,6 +894,7 @@ test("a stale calibration response seeds only its exact horizon without replacin
   }, {
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
   });
 
   harness.app.selectNotificationHorizon(24);
@@ -685,6 +949,7 @@ test("a cold profile warm retries without leaving the dialog in a permanent erro
   }, {
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
   });
 
   harness.app.selectNotificationHorizon(24);
@@ -702,6 +967,44 @@ test("a cold profile warm retries without leaving the dialog in a permanent erro
   await settleAsyncWork();
   assert.equal(attempts, 2);
   assert.equal(harness.app.state().notificationCalibrationHorizon, 24);
+});
+
+test("unchecking cancels a pending calibration warm retry", async () => {
+  const timers = createManualTimers();
+  let calibrationCalls = 0;
+  const harness = await createHarness(async (url) => {
+    if (url === "/api/notification-preferences/baseline") {
+      return jsonResponse({
+        schema_version: "notification-feed-baseline/1",
+        cursor: 10,
+      });
+    }
+    calibrationCalls += 1;
+    return jsonResponse({
+      error: "notification_calibration_warming",
+      message: "warming",
+    }, {
+      ok: false,
+      status: 503,
+      headers: { "retry-after": "5" },
+    });
+  }, {
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
+  });
+
+  harness.app.selectNotificationHorizon(24);
+  harness.app.openNotificationDialog();
+  assert.equal(timers.runNext(220), true);
+  await settleAsyncWork();
+  assert.equal(calibrationCalls, 1);
+  assert.equal(timers.count(5_000), 1);
+
+  harness.app.toggleProbabilityTopic(false);
+  assert.equal(timers.count(5_000), 0);
+  assert.equal(timers.runNext(5_000), false);
+  assert.equal(calibrationCalls, 1);
 });
 
 test("warm retries and failures preserve an already rendered horizon", async () => {
@@ -735,6 +1038,7 @@ test("warm retries and failures preserve an already rendered horizon", async () 
   }, {
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
+    probabilityTopicChecked: true,
   });
 
   harness.app.selectNotificationHorizon(24);
@@ -820,6 +1124,31 @@ test("saved thresholds remain authoritative in restored and current page state",
   ));
   assert.equal(current.app.state().notificationThresholdValue, "70");
   assert.equal(current.app.state().notificationThresholdPristine, false);
+
+  const hiddenSaved = await createHarness(async () => jsonResponse({}), {
+    storedPreferences: {
+      topics: ["authority"],
+      preferences: {
+        schema_version: "notification-preferences/1",
+        horizon_hours: 24,
+        probability_threshold: 0.55,
+      },
+    },
+  });
+  assert.equal(hiddenSaved.app.restoreLocalNotificationPreferences(), true);
+  hiddenSaved.app.updateProbabilityRule();
+  assert.equal(hiddenSaved.app.state().probabilityRuleHidden, true);
+  assert.equal(hiddenSaved.app.state().notificationThresholdValue, "55");
+  hiddenSaved.app.toggleProbabilityTopic(true);
+  hiddenSaved.app.renderNotificationCalibration(normalizeCalibrationPayload(
+    await calibrationResponse(24, { suggestedThreshold: 0.8 }).json(),
+    24,
+  ));
+  assert.equal(
+    hiddenSaved.app.state().notificationThresholdValue,
+    "55",
+    "hiding a saved rule must not make its threshold pristine again",
+  );
 });
 
 test("an in-flight save freezes one threshold for the server and local mirror", async () => {
@@ -892,6 +1221,83 @@ test("an in-flight save freezes one threshold for the server and local mirror", 
   assert.equal(harness.elements.get("#notification-threshold").disabled, false);
 });
 
+test("the chart changes only the real threshold while dragging and keeps keyboard range semantics", async () => {
+  const harness = await createHarness(async () => jsonResponse({}), {
+    probabilityTopicChecked: true,
+  });
+  harness.app.selectNotificationHorizon(24);
+  harness.app.renderNotificationCalibration(normalizeCalibrationPayload(
+    await calibrationResponse(24, {
+      suggestedThreshold: 0.7,
+      displayLower: 0.1,
+      displayUpper: 0.9,
+    }).json(),
+    24,
+  ));
+  const hitArea = harness.elements.get("#calibration-hit-area");
+  hitArea.bounds = { left: 0, right: 100, width: 100, top: 0, bottom: 100, height: 100 };
+
+  harness.app.moveCalibrationPointer(100);
+  assert.equal(
+    harness.app.state().notificationThresholdValue,
+    "70",
+    "passive pointer movement must not impersonate the selected threshold",
+  );
+
+  harness.app.startCalibrationDrag(100);
+  assert.equal(harness.app.state().notificationThresholdValue, "80");
+  assert.equal(hitArea.hasPointerCapture(1), true);
+  harness.app.moveCalibrationPointer(0);
+  assert.equal(harness.app.state().notificationThresholdValue, "20");
+  harness.app.cancelCalibrationDrag();
+  assert.equal(hitArea.hasPointerCapture(1), false);
+  harness.app.moveCalibrationPointer(100);
+  assert.equal(
+    harness.app.state().notificationThresholdValue,
+    "20",
+    "pointercancel ends the drag and ignores later movement",
+  );
+  assert.equal(
+    harness.app.state().calibrationThresholdPinText,
+    "触发阈值 · 20%",
+  );
+  assert.equal(harness.app.state().calibrationCrosshairHidden, false);
+  assert.equal(harness.app.state().calibrationCrosshairHiddenAttribute, false);
+  assert.equal(harness.app.state().calibrationThresholdRangeHidden, false);
+  assert.equal(harness.app.state().calibrationThresholdRangeHiddenAttribute, false);
+
+  harness.app.startCalibrationDrag(100);
+  assert.equal(hitArea.hasPointerCapture(1), true);
+  harness.app.toggleProbabilityTopic(false);
+  assert.equal(hitArea.hasPointerCapture(1), false, "uncheck releases pointer capture");
+  harness.app.toggleProbabilityTopic(true);
+
+  harness.app.selectNotificationThreshold(99);
+  const outside = harness.app.state();
+  assert.equal(outside.notificationThresholdValue, "99");
+  assert.equal(outside.calibrationMarkerHidden, true);
+  assert.equal(outside.calibrationCrosshairHidden, false);
+  assert.equal(outside.calibrationCrosshairHiddenAttribute, false);
+  assert.equal(outside.calibrationCrosshairX, "580.00");
+  assert.equal(outside.calibrationCrosshairOutside, "true");
+  assert.equal(outside.calibrationThresholdRangeHidden, false);
+  assert.equal(outside.calibrationThresholdRangeHiddenAttribute, false);
+  assert.equal(outside.calibrationThresholdRangeWidth, "560.00");
+  assert.equal(outside.calibrationThresholdRangeOutside, "true");
+  assert.equal(outside.calibrationThresholdPinHidden, false);
+  assert.equal(outside.calibrationThresholdPinOutside, "true");
+  assert.equal(outside.calibrationThresholdPinText, "触发阈值 · 99% · 图外");
+  assert.equal(
+    harness.elements.get("#notification-threshold").getAttribute("aria-valuetext"),
+    "99%",
+  );
+  assert.equal(
+    Number(harness.elements.get("#notification-threshold").value),
+    99,
+    "the native form state retains an out-of-display-domain threshold",
+  );
+});
+
 test("a saved threshold outside the cropped chart is reported without edge snapping", async () => {
   const harness = await createHarness(async () => jsonResponse({}), {
     storedPreferences: {
@@ -935,7 +1341,14 @@ test("a saved threshold outside the cropped chart is reported without edge snapp
   const state = harness.app.state();
   assert.equal(state.notificationThresholdValue, "50");
   assert.equal(state.calibrationMarkerHidden, true);
-  assert.equal(state.calibrationCrosshairHidden, true);
+  assert.equal(state.calibrationCrosshairHidden, false);
+  assert.equal(state.calibrationCrosshairX, "580.00");
+  assert.equal(state.calibrationCrosshairOutside, "true");
+  assert.equal(state.calibrationThresholdRangeHidden, false);
+  assert.equal(state.calibrationThresholdRangeWidth, "560.00");
+  assert.equal(state.calibrationThresholdPinHidden, false);
+  assert.equal(state.calibrationThresholdPinText, "触发阈值 · 50% · 图外");
+  assert.equal(state.calibrationThresholdPinOutside, "true");
   assert.match(state.calibrationSummary, /50%.*10%–30%.*仍按 50% 触发/);
 });
 

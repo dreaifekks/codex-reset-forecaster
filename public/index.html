@@ -11,23 +11,35 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
-    <link rel="stylesheet" href="/styles.css?v=subscription-preferences-3">
+    <link rel="stylesheet" href="/styles.css?v=subscription-preferences-6">
     <script
       defer
       src="https://vibecafe.ai/telemetry/v1.js"
       data-vc-product-id="cms37qho500000bl2g4vpcf9b"
       data-vc-auth-key="vc_web__qNoqm01G9r2-8F-e7i7NC7xD4WmbnNBhsvDYfg59mk"
     ></script>
-    <script src="/app.js?v=subscription-preferences-3" type="module"></script>
+    <script src="/app.js?v=subscription-preferences-6" type="module"></script>
   </head>
   <body>
     <header class="site-header">
       <div class="header-inner">
-        <a class="brand" href="/" aria-label="Codex 重置预测首页">
-          <img class="brand-icon" src="/favicon.svg" alt="">
-          <span>Codex 重置预测</span>
-          <span class="beta-badge">实验版</span>
-        </a>
+        <div class="header-brand-group">
+          <a class="brand" href="/" aria-label="Codex 重置预测首页">
+            <img class="brand-icon" src="/favicon.svg" alt="">
+            <span>Codex 重置预测</span>
+            <span class="beta-badge">实验版</span>
+          </a>
+          <a
+            class="repository-link"
+            href="https://github.com/dreaifekks/codex-reset-forecaster"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="GitHub 仓库"
+            aria-label="在新标签页打开 GitHub 仓库"
+          >
+            <img class="repository-mark" src="/github-mark.svg" alt="">
+          </a>
+        </div>
         <nav aria-label="主导航">
           <a class="active" href="/">预测</a>
           <a href="/accuracy">历史结果</a>
@@ -50,6 +62,14 @@
               aria-haspopup="dialog"
               aria-controls="notification-dialog"
             >配置时间窗与概率门槛</button>
+            <span aria-hidden="true">·</span>
+            <a
+              class="feed-subscribe-button"
+              href="https://t.me/codex_reset_7day_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="在新标签页打开 Telegram Bot @codex_reset_7day_bot"
+            >Telegram Bot</a>
           </p>
         </div>
         <div class="heading-meta">
@@ -220,7 +240,7 @@
           <div>
             <p class="eyebrow">浏览器通知</p>
             <h2 id="notification-dialog-title">配置重置提醒</h2>
-            <p id="notification-dialog-description">只在所选时间窗内的重置概率超过门槛时发送概率提醒。</p>
+            <p id="notification-dialog-description">选择你关心的重置动态，并按需要设置概率门槛或订阅 Atom。</p>
           </div>
           <button class="signal-dialog-close" id="notification-close" type="button" aria-label="关闭订阅设置">
             <span aria-hidden="true">×</span>
@@ -228,23 +248,36 @@
         </header>
 
         <div class="subscription-dialog-body">
-          <fieldset class="notification-topics">
-            <legend>提醒内容</legend>
+          <fieldset class="notification-topics" aria-describedby="notification-topics-help">
+            <legend>选择提醒内容</legend>
+            <p class="notification-topics-help" id="notification-topics-help">选择你希望在这个浏览器中收到的动态。</p>
             <label>
               <input id="notification-topic-authority" type="checkbox" value="authority" checked>
-              <span><strong>权威动态</strong><small>新的官方或高权威重置时间信息</small></span>
+              <span>
+                <strong>预测时间有变化</strong>
+                <small>预计重置时间提前、延后或出现新的时间窗时提醒。</small>
+                <small class="notification-topic-channel">浏览器通知 · 也包含在稳定 Atom</small>
+              </span>
             </label>
             <label>
               <input id="notification-topic-outcome" type="checkbox" value="outcome" checked>
-              <span><strong>已确认重置</strong><small>重置 outcome 经证据确认后通知</small></span>
+              <span>
+                <strong>重置结果有更新</strong>
+                <small>重置确认发生，或确认结果后来有修正时提醒。</small>
+                <small class="notification-topic-channel">浏览器通知 · 也包含在稳定 Atom</small>
+              </span>
             </label>
             <label>
-              <input id="notification-topic-probability" type="checkbox" value="experimental_probability">
-              <span><strong>个性化概率提醒</strong><small>浏览器 Push 使用以下规则；需要明确勾选</small></span>
+              <input id="notification-topic-probability" type="checkbox" value="experimental_probability" aria-controls="notification-probability-rule" aria-expanded="false">
+              <span>
+                <strong>概率达到我的门槛</strong>
+                <small>所选时间窗内的重置概率首次超过门槛时提醒。</small>
+                <small class="notification-topic-channel">浏览器通知 · 可生成个性化 Atom</small>
+              </span>
             </label>
           </fieldset>
 
-          <section class="notification-rule" id="notification-probability-rule" aria-labelledby="notification-horizon-label" data-enabled="false">
+          <section class="notification-rule" id="notification-probability-rule" aria-labelledby="notification-horizon-label" data-enabled="false" hidden inert>
             <div class="notification-control-heading">
               <label id="notification-horizon-label" for="notification-horizon">提前观察时间窗</label>
               <output id="notification-horizon-value" for="notification-horizon">4 小时</output>
@@ -262,61 +295,61 @@
             <div class="notification-range-ticks" id="notification-horizon-ticks" aria-hidden="true"></div>
             <p class="notification-control-help" id="notification-horizon-help">1–12 小时逐小时，随后按 4 小时、12 小时和 1 天递增；个性化 Atom 也使用此时间窗。</p>
 
-            <div class="notification-control-heading probability-heading">
-              <label for="notification-threshold">触发概率门槛</label>
-              <output id="notification-threshold-value" for="notification-threshold">50%</output>
-            </div>
-            <input
-              class="notification-range probability-range"
-              id="notification-threshold"
-              type="range"
-              min="1"
-              max="99"
-              step="1"
-              value="50"
-              aria-describedby="notification-threshold-help"
-            >
-            <div class="probability-range-labels" aria-hidden="true">
-              <span>1%</span><span>25%</span><span>50%</span><span>75%</span><span>99%</span>
-            </div>
-            <p class="notification-control-help" id="notification-threshold-help">只有所选时间窗内的累计概率超过此门槛，才发送实验概率提醒。新设置会先采用分布均值 +2σ 的建议值；手动调整后不再覆盖。</p>
-
             <section class="calibration-card" aria-labelledby="calibration-title">
               <div class="calibration-heading">
                 <div>
                   <h3 id="calibration-title">历史概率分布与可靠度</h3>
                   <p>曲线聚焦均值 ±4σ 的历史预测分布；虚线位置显示超过该概率时的历史命中率。</p>
                 </div>
-                <span class="calibration-sample" id="calibration-sample">等待历史数据</span>
+                <div class="calibration-heading-values">
+                  <span class="calibration-sample" id="calibration-sample">等待历史数据</span>
+                  <label for="notification-threshold">触发门槛 <output id="notification-threshold-value" for="notification-threshold">50%</output></label>
+                </div>
               </div>
               <div class="calibration-plot" id="calibration-plot" data-state="idle">
+                <input
+                  class="calibration-threshold-input"
+                  id="notification-threshold"
+                  type="range"
+                  min="1"
+                  max="99"
+                  step="1"
+                  value="50"
+                  aria-label="触发概率门槛"
+                  aria-describedby="notification-threshold-help calibration-summary"
+                >
                 <svg viewBox="0 0 600 190" preserveAspectRatio="none" aria-hidden="true">
                   <defs>
                     <linearGradient id="calibration-fill" x1="0" x2="0" y1="0" y2="1">
                       <stop offset="0%" stop-color="#4ade80" stop-opacity=".42"></stop>
                       <stop offset="100%" stop-color="#4ade80" stop-opacity=".03"></stop>
                     </linearGradient>
+                    <linearGradient id="calibration-threshold-fill" x1="0" x2="1" y1="0" y2="0">
+                      <stop offset="0%" stop-color="#22c55e" stop-opacity=".04"></stop>
+                      <stop offset="100%" stop-color="#22c55e" stop-opacity=".14"></stop>
+                    </linearGradient>
                   </defs>
                   <line class="calibration-grid-line" x1="20" x2="580" y1="165" y2="165"></line>
                   <path class="calibration-area" id="calibration-area"></path>
+                  <rect class="calibration-threshold-range" id="calibration-threshold-range" x="20" y="24" width="0" height="141" hidden></rect>
                   <path class="calibration-curve" id="calibration-curve"></path>
-                  <line class="calibration-crosshair" id="calibration-crosshair" y1="18" y2="165" hidden></line>
+                  <line class="calibration-crosshair" id="calibration-crosshair" y1="24" y2="165" hidden></line>
                   <circle class="calibration-marker" id="calibration-marker" r="4" hidden></circle>
                   <rect class="calibration-hit-area" id="calibration-hit-area" x="20" y="18" width="560" height="147"></rect>
                 </svg>
+                <output class="calibration-threshold-pin" id="calibration-threshold-pin" for="notification-threshold" hidden>触发阈值 · 50%</output>
                 <div class="calibration-tooltip" id="calibration-tooltip" hidden></div>
                 <p class="calibration-state" id="calibration-state" role="status" aria-live="polite">选择时间窗后加载历史记录。</p>
                 <div class="calibration-axis" aria-hidden="true"><span id="calibration-axis-lower">0%</span><span>预测概率</span><span id="calibration-axis-upper">100%</span></div>
               </div>
               <p class="calibration-range-note" id="calibration-range-note">加载分布档案后，图表会保留均值 ±4σ，并从画面中裁掉区间外的离群窗口。</p>
+              <p class="notification-control-help" id="notification-threshold-help">图表横轴就是触发概率门槛：点击或拖动图表，也可聚焦后用键盘在完整 1%–99% 范围内调整。新设置先采用分布均值 +2σ 的建议值；手动调整后不再覆盖。</p>
               <p class="calibration-summary" id="calibration-summary" aria-live="polite">历史可靠度仅用于辅助选择门槛，不是模型置信度。</p>
             </section>
-          </section>
 
-          <aside class="feed-options" aria-labelledby="feed-options-title">
             <div class="personalized-feed">
               <strong id="feed-options-title">同一规则的个性化 Atom</strong>
-              <p>链接里的参数会随时间窗和概率门槛实时更新，可直接交给 RSS 阅读器。</p>
+              <p>这是独立于浏览器 Push 的参数化订阅；打开或订阅此链接不会启用 Push，链接会随上方时间窗和概率门槛更新。</p>
               <div class="personalized-feed-url-row">
                 <input id="personalized-feed-url" type="text" readonly aria-label="个性化 Atom 订阅链接">
                 <button class="notification-button secondary" id="personalized-feed-copy" type="button">复制链接</button>
@@ -324,14 +357,17 @@
               </div>
               <p id="personalized-feed-status" role="status" aria-live="polite"></p>
             </div>
+          </section>
+
+          <aside class="feed-options" aria-labelledby="public-feed-title">
             <div class="public-feed-row">
               <div>
-                <strong>公共 Atom 事件流</strong>
-                <p>公共源不应用个人时间窗或概率门槛。</p>
+                <strong id="public-feed-title">独立的公共 Atom</strong>
+                <p>无需勾选浏览器 Push。公共实验源固定使用 4 小时 / 50% 的观察规则，不是你的个人时间窗或门槛。</p>
               </div>
               <div class="feed-option-links">
-                <a href="/feed.xml">稳定事件流</a>
-                <a href="/feeds/experimental.xml">全部实验概率</a>
+                <a href="/feed.xml" target="_blank" rel="noopener noreferrer">稳定事件流（权威时间窗 + 确认与修正）</a>
+                <a href="/feeds/experimental.xml" target="_blank" rel="noopener noreferrer">稳定事件 + 公共 4h 实验观察</a>
               </div>
             </div>
           </aside>
