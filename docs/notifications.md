@@ -77,10 +77,17 @@ shared exactly-once transaction with this ledger.
 
 `emitted_at` means when the publication projection was appended. It is not source
 `published_at`, outcome `known_at`, the asserted future range, the adjudicated
-`occurred_time_range`, or a forecast `knowledge_cutoff`. Outcome delivery expires
-at `known_at + outcome_max_delivery_delay`; a revision discovered after that window
-still updates projection state but emits no event. Authority delivery expires at
-the earlier of the asserted range end and
+`occurred_time_range`, or a forecast `knowledge_cutoff`. A first outcome
+confirmation expires at the earlier of `known_at + outcome_max_delivery_delay`
+and `occurred_time_range.end + outcome_max_delivery_delay`, so reprocessing cannot
+turn a historical reset into a new notification. Later corrections, retractions,
+or verification withdrawals for an outcome that was actually published expire at
+their new `known_at + outcome_max_delivery_delay`. A revision that changes only
+lineage, exact references, or `known_at` updates projection state without emitting
+a correction; user-visible status, occurred range, label grade, or official-source
+content must materially change. Occurred-range identity uses its start, end, and
+precision; parser-only original text or timezone metadata cannot create a visible
+correction. Authority delivery expires at the earlier of the asserted range end and
 `emitted_at + authority_max_delivery_delay`. A consumer must discard an event whose
 `expires_at` has passed both before enqueueing and immediately before delivery.
 Expiry suppresses late delivery; it does not delete the audit event.
@@ -95,6 +102,9 @@ GET /api/notification-preferences/baseline
 
 Without `after`, it returns an empty `events` array and the latest cursor for safe
 first-subscription baselining. Only an explicit `after=0` requests retained history.
+Telegram dynamic subscriptions also persist their own stable-notification start
+time, so an event emitted before the subscription cannot be enqueued merely because
+an already-running global cursor request completes after the subscription command.
 An `after` cursor ahead of the ledger tail is rejected instead of being silently
 accepted. A paged response returns `events`, numeric `cursor`, string
 `next_cursor`, and `has_more`. Clients should persist the returned cursor only after
@@ -210,8 +220,12 @@ send; this limits egress but does not prevent subscription-capacity abuse.
 
 The Telegram service is not started by the default Compose profile. Enable its
 separate profile only after mounting a token-only file with mode `0400` or `0600`
-and setting at least one positive `TELEGRAM_ADMIN_USER_IDS` value. The bot is
-public in one-to-one chats: it accepts an ordinary user only when Telegram reports
+and setting at least one positive `TELEGRAM_ADMIN_USER_IDS` value. The bot formats
+timestamps in `Asia/Tokyo` by default, a fixed UTC+9 IANA zone. Every rendered
+timestamp carries its resolved offset (for example `UTC+9`); set
+`TELEGRAM_DISPLAY_TIME_ZONE` to another valid IANA zone to override it without
+changing canonical UTC storage. The bot is public in one-to-one chats: it accepts
+an ordinary user only when Telegram reports
 `chat.type=private` and `chat.id=from.id`, so users do not need to be pre-enrolled
 in an allowlist. Optional `TELEGRAM_BLOCKED_USER_IDS` is an abuse kill switch.
 Groups are disabled by default; an explicitly listed negative

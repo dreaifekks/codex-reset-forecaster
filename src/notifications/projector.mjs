@@ -52,6 +52,32 @@ function outcomeRow(item) {
   );
 }
 
+function outcomeDeliveryFingerprint(row) {
+  const source = row?.source;
+  const range = row?.occurred_time_range;
+  return hashLabel({
+    occurred_time_range: range ? {
+      start: range.start ?? null,
+      end: range.end ?? null,
+      precision: range.precision ?? null,
+    } : null,
+    label_grade: row?.label_grade ?? null,
+    source: source ? {
+      canonical_url: source.canonical_url ?? null,
+      display_handle: source.display_handle ?? null,
+      text: source.text ?? null,
+      published_at: source.published_at ?? null,
+    } : null,
+  });
+}
+
+function materialOutcomeTransition(previous, currentStatus, currentRow) {
+  return previous === null ||
+    previous.status !== currentStatus ||
+    outcomeDeliveryFingerprint(previous.row) !==
+      outcomeDeliveryFingerprint(currentRow);
+}
+
 function usableForecastSnapshot(snapshot, emittedAt) {
   const prediction = snapshot?.prediction;
   const readiness = snapshot?.readiness;
@@ -238,17 +264,39 @@ export function createPublicationProjector({
         previous?.revision === outcome.revision &&
         previous?.status === currentStatus
       ) continue;
+      if (!materialOutcomeTransition(previous, currentStatus, currentRow)) {
+        state.outcomes[outcome.record_id] = {
+          revision: outcome.revision,
+          status: currentStatus,
+          row: currentRow,
+          published_event_id: previous.published_event_id,
+        };
+        continue;
+      }
       const knownAtMs = Date.parse(outcome.data.known_at);
       const initializedMs = Date.parse(state.initialized_at);
       const isLive = Number.isFinite(knownAtMs) &&
         knownAtMs >= initializedMs &&
         knownAtMs <= Date.parse(emitted);
-      const expiresAt = Number.isFinite(knownAtMs)
+      const knownExpiresAt = Number.isFinite(knownAtMs)
         ? addMilliseconds(
             outcome.data.known_at,
             policy.outcome_max_delivery_delay_hours * 3_600_000,
           )
         : null;
+      const occurredEnd = currentRow?.occurred_time_range?.end ?? null;
+      const firstConfirmation = currentStatus === "eligible_confirmed" &&
+        !previous?.published_event_id;
+      const expiresAt = firstConfirmation && knownExpiresAt &&
+          Number.isFinite(Date.parse(occurredEnd))
+        ? earliestTimestamp(
+            knownExpiresAt,
+            addMilliseconds(
+              occurredEnd,
+              policy.outcome_max_delivery_delay_hours * 3_600_000,
+            ),
+          )
+        : knownExpiresAt;
       const isDeliverable = isLive && Date.parse(expiresAt) > Date.parse(emitted);
       let kind = null;
       if (currentStatus === "eligible_confirmed") {

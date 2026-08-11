@@ -672,8 +672,12 @@ uses bounded delivery deadlines, and stores subscription capabilities with mode
 
 The Telegram bot is also safe-disabled by service topology: it runs only under the
 `telegram` Compose profile. Create an ignored token-only file with mode `0400` or
-`0600`, then configure at least one positive `TELEGRAM_ADMIN_USER_IDS`. Ordinary
-users require no pre-registration: only their own private chats are accepted.
+`0600`, then configure at least one positive `TELEGRAM_ADMIN_USER_IDS`. Bot
+timestamps default to `Asia/Tokyo` (fixed UTC+9) and include an explicit
+resolved offset such as `UTC+9`; use `TELEGRAM_DISPLAY_TIME_ZONE` for a different
+valid IANA display zone. This affects presentation only; canonical records remain
+RFC 3339 UTC. Ordinary users require no pre-registration: only their own private
+chats are accepted.
 `TELEGRAM_ALLOWED_GROUP_CHAT_IDS` is optional, accepts only negative group IDs,
 and enables addressed read-only queries; group subscription changes are rejected.
 Use `TELEGRAM_BLOCKED_USER_IDS` only as an abuse kill switch. The per-user fixed

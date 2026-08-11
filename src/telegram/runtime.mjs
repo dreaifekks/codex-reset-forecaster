@@ -529,7 +529,10 @@ export class TelegramBotRuntime {
           ...this.config.staticExperimentalChatIds,
         ]);
     for (const subscription of Object.values(state.dynamic_subscriptions)) {
-      if (!experimental) {
+      if (
+        !experimental &&
+        Date.parse(event.emitted_at) > Date.parse(subscription.stable_since)
+      ) {
         recipients.add(subscription.chat_id);
       }
     }

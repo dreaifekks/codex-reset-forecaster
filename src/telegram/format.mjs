@@ -1,4 +1,5 @@
 const MESSAGE_LIMIT = 4_096;
+const DEFAULT_DISPLAY_TIME_ZONE = "Asia/Tokyo";
 
 function clean(value) {
   return String(value ?? "")
@@ -20,7 +21,24 @@ function percentage(value) {
     : "不可用";
 }
 
-function dateTime(value, timeZone = "UTC") {
+function timeZoneOffsetLabel(date, timeZone) {
+  const offset = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "longOffset",
+  }).formatToParts(date).find((part) => part.type === "timeZoneName")?.value;
+  const match = String(offset ?? "").match(
+    /^(?:GMT|UTC)(?:([+-])(\d{2}):?(\d{2}))?$/,
+  );
+  if (!match || !match[1]) return "UTC";
+  const hours = Number(match[2]);
+  const minutes = Number(match[3]);
+  if (hours === 0 && minutes === 0) return "UTC";
+  return `UTC${match[1]}${hours}${minutes === 0
+    ? ""
+    : `:${String(minutes).padStart(2, "0")}`}`;
+}
+
+function dateTime(value, timeZone = DEFAULT_DISPLAY_TIME_ZONE) {
   if (value === null || value === undefined || value === "") return "未知";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "未知";
@@ -32,7 +50,7 @@ function dateTime(value, timeZone = "UTC") {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  }).format(date)} ${timeZone}`;
+  }).format(date)} ${timeZoneOffsetLabel(date, timeZone)}`;
 }
 
 function safeUrl(value) {
@@ -136,7 +154,7 @@ export function formatProbabilityNotification({
   transition,
   input,
 }, {
-  timeZone = "UTC",
+  timeZone = DEFAULT_DISPLAY_TIME_ZONE,
   publicBaseUrl = null,
 } = {}) {
   const lines = [
@@ -170,7 +188,7 @@ function signedRatioPercentage(value) {
 }
 
 export function formatTraffic(payload, {
-  timeZone = "UTC",
+  timeZone = DEFAULT_DISPLAY_TIME_ZONE,
   botState = null,
   now = () => new Date(),
 } = {}) {
@@ -282,7 +300,10 @@ function runtimeResourceReasonLabel(reason) {
   return criticalLabels[value] ?? null;
 }
 
-export function formatOperationsAlert(alert, { timeZone = "UTC" } = {}) {
+export function formatOperationsAlert(
+  alert,
+  { timeZone = DEFAULT_DISPLAY_TIME_ZONE } = {},
+) {
   const level = clean(alert?.level ?? alert?.severity ?? "warning");
   const reasons = Array.isArray(alert?.reasons)
     ? alert.reasons.map(runtimeResourceReasonLabel)
@@ -343,7 +364,7 @@ function assertExactPrediction(health, prediction) {
 export function formatForecast({
   health,
   prediction,
-  timeZone = "UTC",
+  timeZone = DEFAULT_DISPLAY_TIME_ZONE,
   publicBaseUrl = null,
   detailed = false,
 }) {
@@ -404,7 +425,7 @@ function historyRow(result, index, timeZone) {
 
 export function formatHistory(results, {
   limit = 5,
-  timeZone = "UTC",
+  timeZone = DEFAULT_DISPLAY_TIME_ZONE,
 } = {}) {
   const selected = Array.isArray(results) ? results.slice(0, limit) : [];
   if (selected.length === 0) return "当前没有符合现行合同的确认重置记录。";
@@ -418,7 +439,10 @@ export function formatHistory(results, {
   ].join("\n"));
 }
 
-export function formatLastReset(results, { timeZone = "UTC" } = {}) {
+export function formatLastReset(
+  results,
+  { timeZone = DEFAULT_DISPLAY_TIME_ZONE } = {},
+) {
   if (!Array.isArray(results) || results.length === 0) {
     return "当前没有符合现行合同的确认重置记录。";
   }
@@ -429,8 +453,43 @@ export function formatLastReset(results, { timeZone = "UTC" } = {}) {
   ].join("\n"));
 }
 
+function outcomeEventSummary(event, timeZone) {
+  const report = event?.report;
+  const row = report?.outcome;
+  const range = row?.occurred_time_range;
+  if (!range?.start || !range?.end) return null;
+  const rangeText = `${dateTime(range.start, timeZone)} 至 ${
+    dateTime(range.end, timeZone)
+  }`;
+  const kind = report.correction_kind;
+  if (kind === "retracted") {
+    return `先前发布的重置记录（${rangeText}）已被新的 canonical revision 撤回。`;
+  }
+  if (kind === "verification_withdrawn") {
+    return `先前记录（${rangeText}）当前不再满足官方来源验证合同；这不等同于断言重置未发生。`;
+  }
+  if (kind === "corrected") {
+    return `确认记录已更新为 ${rangeText}，请以最新 revision 和官方来源为准。`;
+  }
+  if (kind === "confirmed") {
+    return `当前 outcome 合同确认发生时间为 ${rangeText}。`;
+  }
+  return null;
+}
+
+function authorityEventSummary(event, timeZone) {
+  const forecast = event?.report?.forecast;
+  const range = forecast?.authority_conditioning?.asserted_time_range;
+  if (!range?.start || !range?.end) return null;
+  return `权威来源提到 ${dateTime(range.start, timeZone)} 至 ${
+    dateTime(range.end, timeZone)
+  } 的未来重置时间窗；当前 4 小时概率 ${
+    percentage(forecast?.probabilities?.next_4h)
+  }。这不是已确认重置。`;
+}
+
 export function formatNotificationEvent(event, {
-  timeZone = "UTC",
+  timeZone = DEFAULT_DISPLAY_TIME_ZONE,
   publicBaseUrl = null,
 } = {}) {
   const report = event?.report ?? {};
@@ -440,7 +499,9 @@ export function formatNotificationEvent(event, {
       "Codex 重置通知",
   );
   const summary = clean(
-    report.summary ?? notification.body ?? event?.summary ?? event?.text ??
+    outcomeEventSummary(event, timeZone) ??
+      authorityEventSummary(event, timeZone) ?? report.summary ??
+      notification.body ?? event?.summary ?? event?.text ??
       event?.message ?? event?.data?.summary ?? "",
   );
   const occurredAt = event?.emitted_at ?? event?.occurred_at ?? event?.created_at ??

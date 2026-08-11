@@ -4,6 +4,7 @@ import path from "node:path";
 const DEFAULT_BOT_API_BASE = "https://api.telegram.org";
 const DEFAULT_FORECASTER_API_BASE = "http://reset-forecaster:8787";
 const DEFAULT_STATE_DIR = "/bot-data";
+const DEFAULT_DISPLAY_TIME_ZONE = "Asia/Tokyo";
 const TELEGRAM_ID = /^-?[0-9]+$/;
 
 function required(value, name) {
@@ -101,7 +102,8 @@ function negativeIds(value, name, options) {
 }
 
 function displayTimeZone(value) {
-  const timeZone = String(value ?? "UTC").trim() || "UTC";
+  const timeZone = String(value ?? DEFAULT_DISPLAY_TIME_ZONE).trim() ||
+    DEFAULT_DISPLAY_TIME_ZONE;
   try {
     new Intl.DateTimeFormat("en", { timeZone }).format(new Date(0));
   } catch {

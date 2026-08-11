@@ -212,6 +212,9 @@ The parameterized Atom URL includes an explicit current baseline cursor and keep
 entries for 24 hours independently of Web Push expiry. Web Push and
 Telegram are safe-disabled until
 their external key/token files and required administrator settings are configured.
+Bot timestamps default to the fixed `Asia/Tokyo` zone and show an explicit
+`UTC+9` suffix; deployments may override the IANA zone with
+`TELEGRAM_DISPLAY_TIME_ZONE`.
 Ordinary private-chat Bot users do not need an allowlist. Public Web Push also
 requires edge rate limiting plus an anti-automation challenge on subscription
 mutations; same-origin headers alone are not an abuse control. The first successful
@@ -276,7 +279,7 @@ and restart commands.
 
 ## Status
 
-Version `0.6.0` with canonical contract `reset-intel/0.2` implements the website,
+Version `0.6.1` with canonical contract `reset-intel/0.2` implements the website,
 notification read models, and operations monitoring while keeping the personal
 optimizer as a post-MVP TODO. Synthetic fixtures
 exercise the mechanics only. Any model or evaluation artifact created under the

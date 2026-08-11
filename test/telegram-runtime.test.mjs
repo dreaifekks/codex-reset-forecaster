@@ -1644,6 +1644,62 @@ test("event enqueue observes an unsubscribe committed while the HTTP poll is in 
   assert.equal(state.outbox.filter((job) => job.kind === "event").length, 0);
 });
 
+test("an in-flight event poll cannot replay an event from before subscription", async (t) => {
+  const { runtime, forecaster, stateStore } = await setupRuntime(t);
+  forecaster.eventBatches.push({ events: [], cursor: "0", hasMore: false });
+  await runtime.pollEventsOnce();
+
+  let resolveEvents;
+  forecaster.getNotificationEvents = () => new Promise((resolve) => {
+    resolveEvents = resolve;
+  });
+  const polling = runtime.pollEventsOnce();
+  while (!resolveEvents) await Promise.resolve();
+  await stateStore.commitUpdateBatch({
+    nextUpdateId: 1,
+    subscriptionChanges: [{ chatId: "10", value: { experimental: false } }],
+  });
+  resolveEvents({
+    events: [{
+      event_id: "pub_before_subscribe",
+      topic: "outcome",
+      experimental: false,
+      emitted_at: "2026-08-10T03:59:59Z",
+      expires_at: "2026-08-10T05:00:00Z",
+      report: { default_delivery: true },
+      notification: { title: "确认重置", body: "订阅前事件不应入队" },
+    }],
+    cursor: "1",
+    hasMore: false,
+  });
+  assert.deepEqual(await polling, { baseline: false, events: 1, jobs: 0 });
+
+  forecaster.getNotificationEvents = async () => ({
+    events: [{
+      event_id: "pub_after_subscribe",
+      topic: "outcome",
+      experimental: false,
+      emitted_at: "2026-08-10T04:00:01Z",
+      expires_at: "2026-08-10T05:00:00Z",
+      report: { default_delivery: true },
+      notification: { title: "确认重置", body: "订阅后事件应入队" },
+    }],
+    cursor: "2",
+    hasMore: false,
+  });
+  assert.deepEqual(await runtime.pollEventsOnce(), {
+    baseline: false,
+    events: 1,
+    jobs: 1,
+  });
+  const state = await stateStore.read();
+  assert.equal(state.dynamic_subscriptions["10"].stable_since, "2026-08-10T04:00:00.000Z");
+  assert.deepEqual(
+    state.outbox.filter((job) => job.kind === "event").map((job) => job.id),
+    ["event:pub_after_subscribe:10"],
+  );
+});
+
 test("unsubscribe cancels queued event jobs but keeps its command reply", async (t) => {
   const directory = await temporaryDirectory(t);
   const store = await new TelegramStateStore({
@@ -2385,6 +2441,32 @@ test("Telegram state upgrades the pre-operations state schema", async (t) => {
   assert.equal(state.operations_alert_baseline_initialized, false);
 });
 
+test("Telegram state backfills a stable subscription start for older v3 files", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const first = await new TelegramStateStore({
+    directory,
+    now: () => new Date("2026-08-10T04:00:00Z"),
+  }).init();
+  await first.commitUpdateBatch({
+    nextUpdateId: 1,
+    subscriptionChanges: [{ chatId: "20", value: { experimental: false } }],
+  });
+  const olderV3 = await first.read();
+  delete olderV3.dynamic_subscriptions["20"].stable_since;
+  await fs.writeFile(
+    path.join(directory, "state.json"),
+    `${JSON.stringify(olderV3)}\n`,
+    { mode: 0o600 },
+  );
+
+  const upgraded = await new TelegramStateStore({ directory }).init();
+  const state = await upgraded.read();
+  assert.equal(
+    state.dynamic_subscriptions["20"].stable_since,
+    state.dynamic_subscriptions["20"].updated_at,
+  );
+});
+
 test("Telegram state upgrades an older v2 file without cursor reset audit fields", async (t) => {
   const directory = await temporaryDirectory(t);
   const first = await new TelegramStateStore({ directory }).init();
@@ -2451,6 +2533,10 @@ test("Telegram state upgrades an older v2 file without cursor reset audit fields
   });
   assert.equal(state.dynamic_subscriptions["20"].probability_watch, null);
   assert.equal(state.dynamic_subscriptions["20"].generation, 1);
+  assert.equal(
+    state.dynamic_subscriptions["20"].stable_since,
+    olderV2.updated_at,
+  );
   assert.equal(state.forecast_input_baseline_initialized, false);
   assert.equal(state.outbox[0].subscription_generation, null);
   assert.equal(state.outbox[0].preferences_hash, null);

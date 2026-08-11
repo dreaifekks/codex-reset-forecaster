@@ -194,6 +194,7 @@ function validateSubscription(chatId, value) {
     }
     normalizeProbabilitySubscriptionState(value.probability_watch);
   }
+  iso(value.stable_since, "subscription.stable_since");
   iso(value.updated_at, "subscription.updated_at");
 }
 
@@ -376,6 +377,7 @@ export async function readTelegramStateFile(filePath) {
             : null,
           probability_watch: null,
           generation: 1,
+          stable_since: value?.updated_at ?? state.updated_at,
           updated_at: value?.updated_at ?? state.updated_at,
         },
       ]),
@@ -385,6 +387,9 @@ export async function readTelegramStateFile(filePath) {
       job.preferences_hash = null;
       job.outcome_revision_token = null;
     }
+  }
+  for (const value of Object.values(state.dynamic_subscriptions ?? {})) {
+    value.stable_since ??= value.updated_at ?? state.updated_at;
   }
   return assertTelegramState(state);
 }
@@ -593,6 +598,7 @@ export class TelegramStateStore {
               state.delivery_keys.push(job.dedupe_key);
             }
           }
+          const updatedAt = this.now().toISOString();
           state.dynamic_subscriptions[chatId] = {
             chat_id: chatId,
             stable: true,
@@ -601,7 +607,8 @@ export class TelegramStateStore {
               ? null
               : previous?.probability_watch ?? null,
             generation,
-            updated_at: this.now().toISOString(),
+            stable_since: previous?.stable_since ?? updatedAt,
+            updated_at: updatedAt,
           };
         }
       }

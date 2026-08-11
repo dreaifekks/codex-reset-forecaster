@@ -103,7 +103,10 @@ function outcomeItem({
   knownAt,
   occurredStart = "2026-08-10T01:00:00.000Z",
   occurredEnd = "2026-08-10T02:00:00.000Z",
+  occurredOriginalText = null,
+  sourceRevision = null,
 }) {
+  const verificationRevision = sourceRevision ?? 1;
   const outcome = {
     record_id: recordId,
     revision,
@@ -115,9 +118,13 @@ function outcomeItem({
         start: occurredStart,
         end: occurredEnd,
         precision: "hour",
+        original_text: occurredOriginalText,
       },
       verification: [{
-        observation_ref: { record_id: "observation-1", revision: 1 },
+        observation_ref: {
+          record_id: "observation-1",
+          revision: verificationRevision,
+        },
       }],
     },
   };
@@ -126,7 +133,16 @@ function outcomeItem({
     verification: status === "confirmed"
       ? outcome.data.verification[0]
       : null,
-    source: null,
+    source: sourceRevision === null ? null : {
+      record_id: "observation-1",
+      revision: sourceRevision,
+      data: {
+        canonical_url: "https://status.example/reset-1",
+        author: { display_handle: "status" },
+        content: { text: "Codex reset completed" },
+        published_at: "2026-08-01T02:01:00.000Z",
+      },
+    },
   };
 }
 
@@ -227,13 +243,67 @@ test("an old-cycle outcome learned later does not close a current probability wa
     }),
     emittedAt: "2026-08-10T00:16:00.000Z",
   });
-  assert.deepEqual(learned.events.map((event) => event.event_type), [
-    "outcome.reset_confirmed.v1",
-  ]);
+  assert.deepEqual(learned.events, []);
+  assert.equal(
+    store.states.get("publication-projection").outcomes["outcome-1"].revision,
+    1,
+    "a historical confirmation still advances projection state",
+  );
   assert.equal(
     store.states.get("publication-projection").probability_watch.active,
     true,
   );
+});
+
+test("lineage-only revisions of baseline outcomes stay silent", async () => {
+  const store = fakeStore();
+  const ledger = createPublicationLedger(store);
+  let outcomes = [outcomeItem({
+    revision: 1,
+    knownAt: "2026-08-01T02:05:00.000Z",
+    occurredStart: "2026-08-01T01:00:00.000Z",
+    occurredEnd: "2026-08-01T02:00:00.000Z",
+    occurredOriginalText: "August 1, 01:00-02:00 UTC",
+    sourceRevision: 1,
+  })];
+  const projector = createPublicationProjector({
+    store,
+    config: config(),
+    ledger,
+    loadOutcomes: async () => outcomes,
+  });
+  await projector.project({
+    snapshot: snapshot({
+      id: "p0",
+      issuedAt: "2026-08-10T00:00:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:00:00.000Z",
+  });
+
+  outcomes = [outcomeItem({
+    revision: 2,
+    knownAt: "2026-08-10T00:05:00.000Z",
+    occurredStart: "2026-08-01T01:00:00.000Z",
+    occurredEnd: "2026-08-01T02:00:00.000Z",
+    occurredOriginalText: "Aug 1 from 01:00 until 02:00 UTC",
+    sourceRevision: 2,
+  })];
+  const projected = await projector.project({
+    snapshot: snapshot({
+      id: "p1",
+      issuedAt: "2026-08-10T00:06:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:06:00.000Z",
+  });
+
+  assert.deepEqual(projected.events, []);
+  assert.equal(
+    store.states.get("publication-projection").outcomes["outcome-1"].revision,
+    2,
+  );
+  assert.equal((await ledger.all()).length, 0);
 });
 
 test("an already handled confirmation cannot reopen a stale high-probability cycle", async () => {
@@ -493,9 +563,9 @@ test("authority signals and outcome revisions publish stable default events", as
 
   outcomes = [outcomeItem({
     revision: 2,
-    knownAt: "2026-08-10T00:25:00.000Z",
+    knownAt: "2026-08-10T00:35:00.000Z",
   })];
-  const corrected = await projector.project({
+  const lineageOnly = await projector.project({
     snapshot: snapshot({
       id: "p4",
       issuedAt: "2026-08-10T00:40:00.000Z",
@@ -503,15 +573,20 @@ test("authority signals and outcome revisions publish stable default events", as
     }),
     emittedAt: "2026-08-10T00:41:00.000Z",
   });
-  assert.equal(corrected.events[0].event_type, "outcome.reset_corrected.v1");
-  assert.equal(corrected.events[0].supersedes_event_id, confirmed.events[0].event_id);
+  assert.deepEqual(lineageOnly.events, []);
+  assert.equal(
+    store.states.get("publication-projection").outcomes["outcome-1"]
+      .published_event_id,
+    confirmed.events[0].event_id,
+  );
 
   outcomes = [outcomeItem({
     revision: 3,
-    status: "rejected",
-    knownAt: "2026-08-10T00:25:00.000Z",
+    knownAt: "2026-08-10T00:45:00.000Z",
+    occurredStart: "2026-08-10T01:10:00.000Z",
+    occurredEnd: "2026-08-10T02:10:00.000Z",
   })];
-  const retracted = await projector.project({
+  const corrected = await projector.project({
     snapshot: snapshot({
       id: "p5",
       issuedAt: "2026-08-10T00:50:00.000Z",
@@ -519,16 +594,34 @@ test("authority signals and outcome revisions publish stable default events", as
     }),
     emittedAt: "2026-08-10T00:51:00.000Z",
   });
+  assert.equal(corrected.events[0].event_type, "outcome.reset_corrected.v1");
+  assert.equal(corrected.events[0].supersedes_event_id, confirmed.events[0].event_id);
+
+  outcomes = [outcomeItem({
+    revision: 4,
+    status: "rejected",
+    knownAt: "2026-08-10T00:55:00.000Z",
+    occurredStart: "2026-08-10T01:10:00.000Z",
+    occurredEnd: "2026-08-10T02:10:00.000Z",
+  })];
+  const retracted = await projector.project({
+    snapshot: snapshot({
+      id: "p6",
+      issuedAt: "2026-08-10T01:00:00.000Z",
+      probability: 0.1,
+    }),
+    emittedAt: "2026-08-10T01:01:00.000Z",
+  });
   assert.equal(retracted.events[0].event_type, "outcome.reset_retracted.v1");
   assert.equal(retracted.events[0].supersedes_event_id, corrected.events[0].event_id);
 
   outcomes = [outcomeItem({
-    revision: 4,
+    revision: 5,
     knownAt: "2026-08-10T00:25:00.000Z",
   })];
   const lateCorrection = await projector.project({
     snapshot: snapshot({
-      id: "p6",
+      id: "p7",
       issuedAt: "2026-08-11T01:00:00.000Z",
       probability: 0.1,
     }),
