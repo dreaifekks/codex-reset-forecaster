@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeTelegramLocale } from "./locale.mjs";
 
 const DEFAULT_BOT_API_BASE = "https://api.telegram.org";
 const DEFAULT_FORECASTER_API_BASE = "http://reset-forecaster:8787";
@@ -255,6 +256,7 @@ export async function loadTelegramConfig({ env = process.env } = {}) {
       operationsTokenFile ? path.resolve(operationsTokenFile) : null,
     ),
     operationsAlertsEnabled,
+    botLocale: normalizeTelegramLocale(env.TELEGRAM_BOT_LOCALE),
     displayTimeZone: displayTimeZone(env.TELEGRAM_DISPLAY_TIME_ZONE),
     longPollTimeoutSeconds: integer(
       env.TELEGRAM_LONG_POLL_TIMEOUT_SECONDS ?? 50,

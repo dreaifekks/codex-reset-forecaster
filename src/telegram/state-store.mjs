@@ -3,16 +3,18 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { hashLabel } from "../core/hash.mjs";
 import { normalizeTelegramId } from "./config.mjs";
+import { normalizeTelegramLocale } from "./locale.mjs";
 import {
   normalizeNotificationPreferences,
   normalizeProbabilitySubscriptionState,
   notificationPreferencesHash,
 } from "../notifications/subscription-policy.mjs";
 
-export const TELEGRAM_STATE_SCHEMA_VERSION = "telegram-bot-state/4";
+export const TELEGRAM_STATE_SCHEMA_VERSION = "telegram-bot-state/5";
 const LEGACY_STATE_SCHEMA_VERSION = "telegram-bot-state/1";
 const PREVIOUS_STATE_SCHEMA_VERSION = "telegram-bot-state/2";
 const PREVIOUS_SEMANTIC_DEDUPE_SCHEMA_VERSION = "telegram-bot-state/3";
+const PREVIOUS_LOCALELESS_STATE_SCHEMA_VERSION = "telegram-bot-state/4";
 const OUTBOX_STATUSES = new Set([
   "pending",
   "sending",
@@ -158,6 +160,7 @@ function defaultState(now) {
     created_at: timestamp,
     updated_at: timestamp,
     bot_id: null,
+    bot_locale: null,
     heartbeat_at: null,
     next_update_id: null,
     event_cursor: null,
@@ -305,6 +308,10 @@ export function assertTelegramState(state) {
       typeof state.bot_id !== "string" ||
       !/^[1-9][0-9]*$/.test(state.bot_id)
     )) ||
+    (state.bot_locale !== null && (
+      typeof state.bot_locale !== "string" ||
+      normalizeTelegramLocale(state.bot_locale) !== state.bot_locale
+    )) ||
     (state.next_update_id !== null &&
       (!Number.isSafeInteger(state.next_update_id) || state.next_update_id < 0)) ||
     (state.event_cursor !== null && eventCursor(state.event_cursor) !== state.event_cursor) ||
@@ -423,9 +430,13 @@ export async function readTelegramStateFile(filePath) {
         state.delivery_keys.push(previousKey, job.id, job.dedupe_key);
       }
     }
-    state.schema_version = TELEGRAM_STATE_SCHEMA_VERSION;
+    state.schema_version = PREVIOUS_LOCALELESS_STATE_SCHEMA_VERSION;
     state.delivery_keys = [...new Set(state.delivery_keys)]
       .slice(-DELIVERY_KEY_LIMIT);
+  }
+  if (state.schema_version === PREVIOUS_LOCALELESS_STATE_SCHEMA_VERSION) {
+    state.schema_version = TELEGRAM_STATE_SCHEMA_VERSION;
+    state.bot_locale = null;
   }
   return assertTelegramState(state);
 }
@@ -662,19 +673,31 @@ export class TelegramStateStore {
     });
   }
 
-  bindBotIdentity(value) {
+  bindBotIdentity(value, locale) {
     const botId = normalizeTelegramId(value, "Telegram bot id");
     if (botId.startsWith("-")) {
       throw new TypeError("Telegram bot id must be positive");
     }
+    if (typeof locale !== "string" || !locale.trim()) {
+      throw new TypeError("Telegram bot locale is required");
+    }
+    const botLocale = normalizeTelegramLocale(locale);
     return this.#mutate((state) => {
       if (state.bot_id !== null && state.bot_id !== botId) {
         throw new Error(
           `Telegram state belongs to bot ${state.bot_id}, not bot ${botId}`,
         );
       }
-      if (state.bot_id === botId) return NO_STATE_CHANGE;
+      if (state.bot_locale !== null && state.bot_locale !== botLocale) {
+        throw new Error(
+          `Telegram state belongs to locale ${state.bot_locale}, not ${botLocale}`,
+        );
+      }
+      if (state.bot_id === botId && state.bot_locale === botLocale) {
+        return NO_STATE_CHANGE;
+      }
       state.bot_id = botId;
+      state.bot_locale = botLocale;
     });
   }
 

@@ -12,7 +12,9 @@ import {
 import { TelegramBotRuntime } from "../src/telegram/runtime.mjs";
 import { TelegramStateStore } from "../src/telegram/state-store.mjs";
 import {
+  formatNotificationEvent,
   formatOperationsAlert,
+  formatProbabilityNotification,
   formatTraffic,
 } from "../src/telegram/format.mjs";
 import { checkTelegramHeartbeat } from "../src/telegram-healthcheck.mjs";
@@ -33,6 +35,7 @@ function runtimeConfig(overrides = {}) {
     staticNotificationChatIds: new Set(),
     staticExperimentalChatIds: new Set(),
     operationsAlertsEnabled: false,
+    botLocale: "zh-CN",
     displayTimeZone: "UTC",
     forecasterPublicBaseUrl: "https://forecast.example.test",
     longPollTimeoutSeconds: 1,
@@ -204,6 +207,9 @@ class FakeTelegram {
     this.updateBatches = [];
     this.sent = [];
     this.sendErrors = [];
+    this.commandMenuAttempts = [];
+    this.commandMenus = [];
+    this.commandMenuErrors = [];
   }
 
   async getWebhookInfo() {
@@ -212,6 +218,14 @@ class FakeTelegram {
 
   async getMe() {
     return { id: 1, username: "reset_test_bot" };
+  }
+
+  async setMyCommands(menu) {
+    this.commandMenuAttempts.push(menu);
+    const error = this.commandMenuErrors.shift();
+    if (error) throw error;
+    this.commandMenus.push(menu);
+    return true;
   }
 
   async getUpdates() {
@@ -692,6 +706,143 @@ test("report, history, lastreset, subscription, about, and help commands produce
   assert.deepEqual(state.dynamic_subscriptions, {});
 });
 
+test("English bot replies stay English and link to the English site", async (t) => {
+  const { runtime, telegram, forecaster, stateStore } = await setupRuntime(t, {
+    config: runtimeConfig({
+      botLocale: "en",
+      forecasterPublicBaseUrl: "https://forecast.example.test/en",
+    }),
+  });
+  forecaster.history = [{
+    status: "confirmed",
+    occurred_time_range: {
+      start: "2026-08-09T10:00:00Z",
+      end: "2026-08-09T11:00:00Z",
+      precision: "hour",
+    },
+    source: {
+      canonical_url: "https://x.com/example/status/1",
+      published_at: "2026-08-09T10:05:00Z",
+    },
+  }];
+  const commands = [
+    "/forecast",
+    "/report",
+    "/history 1",
+    "/lastreset",
+    "/subscribe probability 24h 60%",
+    "/subscription",
+    "/unsubscribe",
+    "/about",
+    "/help",
+    "/history 20",
+    "/unknown",
+  ];
+  telegram.updateBatches.push(commands.map((text, index) => ({
+    update_id: 100 + index,
+    message: { from: { id: 10 }, chat: { id: 10, type: "private" }, text },
+  })));
+
+  assert.deepEqual(await runtime.pollUpdatesOnce(), {
+    updates: commands.length,
+    jobs: commands.length,
+  });
+  const state = await stateStore.read();
+  assert.equal(state.bot_locale, "en");
+  assert.equal(state.outbox.length, commands.length);
+  for (const job of state.outbox) {
+    assert.doesNotMatch(job.text, /[\u3400-\u9fff]/u);
+  }
+  assert.match(state.outbox[0].text, /Codex reset forecast/);
+  assert.match(state.outbox[0].text, /https:\/\/forecast\.example\.test\/en\//);
+  assert.match(state.outbox[1].text, /Possible upcoming Codex reset report/);
+  assert.match(state.outbox[2].text, /1 most recent confirmed reset/);
+  assert.match(state.outbox[4].text, /personalized probability alert/i);
+  assert.match(state.outbox[5].text, /There is no dynamic subscription/);
+  assert.match(state.outbox[7].text, /independent, experimental/i);
+  assert.match(state.outbox[9].text, /Usage: \/history \[1-10\]/);
+  assert.match(state.outbox[10].text, /\/forecast/);
+});
+
+test("English event, probability, and operations notifications do not reuse Chinese copy", async () => {
+  const event = JSON.parse(await fs.readFile(
+    new URL("../examples/publication-event.json", import.meta.url),
+    "utf8",
+  ));
+  const eventText = formatNotificationEvent(event, {
+    locale: "en",
+    timeZone: "UTC",
+    publicBaseUrl: "https://codexreset.example/en",
+  });
+  const sparseEvents = [
+    ["forecast.authority_window.opened.v1", "authority"],
+    ["forecast.reset_watch.opened.v1", "experimental_probability"],
+    ["forecast.reset_watch.closed.v1", "experimental_probability"],
+    ["outcome.reset_confirmed.v1", "outcome"],
+    ["outcome.reset_corrected.v1", "outcome"],
+    ["outcome.reset_retracted.v1", "outcome"],
+    ["outcome.verification_withdrawn.v1", "outcome"],
+  ].map(([eventType, topic]) => formatNotificationEvent({
+    event_type: eventType,
+    topic,
+    emitted_at: "2026-08-10T04:01:00Z",
+    experimental: topic === "experimental_probability",
+    report: { default_delivery: topic !== "experimental_probability" },
+    title: "这是中文标题",
+    summary: "这是中文正文",
+    notification: {
+      title: "这是中文标题",
+      body: "这是中文正文",
+      url: "https://codexreset.example/accuracy",
+    },
+  }, {
+    locale: "en",
+    timeZone: "UTC",
+    publicBaseUrl: "https://codexreset.example/en",
+  }));
+  const probabilityText = formatProbabilityNotification({
+    preferences: {
+      schema_version: "notification-preferences/1",
+      horizon_hours: 24,
+      probability_threshold: 0.6,
+    },
+    transition: { probability: 0.72 },
+    input: {
+      issued_at: "2026-08-10T03:59:00Z",
+      emitted_at: "2026-08-10T04:00:00Z",
+    },
+  }, {
+    locale: "en",
+    timeZone: "UTC",
+    publicBaseUrl: "https://codexreset.example/en",
+  });
+  const operationsText = formatOperationsAlert({
+    level: "critical",
+    title: "源站容量进入严重压力",
+    summary: "触发信号：event_loop_lag_p95_620ms、event_loop_utilization_0.94",
+    reasons: [
+      "event_loop_lag_p95_620ms",
+      "event_loop_utilization_0.94",
+      "event_loop_lag_critical",
+    ],
+    observed_at: "2026-08-10T04:01:00Z",
+  }, { locale: "en", timeZone: "UTC" });
+
+  for (const text of [
+    eventText,
+    ...sparseEvents,
+    probabilityText,
+    operationsText,
+  ]) {
+    assert.doesNotMatch(text, /[\u3400-\u9fff]/u);
+  }
+  assert.match(eventText, /Codex reset confirmed/);
+  assert.match(eventText, /https:\/\/codexreset\.example\/en\/accuracy/);
+  assert.match(probabilityText, /Personalized probability alert/);
+  assert.match(probabilityText, /https:\/\/codexreset\.example\/en\//);
+  assert.match(operationsText, /Origin main thread remains blocked/);
+});
+
 test("private users can configure and inspect a probability subscription", async (t) => {
   const { runtime, telegram, stateStore } = await setupRuntime(t);
   telegram.updateBatches.push([{
@@ -1156,6 +1307,101 @@ test("long polling fails closed when a webhook is configured", async (t) => {
     logger: { error() {} },
   });
   await assert.rejects(runtime.initialize(), /webhook is configured/);
+});
+
+test("English bot registers separate private and group command menus", async (t) => {
+  const { telegram, stateStore } = await setupRuntime(t, {
+    config: runtimeConfig({ botLocale: "en" }),
+  });
+  assert.deepEqual(
+    telegram.commandMenuAttempts.map(({ scope }) => scope.type),
+    ["all_private_chats", "all_group_chats"],
+  );
+  assert.equal(telegram.commandMenus.length, 2);
+  const privateCommands = telegram.commandMenus[0].commands;
+  const groupCommands = telegram.commandMenus[1].commands;
+  assert.deepEqual(privateCommands.map(({ command }) => command), [
+    "start",
+    "forecast",
+    "report",
+    "history",
+    "lastreset",
+    "subscribe",
+    "subscription",
+    "unsubscribe",
+    "about",
+    "help",
+  ]);
+  assert.deepEqual(groupCommands.map(({ command }) => command), [
+    "start",
+    "forecast",
+    "report",
+    "history",
+    "lastreset",
+    "about",
+    "help",
+  ]);
+  for (const { description } of [...privateCommands, ...groupCommands]) {
+    assert.doesNotMatch(description, /[\u3400-\u9fff]/u);
+  }
+  assert.equal((await stateStore.read()).bot_locale, "en");
+});
+
+test("a command-menu API failure warns but does not block bot startup", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const telegram = new FakeTelegram();
+  telegram.commandMenuErrors.push(new Error("menu temporarily unavailable"));
+  const warnings = [];
+  const stateStore = new TelegramStateStore({ directory });
+  const runtime = new TelegramBotRuntime({
+    telegram,
+    forecaster: new FakeForecaster(),
+    stateStore,
+    config: runtimeConfig({ botLocale: "en" }),
+    logger: {
+      error() {},
+      warn(message) {
+        warnings.push(message);
+      },
+    },
+  });
+
+  await runtime.initialize();
+  assert.equal(telegram.commandMenuAttempts.length, 2);
+  assert.equal(telegram.commandMenus.length, 1);
+  assert.equal(telegram.commandMenus[0].scope.type, "all_group_chats");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /all_private_chats/);
+  const state = await stateStore.read();
+  assert.equal(state.bot_id, "1");
+  assert.equal(state.bot_locale, "en");
+  assert.ok(state.heartbeat_at);
+});
+
+test("an aborted command-menu request still aborts bot startup", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const telegram = new FakeTelegram();
+  telegram.commandMenuErrors.push(new TelegramApiError("aborted", {
+    code: "ABORTED",
+    retryable: false,
+  }));
+  const stateStore = new TelegramStateStore({ directory });
+  const runtime = new TelegramBotRuntime({
+    telegram,
+    forecaster: new FakeForecaster(),
+    stateStore,
+    config: runtimeConfig({ botLocale: "en" }),
+    logger: { error() {}, warn() {} },
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    runtime.initialize({ signal: controller.signal }),
+    (error) => error.code === "ABORTED",
+  );
+  assert.equal(telegram.commandMenuAttempts.length, 1);
+  assert.equal((await stateStore.read()).heartbeat_at, null);
 });
 
 test("event polling establishes a no-replay baseline and gates experimental delivery", async (t) => {
@@ -1858,7 +2104,7 @@ test("dispatch rechecks the current chat allowlist before sending a durable job"
 test("a bot data volume is bound to one Telegram bot identity", async (t) => {
   const directory = await temporaryDirectory(t);
   const first = await new TelegramStateStore({ directory }).init();
-  await first.bindBotIdentity(1);
+  await first.bindBotIdentity(1, "zh-CN");
   const telegram = new FakeTelegram();
   telegram.getMe = async () => ({ id: 2, username: "another_bot" });
   const runtime = new TelegramBotRuntime({
@@ -1902,6 +2148,42 @@ test("Telegram HTTP body reads stay bounded by timeout and byte limit", async ()
   await assert.rejects(
     oversized.getMe(),
     (error) => error.code === "INVALID_RESPONSE",
+  );
+});
+
+test("Telegram setMyCommands sends only the validated command and scope payload", async () => {
+  let request = null;
+  const client = new TelegramClient({
+    token: "123456:abcdefghijklmnopqrstuvwxyz_ABCD",
+    apiBase: "https://telegram.example.test",
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), options };
+      return new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const commands = [{ command: "forecast", description: "Show the forecast" }];
+  assert.equal(await client.setMyCommands({
+    commands,
+    scope: { type: "all_private_chats", ignored: "not forwarded" },
+  }), true);
+  assert.match(request.url, /\/setMyCommands$/);
+  assert.equal(
+    request.options.headers["content-type"],
+    "application/json; charset=utf-8",
+  );
+  assert.deepEqual(JSON.parse(request.options.body), {
+    commands,
+    scope: { type: "all_private_chats" },
+  });
+  assert.throws(
+    () => client.setMyCommands({
+      commands: [{ command: "Traffic", description: "invalid" }],
+      scope: { type: "all_private_chats" },
+    }),
+    /Invalid Telegram command menu/,
   );
 });
 
@@ -2493,7 +2775,8 @@ test("Telegram state upgrades the pre-operations state schema", async (t) => {
   );
   const upgraded = await new TelegramStateStore({ directory }).init();
   const state = await upgraded.read();
-  assert.equal(state.schema_version, "telegram-bot-state/4");
+  assert.equal(state.schema_version, "telegram-bot-state/5");
+  assert.equal(state.bot_locale, null);
   assert.equal(state.operations_alert_cursor, null);
   assert.equal(state.operations_alert_baseline_initialized, false);
 });
@@ -2559,7 +2842,8 @@ test("Telegram v3 migration seeds semantic keys from delivered event jobs", asyn
     now: () => new Date("2026-08-13T05:50:00Z"),
   }).init();
   const migrated = await upgraded.read();
-  assert.equal(migrated.schema_version, "telegram-bot-state/4");
+  assert.equal(migrated.schema_version, "telegram-bot-state/5");
+  assert.equal(migrated.bot_locale, null);
   assert.match(migrated.outbox[0].dedupe_key, /^semantic:event:/);
   assert.ok(migrated.delivery_keys.includes(migrated.outbox[0].dedupe_key));
 
@@ -2637,7 +2921,8 @@ test("Telegram state upgrades an older v2 file without cursor reset audit fields
   assert.equal(state.operations_alert_generation, 0);
   assert.equal(state.last_operations_delivery_failure_at, null);
   assert.equal(state.last_operations_delivery_failure_error, null);
-  assert.equal(state.schema_version, "telegram-bot-state/4");
+  assert.equal(state.schema_version, "telegram-bot-state/5");
+  assert.equal(state.bot_locale, null);
   assert.deepEqual(state.dynamic_subscriptions["20"].probability_preferences, {
     schema_version: "notification-preferences/1",
     horizon_hours: 4,

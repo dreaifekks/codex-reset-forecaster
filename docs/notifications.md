@@ -179,17 +179,19 @@ separate forecast-input stream:
   state machine. Only an upward crossing produces a push; baseline and close
   transitions are silent. Subscriptions and delivery cursors are rebuildable
   state, not canonical intelligence.
-- The Telegram bot can show `/forecast`, `/report`, `/history`, and `/lastreset`.
+- Each localized Telegram bot can show `/forecast`, `/report`, `/history`, and
+  `/lastreset`.
   `/subscribe` enables stable notifications; `/subscribe probability 24h 60%`
   sets the same personalized rule, `/subscribe experimental` is a `4h/50%`
   compatibility alias, and `/subscription` shows the current rule. Dynamic users
   consume forecast inputs, not the fixed global experimental ledger. The first
   forecast-input poll and every rule/cursor reset are silent; only an upward
   crossing queues a message, and close/rearm is silent.
-  Its persistent `telegram-bot-state/4` outbox deduplicates stable event jobs by
-  recipient, topic, and visible title/body after removing the generated send-time
-  footer, while retaining `event_id` as a second exact key. Both keys survive a
-  restart, so a regenerated event ID cannot resend the same visible message.
+  Each Bot's persistent `telegram-bot-state/5` outbox independently deduplicates
+  stable event jobs by recipient, topic, and visible title/body after removing the
+  generated send-time footer, while retaining `event_id` as a second exact key.
+  Both keys survive a restart, so a regenerated event ID cannot resend the same
+  visible message through that Bot.
 
 The website advertises the stable feed with Atom autodiscovery metadata. Its
 notification configuration dialog controls the same horizon/threshold pair for
@@ -266,29 +268,52 @@ Web Push remains an intentional deployment blocker. The application accepts only
 known browser-push service hostnames and revalidates stored endpoints before every
 send; this limits egress but does not prevent subscription-capacity abuse.
 
-The Telegram service is not started by the default Compose profile. Enable its
-separate profile only after mounting a token-only file with mode `0400` or `0600`
-and setting at least one positive `TELEGRAM_ADMIN_USER_IDS` value. The bot formats
+The Telegram services are not started by the default Compose profile. The existing
+`telegram` profile starts the Chinese `reset-forecaster-bot`; the separate
+`telegram-en` profile adds `reset-forecaster-bot-en`, preserving the old
+Chinese-only startup path. Both read the same core API, but each has its own
+BotFather token, state volume, update cursor, subscriptions, outbox, and
+delivery-deduplication history. The Chinese service explicitly uses
+`TELEGRAM_BOT_LOCALE=zh-CN`, preserves
+the existing `TELEGRAM_BOT_DATA_VOLUME`, and links to the root public URL. The
+English service explicitly uses `TELEGRAM_BOT_LOCALE=en`, links to `/en`, and uses
+the separate `TELEGRAM_EN_BOT_DATA_VOLUME`. Never mount one bot-data volume into
+both services or reuse it with the other token. A new English volume silently
+baselines the current publication and forecast-input tails, so enabling
+`@codex_reset_7day_en_bot` cannot replay an old notification backlog. Version 5
+binds each volume to both the Telegram bot ID and its configured locale, so a
+token/locale mismatch fails closed instead of silently switching a queued outbox's
+language.
+
+Enable each profile only after mounting its token-only file with exact mode `0400`
+or `0600` and setting at least one positive administrator ID through
+`TELEGRAM_ADMIN_USER_IDS` or `TELEGRAM_EN_ADMIN_USER_IDS`. Enable both profiles for
+the bilingual deployment. The Bots format
 timestamps in `Asia/Tokyo` by default, a fixed UTC+9 IANA zone. Every rendered
 timestamp carries its resolved offset (for example `UTC+9`); set
-`TELEGRAM_DISPLAY_TIME_ZONE` to another valid IANA zone to override it without
-changing canonical UTC storage. The bot is public in one-to-one chats: it accepts
-an ordinary user only when Telegram reports
-`chat.type=private` and `chat.id=from.id`, so users do not need to be pre-enrolled
-in an allowlist. Optional `TELEGRAM_BLOCKED_USER_IDS` is an abuse kill switch.
-Groups are disabled by default; an explicitly listed negative
-`TELEGRAM_ALLOWED_GROUP_CHAT_IDS` chat is read-only, requires commands addressed
-to the bot username, and cannot change subscriptions. Static notification lists
-may contain only administrators' private-chat IDs or explicitly allowed groups.
+`TELEGRAM_DISPLAY_TIME_ZONE` and `TELEGRAM_EN_DISPLAY_TIME_ZONE` to valid IANA zones
+to override either presentation without changing canonical UTC storage. Both Bots
+are public in one-to-one chats: they accept an ordinary user only when Telegram
+reports `chat.type=private` and `chat.id=from.id`, so users do not need to be
+pre-enrolled in an allowlist. The `TELEGRAM_BLOCKED_USER_IDS` and
+`TELEGRAM_EN_BLOCKED_USER_IDS` values are independent abuse kill switches. Groups
+are disabled by default; explicitly listed negative group IDs are read-only,
+require commands addressed to the corresponding Bot username, and cannot change
+subscriptions. The Chinese `TELEGRAM_*_CHAT_IDS` and English
+`TELEGRAM_EN_*_CHAT_IDS` static notification lists are isolated and may contain
+only that instance's administrators or explicitly allowed groups.
 
 `/traffic` and capacity alerts are operations-plane data, not publication events.
 They require an independent bearer token read from a regular `0400` or `0600`
 file, are available only in an administrator's own private chat, and use a
 separate durable cursor/outbox job class. Ordinary `/subscribe` state cannot
-authorize these alerts. Never put either token in `.env`, checked-in JSON, command
-output, health responses, or logs. Run exactly one bot replica against a bot-data
-volume. State is bound to the Telegram bot ID, but the JSON state file deliberately
-has a single writer and is not a multi-replica coordination database.
+authorize these alerts. English alert polling has its own
+`TELEGRAM_EN_OPERATIONS_ALERTS_ENABLED` switch and defaults to `false`, preventing
+duplicate administrator alerts unless it is deliberately enabled. Never put the
+operations token or either BotFather token in `.env`, checked-in JSON, command
+output, health responses, or logs. Run exactly one replica against each bot-data
+volume. State is bound to the Telegram bot ID and locale, but each JSON state file
+deliberately has a single writer and is not a multi-replica coordination database.
 
 See `examples/publication-event.json` for a stable outcome event. It is validated
 separately from canonical examples by `node scripts/validate.mjs`.

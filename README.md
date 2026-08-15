@@ -131,8 +131,9 @@ The first website release covers:
 - immutable prediction history, internal evaluation for promotion, and a public
   history page containing only confirmed reset results and their sources;
 - append-only publication events consumed by the default Atom feed, optional Web
-  Push, and one public role-aware Telegram bot, with experimental probability alerts kept
-  outside default delivery.
+  Push, and separate Chinese and English public Telegram bots that share the same
+  forecaster while keeping delivery state isolated, with experimental probability
+  alerts kept outside default delivery.
 
 The MVP does not include user accounts, personal five-hour or weekly quota state,
 reset-voucher inventory, or personalized voucher recommendations. Those remain a
@@ -207,8 +208,8 @@ The public stable Atom feed is `/feed.xml`; `/feeds/experimental.xml` explicitly
 adds the shared model probability-watch events. The page's notification dialog can
 also generate a parameterized `/feeds/probability.xml` URL and apply the same
 versioned `1..168h` horizon plus `1%..99%` threshold rule to opt-in Web Push and
-Telegram (`/subscribe probability 24h 60%`; `/subscribe experimental` remains a
-`4h/50%` compatibility alias).
+either localized Telegram Bot (`/subscribe probability 24h 60%`;
+`/subscribe experimental` remains a `4h/50%` compatibility alias).
 Historical threshold reliability is shown separately from forecast probability and
 uses strict-above-threshold samples, a per-point 20-window gate, and Wilson
 intervals; it is labeled preliminary until the configured global sample gates pass.
@@ -220,12 +221,17 @@ standard deviations, rounded up to a real one-percentage-point threshold. Saved 
 manually edited rules are never overwritten, and the channel-neutral `4h/50%`
 compatibility default remains unchanged.
 The parameterized Atom URL includes an explicit current baseline cursor and keeps
-entries for 24 hours independently of Web Push expiry. Web Push and
-Telegram are safe-disabled until
-their external key/token files and required administrator settings are configured.
-Bot timestamps default to the fixed `Asia/Tokyo` zone and show an explicit
-`UTC+9` suffix; deployments may override the IANA zone with
-`TELEGRAM_DISPLAY_TIME_ZONE`.
+entries for 24 hours independently of Web Push expiry. Web Push and both Telegram
+Bots are safe-disabled until their external key/token files and required
+administrator settings are configured. The existing Chinese
+[`@codex_reset_7day_bot`](https://t.me/codex_reset_7day_bot) keeps its current
+delivery volume; the English
+[`@codex_reset_7day_en_bot`](https://t.me/codex_reset_7day_en_bot) uses an
+independent token and volume and links to `/en`. A new English volume silently
+baselines the current streams and does not replay old notifications. Bot timestamps
+default to the fixed `Asia/Tokyo` zone and show an explicit `UTC+9` suffix;
+deployments may override each instance's IANA zone with
+`TELEGRAM_DISPLAY_TIME_ZONE` or `TELEGRAM_EN_DISPLAY_TIME_ZONE`.
 Ordinary private-chat Bot users do not need an allowlist. Public Web Push also
 requires edge rate limiting plus an anti-automation challenge on subscription
 mutations; same-origin headers alone are not an abuse control. The first successful

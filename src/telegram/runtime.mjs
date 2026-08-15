@@ -24,6 +24,11 @@ import {
   formatUnavailableForecast,
   parseTelegramCommand,
 } from "./format.mjs";
+import {
+  normalizeTelegramLocale,
+  telegramCommandMenus,
+  telegramText,
+} from "./locale.mjs";
 
 function parseProbabilitySubscription(argument) {
   const normalized = String(argument ?? "").trim().toLowerCase();
@@ -190,7 +195,29 @@ export class TelegramBotRuntime {
     this.now = now;
     this.random = random;
     this.sleep = sleep;
+    this.botLocale = normalizeTelegramLocale(config.botLocale);
     this.botUsername = null;
+  }
+
+  #tr(chinese, english) {
+    return telegramText(this.botLocale, chinese, english);
+  }
+
+  async #registerCommandMenus(signal) {
+    if (typeof this.telegram.setMyCommands !== "function") return;
+    for (const { scope, commands } of telegramCommandMenus(this.botLocale)) {
+      try {
+        await this.telegram.setMyCommands({ commands, scope, signal });
+      } catch (error) {
+        if (error?.code === "ABORTED" && signal?.aborted) throw error;
+        this.logger.warn?.(
+          `telegram command menu registration failed (${scope.type}): ${safeMessage(
+            error,
+            [this.config.token, this.config.operationsToken],
+          )}`,
+        );
+      }
+    }
   }
 
   async initialize({ signal = null } = {}) {
@@ -203,8 +230,9 @@ export class TelegramBotRuntime {
       );
     }
     const me = await this.telegram.getMe({ signal });
-    await this.stateStore.bindBotIdentity(me?.id);
+    await this.stateStore.bindBotIdentity(me?.id, this.botLocale);
     this.botUsername = typeof me?.username === "string" ? me.username : null;
+    await this.#registerCommandMenus(signal);
     await this.stateStore.heartbeat();
     this.#initialized = true;
   }
@@ -270,7 +298,7 @@ export class TelegramBotRuntime {
         health.serving_ready !== true ||
         health.synthetic_only === true ||
         !health.current_prediction_ref?.snapshot_url
-      ) return formatUnavailableForecast(health);
+      ) return formatUnavailableForecast(health, { locale: this.botLocale });
       const prediction = await this.forecaster.getExactSnapshot(
         health.current_prediction_ref.snapshot_url,
         { signal },
@@ -281,16 +309,23 @@ export class TelegramBotRuntime {
         detailed,
         timeZone: this.config.displayTimeZone,
         publicBaseUrl: this.config.forecasterPublicBaseUrl,
+        locale: this.botLocale,
       });
     } catch (error) {
       if (error?.code === "ABORTED") throw error;
-      return "暂时无法读取当前预测，请稍后再试。";
+      return this.#tr(
+        "暂时无法读取当前预测，请稍后再试。",
+        "The current forecast is temporarily unavailable. Please try again later.",
+      );
     }
   }
 
   async #currentTrafficText(signal) {
     if (!this.config.operationsToken) {
-      return "运维监控尚未配置，无法读取请求量与容量状态。";
+      return this.#tr(
+        "运维监控尚未配置，无法读取请求量与容量状态。",
+        "Operations monitoring is not configured, so request and capacity status is unavailable.",
+      );
     }
     try {
       const [traffic, botState] = await Promise.all([
@@ -301,10 +336,14 @@ export class TelegramBotRuntime {
         timeZone: this.config.displayTimeZone,
         botState,
         now: this.now,
+        locale: this.botLocale,
       });
     } catch (error) {
       if (error?.code === "ABORTED") throw error;
-      return "暂时无法读取请求量与容量状态，请稍后再试。";
+      return this.#tr(
+        "暂时无法读取请求量与容量状态，请稍后再试。",
+        "Request and capacity status is temporarily unavailable. Please try again later.",
+      );
     }
   }
 
@@ -326,7 +365,10 @@ export class TelegramBotRuntime {
               id: `command:${update.update_id}`,
               kind: "command",
               chatId: authorization.chatId,
-              text: `请求过于频繁，请在 ${this.config.commandRateWindowSeconds} 秒后再试。`,
+              text: this.#tr(
+                `请求过于频繁，请在 ${this.config.commandRateWindowSeconds} 秒后再试。`,
+                `Too many requests. Please try again after ${this.config.commandRateWindowSeconds} seconds.`,
+              ),
             },
             subscriptionChange: null,
           }
@@ -338,7 +380,10 @@ export class TelegramBotRuntime {
     let adminOnlyReply = false;
     if (command.name === "forecast" || command.name === "report") {
       if (command.argument) {
-        text = `用法：/${command.name}`;
+        text = this.#tr(
+          `用法：/${command.name}`,
+          `Usage: /${command.name}`,
+        );
       } else {
         text = await this.#currentForecastText(
           command.name === "report",
@@ -348,34 +393,45 @@ export class TelegramBotRuntime {
     } else if (command.name === "history") {
       const limit = command.argument === "" ? 5 : Number(command.argument);
       if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
-        text = "用法：/history [1-10]";
+        text = this.#tr("用法：/history [1-10]", "Usage: /history [1-10]");
       } else {
         try {
           text = formatHistory(await this.forecaster.getHistory({ signal }), {
             limit,
             timeZone: this.config.displayTimeZone,
+            locale: this.botLocale,
           });
         } catch (error) {
           if (error?.code === "ABORTED") throw error;
-          text = "暂时无法读取历史记录，请稍后再试。";
+          text = this.#tr(
+            "暂时无法读取历史记录，请稍后再试。",
+            "Reset history is temporarily unavailable. Please try again later.",
+          );
         }
       }
     } else if (command.name === "lastreset") {
       if (command.argument) {
-        text = "用法：/lastreset";
+        text = this.#tr("用法：/lastreset", "Usage: /lastreset");
       } else {
         try {
           text = formatLastReset(await this.forecaster.getHistory({ signal }), {
             timeZone: this.config.displayTimeZone,
+            locale: this.botLocale,
           });
         } catch (error) {
           if (error?.code === "ABORTED") throw error;
-          text = "暂时无法读取最近重置记录，请稍后再试。";
+          text = this.#tr(
+            "暂时无法读取最近重置记录，请稍后再试。",
+            "The latest reset record is temporarily unavailable. Please try again later.",
+          );
         }
       }
     } else if (command.name === "subscribe") {
       if (authorization.scope !== "private") {
-        text = "订阅只属于你的私聊，请打开 Bot 私聊后再使用 /subscribe。";
+        text = this.#tr(
+          "订阅只属于你的私聊，请打开 Bot 私聊后再使用 /subscribe。",
+          "Subscriptions belong to your private chat. Open a private chat with the bot and use /subscribe there.",
+        );
       } else {
         let preferences = null;
         try {
@@ -386,44 +442,67 @@ export class TelegramBotRuntime {
           preferences = null;
         }
         if (command.argument !== "" && preferences === null) {
-          text = "用法：/subscribe 或 /subscribe probability 24h 60%（范围 1—168h、1%—99%）";
+          text = this.#tr(
+            "用法：/subscribe 或 /subscribe probability 24h 60%（范围 1—168h、1%—99%）",
+            "Usage: /subscribe or /subscribe probability 24h 60% (range: 1-168h and 1%-99%)",
+          );
         } else {
           subscriptionChange = {
             chatId,
             value: { probability_preferences: preferences },
           };
           if (preferences === null) {
-            text = "已订阅稳定通知；概率提醒未开启。使用 /subscribe probability 24h 60% 可设置规则。";
+            text = this.#tr(
+              "已订阅稳定通知；概率提醒未开启。使用 /subscribe probability 24h 60% 可设置规则。",
+              "Stable notifications are enabled; probability alerts are off. Use /subscribe probability 24h 60% to set a rule.",
+            );
           } else {
             const threshold = `${(preferences.probability_threshold * 100).toFixed(
               Number.isInteger(preferences.probability_threshold * 100) ? 0 : 1,
             )}%`;
             const legacy = command.argument.toLowerCase() === "experimental";
-            text = [
-              "已订阅稳定通知并设置个性化概率提醒。",
-              `规则：未来 ${preferences.horizon_hours} 小时概率严格超过 ${threshold} 时提醒。`,
-              "当前值只建立静默基线，不补发历史提醒。",
-              ...(legacy
-                ? ["/subscribe experimental 是兼容别名，对应默认 4h/50% 规则。"]
-                : []),
-            ].join("\n");
+            text = this.botLocale === "en"
+              ? [
+                  "Stable notifications and a personalized probability alert are enabled.",
+                  `Rule: notify when the next ${preferences.horizon_hours}-hour probability is strictly above ${threshold}.`,
+                  "The current value establishes a silent baseline; earlier alerts are not replayed.",
+                  ...(legacy
+                    ? ["/subscribe experimental is a compatibility alias for the default 4h/50% rule."]
+                    : []),
+                ].join("\n")
+              : [
+                  "已订阅稳定通知并设置个性化概率提醒。",
+                  `规则：未来 ${preferences.horizon_hours} 小时概率严格超过 ${threshold} 时提醒。`,
+                  "当前值只建立静默基线，不补发历史提醒。",
+                  ...(legacy
+                    ? ["/subscribe experimental 是兼容别名，对应默认 4h/50% 规则。"]
+                    : []),
+                ].join("\n");
           }
         }
       }
     } else if (command.name === "subscription") {
       if (authorization.scope !== "private") {
-        text = "订阅设置只在你的 Bot 私聊中显示。";
+        text = this.#tr(
+          "订阅设置只在你的 Bot 私聊中显示。",
+          "Subscription settings are available only in your private chat with the bot.",
+        );
       } else if (command.argument) {
-        text = "用法：/subscription";
+        text = this.#tr("用法：/subscription", "Usage: /subscription");
       } else {
         const state = await this.stateStore.read();
-        text = formatSubscription(state.dynamic_subscriptions[chatId] ?? null);
+        text = formatSubscription(state.dynamic_subscriptions[chatId] ?? null, {
+          locale: this.botLocale,
+        });
       }
     } else if (command.name === "unsubscribe") {
       if (authorization.scope !== "private") {
-        text = "订阅只属于你的私聊，请打开 Bot 私聊后再使用 /unsubscribe。";
+        text = this.#tr(
+          "订阅只属于你的私聊，请打开 Bot 私聊后再使用 /unsubscribe。",
+          "Subscriptions belong to your private chat. Open a private chat with the bot and use /unsubscribe there.",
+        );
       } else if (command.argument) {
-        text = "用法：/unsubscribe";
+        text = this.#tr("用法：/unsubscribe", "Usage: /unsubscribe");
       } else {
         const staticallySubscribed =
           this.config.staticNotificationChatIds.has(chatId) ||
@@ -435,36 +514,51 @@ export class TelegramBotRuntime {
         };
         text = this.config.staticNotificationChatIds.has(chatId) ||
             this.config.staticExperimentalChatIds.has(chatId)
-          ? "已取消动态订阅；此聊天仍有静态配置的通知。"
-          : "已取消动态订阅。";
+          ? this.#tr(
+              "已取消动态订阅；此聊天仍有静态配置的通知。",
+              "The dynamic subscription was cancelled; this chat still has statically configured notifications.",
+            )
+          : this.#tr(
+              "已取消动态订阅。",
+              "The dynamic subscription was cancelled.",
+            );
       }
     } else if (["traffic", "capacity"].includes(command.name)) {
       if (
         authorization.scope !== "private" ||
         authorization.admin !== true
       ) {
-        text = "此运维命令只对管理员私聊开放。";
+        text = this.#tr(
+          "此运维命令只对管理员私聊开放。",
+          "This operations command is available only in an administrator's private chat.",
+        );
       } else if (command.argument) {
-        text = `用法：/${command.name}`;
+        text = this.#tr(
+          `用法：/${command.name}`,
+          `Usage: /${command.name}`,
+        );
       } else {
         adminOnlyReply = true;
         text = await this.#currentTrafficText(signal);
       }
     } else if (["about", "info"].includes(command.name)) {
       text = command.argument
-        ? `用法：/${command.name}`
+        ? this.#tr(`用法：/${command.name}`, `Usage: /${command.name}`)
         : formatAbout({
             publicBaseUrl: this.config.forecasterPublicBaseUrl,
+            locale: this.botLocale,
           });
     } else if (["help", "start"].includes(command.name)) {
       text = formatHelp({
         admin: authorization.admin,
         group: authorization.scope === "group",
+        locale: this.botLocale,
       });
     } else {
       text = formatHelp({
         admin: authorization.admin,
         group: authorization.scope === "group",
+        locale: this.botLocale,
       });
     }
     return {
@@ -593,6 +687,7 @@ export class TelegramBotRuntime {
               text: formatNotificationEvent(normalizedEvent, {
                 timeZone: this.config.displayTimeZone,
                 publicBaseUrl: this.config.forecasterPublicBaseUrl,
+                locale: this.botLocale,
               }),
             });
           }
@@ -721,6 +816,7 @@ export class TelegramBotRuntime {
               }, {
                 timeZone: this.config.displayTimeZone,
                 publicBaseUrl: this.config.forecasterPublicBaseUrl,
+                locale: this.botLocale,
               }),
             });
           }
@@ -778,14 +874,23 @@ export class TelegramBotRuntime {
           kind: "operations_alert",
           chatId,
           expiresAt,
-          text: [
-            "容量运维提醒（仅管理员）",
-            "运维告警游标已安全重建 [warning]",
-            "",
-            result.resetReason === "retention_gap"
-              ? "Bot 落后于源站保留范围；已记录缺口并从仍保留的最早告警继续回放。"
-              : "源站告警状态发生回退；已记录缺口并从当前尾部继续。",
-          ].join("\n"),
+          text: this.botLocale === "en"
+            ? [
+                "Capacity operations alert (admin only)",
+                "Operations-alert cursor safely rebuilt [warning]",
+                "",
+                result.resetReason === "retention_gap"
+                  ? "The bot fell behind the origin's retention range. The gap was recorded, and replay continues from the earliest retained alert."
+                  : "The origin alert state moved backward. The gap was recorded, and polling continues from the current tail.",
+              ].join("\n")
+            : [
+                "容量运维提醒（仅管理员）",
+                "运维告警游标已安全重建 [warning]",
+                "",
+                result.resetReason === "retention_gap"
+                  ? "Bot 落后于源站保留范围；已记录缺口并从仍保留的最早告警继续回放。"
+                  : "源站告警状态发生回退；已记录缺口并从当前尾部继续。",
+              ].join("\n"),
         }));
         totalJobs += await this.stateStore.resetOperationsAlertBaseline({
           cursor: result.cursor,
@@ -828,6 +933,7 @@ export class TelegramBotRuntime {
             expiresAt: alert.expires_at,
             text: formatOperationsAlert(alert, {
               timeZone: this.config.displayTimeZone,
+              locale: this.botLocale,
             }),
           });
         }
