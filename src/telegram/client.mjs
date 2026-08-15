@@ -408,6 +408,35 @@ export class TelegramClient {
     return this.call("getWebhookInfo", {}, options);
   }
 
+  setMyCommands({ commands, scope, signal = null }) {
+    if (
+      !Array.isArray(commands) ||
+      commands.length < 1 ||
+      commands.length > 100 ||
+      commands.some((entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        Array.isArray(entry) ||
+        typeof entry.command !== "string" ||
+        !/^[a-z0-9_]{1,32}$/.test(entry.command) ||
+        typeof entry.description !== "string" ||
+        entry.description.length < 1 ||
+        entry.description.length > 256
+      ) ||
+      !scope ||
+      !["all_private_chats", "all_group_chats"].includes(scope.type)
+    ) {
+      throw new TypeError("Invalid Telegram command menu");
+    }
+    return this.call("setMyCommands", {
+      commands: commands.map(({ command, description }) => ({
+        command,
+        description,
+      })),
+      scope: { type: scope.type },
+    }, { signal });
+  }
+
   getUpdates({ offset = null, timeout = 50, signal = null } = {}) {
     const payload = {
       timeout,

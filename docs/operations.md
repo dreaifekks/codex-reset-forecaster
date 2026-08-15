@@ -727,49 +727,77 @@ clients. The server restricts endpoints to known browser push-service hostnames,
 uses bounded delivery deadlines, and stores subscription capabilities with mode
 `0600`; those controls do not stop an attacker from filling the subscription cap.
 
-The Telegram bot is also safe-disabled by service topology: it runs only under the
-`telegram` Compose profile. Create an ignored token-only file with mode `0400` or
-`0600`, then configure at least one positive `TELEGRAM_ADMIN_USER_IDS`. Bot
-timestamps default to `Asia/Tokyo` (fixed UTC+9) and include an explicit
-resolved offset such as `UTC+9`; use `TELEGRAM_DISPLAY_TIME_ZONE` for a different
-valid IANA display zone. This affects presentation only; canonical records remain
-RFC 3339 UTC. Ordinary users require no pre-registration: only their own private
-chats are accepted.
-`TELEGRAM_ALLOWED_GROUP_CHAT_IDS` is optional, accepts only negative group IDs,
-and enables addressed read-only queries; group subscription changes are rejected.
-Use `TELEGRAM_BLOCKED_USER_IDS` only as an abuse kill switch. The per-user fixed
-window defaults to 12 commands per 60 seconds and emits at most one warning per
-window. Do not place the BotFather token in `.env`, JSON, logs, or a command
-argument. After setting `TELEGRAM_BOT_TOKEN_FILE_HOST`, start and inspect the
-optional service:
+The Telegram Bots are also safe-disabled by service topology. The existing
+`telegram` Compose profile starts only the Chinese `reset-forecaster-bot`; the
+separate `telegram-en` profile adds `reset-forecaster-bot-en` against the same core
+API. This keeps the old Chinese-only startup command compatible. Create one ignored
+token-only file with exact mode `0400` or `0600` per enabled Bot, set its path in
+`TELEGRAM_BOT_TOKEN_FILE_HOST` or `TELEGRAM_EN_BOT_TOKEN_FILE_HOST`, and configure at
+least one positive value in the corresponding `TELEGRAM_ADMIN_USER_IDS` setting.
+Never place either BotFather token value in `.env`, JSON, logs, or a command
+argument.
+
+The Chinese service pins `TELEGRAM_BOT_LOCALE=zh-CN`, keeps the existing
+`TELEGRAM_BOT_DATA_VOLUME`, and links to the root website. The English service pins
+`TELEGRAM_BOT_LOCALE=en`, uses its own `TELEGRAM_EN_BOT_DATA_VOLUME`, and links to
+`TELEGRAM_EN_PUBLIC_BASE_URL`, normally
+`https://codexreset.dreaife.tokyo/en`. Bot timestamps default to `Asia/Tokyo`
+(fixed UTC+9) and include an explicit resolved offset such as `UTC+9`; use
+`TELEGRAM_DISPLAY_TIME_ZONE` and `TELEGRAM_EN_DISPLAY_TIME_ZONE` for different valid
+IANA display zones. This affects presentation only; canonical records remain RFC
+3339 UTC. Ordinary users require no pre-registration: only their own private chats
+are accepted.
+
+The Chinese `TELEGRAM_ALLOWED_GROUP_CHAT_IDS` and English
+`TELEGRAM_EN_ALLOWED_GROUP_CHAT_IDS` settings are optional, accept only negative
+group IDs, and enable addressed read-only queries; group subscription changes are
+rejected. Their corresponding blocked-user settings are independent abuse kill
+switches. The per-user fixed window defaults to 12 commands per 60 seconds and
+emits at most one warning per window. The original Chinese-only command remains:
 
 ```bash
 docker compose --profile telegram up --build -d
-docker compose --profile telegram ps
-docker compose --profile telegram logs --tail=100 reset-forecaster-bot
 ```
 
-The public bot supports `/forecast`, `/report`, `/history [1-10]`, `/lastreset`,
+After configuring both token file mounts, start and inspect the bilingual services:
+
+```bash
+docker compose --profile telegram --profile telegram-en up --build -d
+docker compose --profile telegram --profile telegram-en ps
+docker compose --profile telegram --profile telegram-en logs --tail=100 \
+  reset-forecaster-bot reset-forecaster-bot-en
+```
+
+Both public Bots support `/forecast`, `/report`, `/history [1-10]`, `/lastreset`,
 `/subscribe`, `/subscribe probability 24h 60%`, `/subscribe experimental`,
 `/subscription`, `/unsubscribe`, and `/help`. The experimental command is a
 compatibility alias for the `4h/50%` personalized rule. Dynamic probability users
 consume the read-only forecast-input cursor and receive only upward crossings;
 the first poll, preference change, cursor reset, and close/rearm transition are
-silent. Static `TELEGRAM_NOTIFICATION_CHAT_IDS` and ordinary `/subscribe` receive
-only stable events. `TELEGRAM_EXPERIMENTAL_CHAT_IDS` is the deployment-only fixed
-public experimental stream and is not added to dynamic subscribers. Preserve the
-bot data volume during upgrades because
-it contains cursors, subscriptions, and delivery idempotency state, but remember
-that this state is rebuildable delivery state rather than canonical reset data.
-Keep exactly one `reset-forecaster-bot` replica per bot-data volume. The stored bot
-ID prevents accidentally reusing the volume with another token, but concurrent
-writers are unsupported and can overwrite cursor/outbox state.
+silent. The Chinese `TELEGRAM_NOTIFICATION_CHAT_IDS` and
+`TELEGRAM_EXPERIMENTAL_CHAT_IDS` values are independent from their
+`TELEGRAM_EN_NOTIFICATION_CHAT_IDS` and `TELEGRAM_EN_EXPERIMENTAL_CHAT_IDS`
+counterparts. Static notification IDs and ordinary `/subscribe` receive only stable
+events; each experimental list is a deployment-only fixed public stream and is not
+added to dynamic subscribers.
+
+Preserve the existing Chinese bot-data volume during upgrades because it contains
+its current cursors, subscriptions, and delivery idempotency state. Start the
+English Bot with a new, empty English volume: its first publication and
+forecast-input polls silently establish current tail baselines and never replay an
+old backlog. These volumes hold rebuildable delivery state rather than canonical
+reset data. Keep exactly one replica per bot-data volume. The stored Bot ID and
+locale prevent accidentally reusing a volume with another token or language, but
+concurrent writers are unsupported and can overwrite cursor/outbox state.
 
 The administrator-only `/traffic` command reads the protected
 `GET /api/operations/traffic` endpoint. Configure the same operations token file
 read-only in the core and bot containers; the bot token is never reused for this
-request. With `TELEGRAM_OPERATIONS_ALERTS_ENABLED=true`, the bot also polls the
-protected alert endpoint. Its first poll stores a separate tail cursor without
+request. With `TELEGRAM_OPERATIONS_ALERTS_ENABLED=true`, the Chinese Bot also polls
+the protected alert endpoint. The English Bot has an independent
+`TELEGRAM_EN_OPERATIONS_ALERTS_ENABLED` switch that defaults to `false`; leave it
+disabled unless duplicate English administrator alerts are deliberate. A Bot's
+first operations poll stores a separate tail cursor without
 replaying old alerts; later alerts are persisted as high-priority admin-only jobs,
 independent of publication and subscription cursors. `/traffic` also summarizes
 the local bot outbox without showing user/chat IDs or raw request metadata. The
@@ -839,7 +867,7 @@ administrator receives an explicit `capacity.policy_superseded` close message.
 
 To enable the administrator endpoint and Bot alerts, generate one independent
 random token file outside the repository and mount the same file read-only into
-both services:
+the core and both Bot services:
 
 ```bash
 mkdir -p .secrets
@@ -853,12 +881,14 @@ Set these values in the local, ignored `.env`:
 FORECASTER_OPERATIONS_TOKEN_FILE_HOST=./.secrets/forecaster-operations-token
 FORECASTER_OPERATIONS_TOKEN_FILE=/run/secrets/forecaster-operations-token
 TELEGRAM_OPERATIONS_ALERTS_ENABLED=true
+TELEGRAM_EN_OPERATIONS_ALERTS_ENABLED=false
 ```
 
-Before enabling alert polling, every configured administrator must open the Bot's
-private chat and send `/start` (or another command). Telegram bots cannot initiate
-a private conversation; without this step the first administrator alert can fail
-with `403` and the Bot healthcheck will correctly become unhealthy.
+Before enabling alert polling for either locale, every administrator configured for
+that instance must open that Bot's private chat and send `/start` (or another
+command). Telegram Bots cannot initiate a private conversation; without this step
+the first administrator alert can fail with `403` and that Bot's healthcheck will
+correctly become unhealthy.
 
 The file must be regular and exactly mode `0400` or `0600`; the token is never
 accepted inline. The protected endpoints are:
@@ -871,7 +901,7 @@ GET /api/operations/traffic/alerts?after=<sequence>&limit=<1..500>
 The alert endpoint follows the same safe baseline shape as publication polling:
 omitting `after` returns an empty list and the current tail; explicit `after=0`
 replays retained operations alerts. Its cursor and records are independent of
-`publication-event/1`. The Telegram Bot's first operations poll only stores the
+`publication-event/1`. Each Telegram Bot's first operations poll only stores the
 tail, so enabling it cannot replay an old alert backlog. If a Bot cursor is ahead
 of a restored core state or older than retained alert history, the API returns an
 explicit `409 operations_alert_cursor_reset_required`; the Bot atomically records
