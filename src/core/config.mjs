@@ -129,6 +129,72 @@ function validateSchedulerInterval(config) {
   }
 }
 
+function validateSemanticAssistance(config) {
+  const policy = config.extractor?.semantic_assistance;
+  let baseUrl;
+  try {
+    baseUrl = new URL(policy?.base_url);
+  } catch {
+    throw new TypeError(
+      "extractor.semantic_assistance.base_url must be an absolute HTTP(S) URL",
+    );
+  }
+  const localHttp = baseUrl.protocol === "http:" &&
+    ["127.0.0.1", "localhost", "::1"].includes(baseUrl.hostname);
+  if (
+    policy?.policy_version !== "semantic-timing-assistance/1" ||
+    typeof policy.enabled !== "boolean" ||
+    policy.protocol !== "openai-compatible-chat-completions/1" ||
+    !["https:", "http:"].includes(baseUrl.protocol) ||
+    (baseUrl.protocol === "http:" && !localHttp) ||
+    baseUrl.username ||
+    baseUrl.password ||
+    baseUrl.search ||
+    baseUrl.hash ||
+    typeof policy.model !== "string" ||
+    policy.model.trim().length === 0 ||
+    ![null, "string"].includes(
+      policy.token_file === null ? null : typeof policy.token_file,
+    ) ||
+    policy.prompt_version !== "authority-quote-timing/1" ||
+    !Number.isInteger(policy.request_timeout_ms) ||
+    policy.request_timeout_ms < 100 ||
+    policy.request_timeout_ms > 60_000 ||
+    !Number.isInteger(policy.maximum_input_chars) ||
+    policy.maximum_input_chars < 256 ||
+    policy.maximum_input_chars > 20_000 ||
+    !Number.isInteger(policy.maximum_output_bytes) ||
+    policy.maximum_output_bytes < 1_024 ||
+    policy.maximum_output_bytes > 1_048_576 ||
+    !Number.isInteger(policy.max_tokens) ||
+    policy.max_tokens < 32 ||
+    policy.max_tokens > 2_048 ||
+    !Number.isFinite(policy.minimum_confidence) ||
+    policy.minimum_confidence < 0 ||
+    policy.minimum_confidence > 1 ||
+    !Number.isFinite(policy.maximum_observation_age_hours) ||
+    policy.maximum_observation_age_hours <= 0 ||
+    policy.maximum_observation_age_hours > 168
+  ) {
+    throw new TypeError(
+      "extractor.semantic_assistance must use the supported bounded fail-closed policy",
+    );
+  }
+  if (
+    policy.enabled &&
+    (typeof policy.token_file !== "string" || policy.token_file.trim().length === 0)
+  ) {
+    throw new TypeError(
+      "Enabled extractor semantic assistance requires a token_file",
+    );
+  }
+  policy.base_url = baseUrl.toString().replace(/\/$/, "");
+  policy.model = policy.model.trim();
+  if (typeof policy.token_file === "string") {
+    policy.token_file = path.resolve(root, policy.token_file);
+  }
+}
+
 function validateRsshubXProvider(config) {
   const provider = config.providers?.rsshub_x_timeline;
   const capabilities = new Set(provider?.capabilities ?? []);
@@ -326,7 +392,7 @@ function validatePublicationRuntime(config) {
   const publication = runtime.publication;
   const probability = publication?.probability_alert;
   if (
-    publication?.policy_version !== "publication-policy/1" ||
+    publication?.policy_version !== "publication-policy/2" ||
     typeof publication.enabled !== "boolean" ||
     publication.bootstrap_mode !== "baseline_only" ||
     !Number.isFinite(publication.outcome_max_delivery_delay_hours) ||
@@ -344,7 +410,7 @@ function validatePublicationRuntime(config) {
     probability.max_delivery_delay_minutes <= 0
   ) {
     throw new TypeError(
-      "runtime.publication must use the supported bounded publication-policy/1 contract",
+      "runtime.publication must use the supported bounded publication-policy/2 contract",
     );
   }
 
@@ -374,7 +440,20 @@ function semanticConfigHash(config) {
     config_hash: _configHash,
     ...semanticConfig
   } = config;
-  return hashLabel(semanticConfig);
+  const semanticAssistance = semanticConfig.extractor?.semantic_assistance;
+  return hashLabel({
+    ...semanticConfig,
+    extractor: {
+      ...semanticConfig.extractor,
+      semantic_assistance: {
+        ...semanticAssistance,
+        token_file: semanticAssistance?.enabled === true &&
+          semanticAssistance.token_file
+          ? "configured-file"
+          : null,
+      },
+    },
+  });
 }
 
 export async function loadConfig({ configPath = process.env.RESET_CONFIG, overrides = {} } = {}) {
@@ -425,6 +504,20 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
     config.providers.rsshub_x_timeline.base_url;
   config.providers.x.token_file = process.env.X_BEARER_TOKEN_FILE ??
     config.providers.x.token_file;
+  if (process.env.RESET_SEMANTIC_ASSISTANCE_ENABLED !== undefined) {
+    config.extractor.semantic_assistance.enabled =
+      process.env.RESET_SEMANTIC_ASSISTANCE_ENABLED === "true";
+  }
+  config.extractor.semantic_assistance.base_url =
+    process.env.RESET_SEMANTIC_ASSISTANCE_BASE_URL ??
+    config.extractor.semantic_assistance.base_url;
+  config.extractor.semantic_assistance.model =
+    process.env.RESET_SEMANTIC_ASSISTANCE_MODEL ??
+    config.extractor.semantic_assistance.model;
+  if (process.env.RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE?.trim()) {
+    config.extractor.semantic_assistance.token_file =
+      process.env.RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE.trim();
+  }
   if (process.env.HISTORICAL_MONITOR_ENABLED !== undefined) {
     config.providers.historical_monitor.enabled = process.env.HISTORICAL_MONITOR_ENABLED === "true";
   }
@@ -450,6 +543,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateImpactTracking(config);
   validatePublicationRuntime(config);
   validateSchedulerInterval(config);
+  validateSemanticAssistance(config);
   validateXSearchGatewayProvider(config);
   validateRsshubXProvider(config);
   config.config_hash = semanticConfigHash(config);

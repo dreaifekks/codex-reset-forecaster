@@ -1,3 +1,5 @@
+import { hashLabel } from "../core/hash.mjs";
+
 const AUDIT_TYPE = "publication-event";
 const EVENT_SCHEMA_VERSION = "publication-event/1";
 const TOPICS = new Set(["authority", "outcome", "experimental_probability"]);
@@ -71,6 +73,20 @@ function absoluteUrl(value) {
   }
 }
 
+export function publicationDeliveryKey(event) {
+  const notification = event?.notification;
+  return `delivery_${hashLabel({
+    event_type: event?.event_type ?? null,
+    entity_key: event?.entity_key ?? null,
+    notification: notification ? {
+      title: notification.title ?? null,
+      body: notification.body ?? null,
+      url: notification.url ?? null,
+      tag: notification.tag ?? null,
+    } : null,
+  }).slice("sha256:".length)}`;
+}
+
 function assertEvent(event, { allowMissingSequence = false } = {}) {
   const contract = EVENT_CONTRACTS.get(event?.event_type);
   const experimental = event?.topic === "experimental_probability";
@@ -81,6 +97,7 @@ function assertEvent(event, { allowMissingSequence = false } = {}) {
   const references = event?.source && typeof event.source === "object"
     ? Object.values(event.source).filter((reference) => reference !== null)
     : [];
+  const expectedDeliveryKey = publicationDeliveryKey(event);
   if (
     !event ||
     typeof event !== "object" ||
@@ -97,8 +114,17 @@ function assertEvent(event, { allowMissingSequence = false } = {}) {
     Date.parse(event.expires_at) <= Date.parse(event.emitted_at) ||
     event.experimental !== experimental ||
     event.report?.default_delivery !== !experimental ||
-    event.policy?.version !== "publication-policy/1" ||
+    !["publication-policy/1", "publication-policy/2"].includes(
+      event.policy?.version,
+    ) ||
     !/^sha256:[a-f0-9]{64}$/.test(event.policy?.hash ?? "") ||
+    !(
+      event.delivery_key === expectedDeliveryKey ||
+      (
+        event.policy?.version === "publication-policy/1" &&
+        event.delivery_key === undefined
+      )
+    ) ||
     references.length === 0 ||
     references.some((reference) => !recordReference(reference)) ||
     contract.refs.some((name) => !recordReference(event.source?.[name])) ||
@@ -214,7 +240,11 @@ export function createPublicationLedger(store) {
     return enqueue(async () => {
       assertEvent(candidate, { allowMissingSequence: true });
       const events = await loadEvents();
-      const existing = events.find((event) => event.event_id === candidate.event_id);
+      const candidateDeliveryKey = publicationDeliveryKey(candidate);
+      const existing = events.find((event) =>
+        event.event_id === candidate.event_id ||
+        publicationDeliveryKey(event) === candidateDeliveryKey
+      );
       if (existing) {
         return { inserted: false, event: structuredClone(assertEvent(existing)) };
       }

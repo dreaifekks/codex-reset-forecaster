@@ -10,6 +10,11 @@ import {
   OUTCOME_ADJUDICATOR_VERSION,
   OUTCOME_LABEL_POLICY_VERSION,
 } from "../core/outcome-contract.mjs";
+import {
+  isOperatorConfirmationObservation,
+  OPERATOR_CONFIRMATION_KIND,
+  OPERATOR_CONFIRMATION_POLICY_VERSION,
+} from "../core/operator-confirmation.mjs";
 import { selectCurrentSignals } from "./signal-selection.mjs";
 import {
   sameProductScope,
@@ -40,6 +45,8 @@ export function outcomeAdjudicationContract(config) {
     deduplication_version: config.deduplication_version ?? null,
     extractor: extractorContract(config),
     confirmation_identity_ids: [...confirmationIdentityIds(config)].sort(),
+    operator_confirmation_policy_version:
+      OPERATOR_CONFIRMATION_POLICY_VERSION,
   };
 }
 
@@ -136,6 +143,12 @@ export function eligibleConfirmedOutcomeVerifications(outcome, {
   return outcome.data.verification.filter((entry) => {
     const observation = observationsByExactRef.get(exactRefKey(entry.observation_ref));
     if (!observation) return false;
+    if (entry.kind === OPERATOR_CONFIRMATION_KIND) {
+      return outcome.data.label_grade === "silver" &&
+        isOperatorConfirmationObservation(observation) &&
+        Date.parse(observation.data.first_seen_at) <=
+          Date.parse(outcome.data.known_at);
+    }
     if (
       entry.kind !== "official_confirmation"
     ) return false;
@@ -414,32 +427,92 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
       .sort((left, right) =>
         right.signal.data.available_at.localeCompare(left.signal.data.available_at)
       )[0];
-    if (!correction) continue;
     const outcomeKnownAt = knownAt ?? now;
+    if (correction) {
+      records.push(preserveOutcomeRecordId(createRecord({
+        recordType: "reset_outcome",
+        naturalKey: `official-completed-event:${eventIdentity}`,
+        createdAt: outcomeKnownAt,
+        revision: prior.revision + 1,
+        supersedes: recordRef(prior),
+        producer: adjudicationProducer,
+        data: {
+          status: correction.signal.data.claim.phase === "cancelled"
+            ? "cancelled"
+            : "rejected",
+          label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
+          event_identity: eventIdentity,
+          event_type: prior.data.event_type,
+          scope: prior.data.scope,
+          occurred_time_range: null,
+          known_at: new Date(outcomeKnownAt).toISOString(),
+          replay_available_at: null,
+          label_grade: "gold",
+          verification: [{
+            kind: "official_confirmation",
+            observation_ref: recordRef(correction.observation),
+            independence_group_id: correction.signal.data.provenance.independence_group_id,
+          }],
+          candidate_refs: [recordRef(candidate)],
+        },
+      }), prior));
+      continue;
+    }
+
+    // The authenticated operator assertion is independent of the extractor that
+    // produced its linked authority plan. Carry unchanged silver evidence across
+    // later contract bumps instead of silently dropping the recurrence anchor.
+    const operatorVerification = prior.data.label_grade === "silver"
+      ? prior.data.verification.find((entry) =>
+          entry.kind === OPERATOR_CONFIRMATION_KIND
+        ) ?? null
+      : null;
+    const operatorObservation = operatorVerification
+      ? observations.get(exactRefKey(operatorVerification.observation_ref)) ?? null
+      : null;
+    if (
+      !operatorVerification ||
+      !isOperatorConfirmationObservation(operatorObservation)
+    ) continue;
+    const desiredSignature = JSON.stringify({
+      label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
+      event_type: prior.data.event_type,
+      scope: prior.data.scope,
+      occurred_time_range: prior.data.occurred_time_range,
+      label_grade: "silver",
+      verification: prior.data.verification,
+      candidate_ref: recordRef(candidate),
+      adjudication_contract_hash: adjudicationProducer.config_hash,
+    });
+    const priorSignature = JSON.stringify({
+      label_policy_version: prior.data.label_policy_version,
+      event_type: prior.data.event_type,
+      scope: prior.data.scope,
+      occurred_time_range: prior.data.occurred_time_range,
+      label_grade: prior.data.label_grade,
+      verification: prior.data.verification,
+      candidate_ref: prior.data.candidate_refs?.[0] ?? null,
+      adjudication_contract_hash: prior.producer?.config_hash ?? null,
+    });
+    if (desiredSignature === priorSignature) continue;
     records.push(preserveOutcomeRecordId(createRecord({
       recordType: "reset_outcome",
-      naturalKey: `official-completed-event:${eventIdentity}`,
+      naturalKey: `operator-completed-event:${eventIdentity}`,
       createdAt: outcomeKnownAt,
       revision: prior.revision + 1,
       supersedes: recordRef(prior),
       producer: adjudicationProducer,
       data: {
-        status: correction.signal.data.claim.phase === "cancelled"
-          ? "cancelled"
-          : "rejected",
+        status: "confirmed",
         label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
         event_identity: eventIdentity,
         event_type: prior.data.event_type,
         scope: prior.data.scope,
-        occurred_time_range: null,
+        occurred_time_range: prior.data.occurred_time_range,
         known_at: new Date(outcomeKnownAt).toISOString(),
         replay_available_at: null,
-        label_grade: "gold",
-        verification: [{
-          kind: "official_confirmation",
-          observation_ref: recordRef(correction.observation),
-          independence_group_id: correction.signal.data.provenance.independence_group_id,
-        }],
+        label_grade: "silver",
+        verification: prior.data.verification,
         candidate_refs: [recordRef(candidate)],
       },
     }), prior));

@@ -416,8 +416,10 @@ alongside the other versioned provenance fields. They also retain the exact
 
 - `gold`: an explicit official completion that satisfies the current
   `label_policy_version` and exact extractor/source-identity contract.
-- `silver`: multiple genuinely independent observations with adequate scope and
-  timing agreement.
+- `silver`: an authenticated operator's explicit platform-completion assertion,
+  linked to an exact current configured-authority reset candidate and stored as
+  `operator_confirmation`. It is a usable recurrence/refractory anchor but is not
+  an official completion statement.
 - `rumor`: unverified information. It remains an input signal and cannot create a
   confirmed outcome.
 
@@ -425,7 +427,12 @@ alongside the other versioned provenance fields. They also retain the exact
 probe adapter. No such adapter is trusted in the current release, so records using
 that verification kind are not label-eligible. A confirmed label must be produced
 by the versioned outcome adjudicator, retain a stable event identity and candidate
-reference, and resolve to the exact official observation plus current extraction.
+reference, and resolve either to the exact official observation plus current
+extraction (`gold`) or to a strict `operator_manual` observation created by the
+offline confirmation path (`silver`). Operator assertions preserve their exact
+source candidate, actor, assertion clock, and minute-level effective interval in
+immutable raw payload provenance. They do not make community evidence, model
+output, or personal quota state label-eligible.
 
 If the outcome time is known only within an interval, retain that interval for
 interval-censored training. If monitoring coverage is insufficient, do not create a

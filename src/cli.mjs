@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import { loadConfig } from "./core/config.mjs";
+import { recordRef } from "./core/records.mjs";
 import { floorHour } from "./core/time.mjs";
 import { JsonlStore } from "./store/jsonl-store.mjs";
 import { FixtureProvider } from "./providers/fixture-provider.mjs";
@@ -22,6 +23,7 @@ import { issueForecast } from "./model/forecast.mjs";
 import { evaluateIssuedForecasts } from "./model/issued-evaluation.mjs";
 import { getReadiness } from "./runtime/readiness.mjs";
 import { settleIssuedPredictions } from "./model/settlement.mjs";
+import { confirmManualPlatformReset } from "./operators/manual-reset.mjs";
 
 function argument(name, fallback = null) {
   const index = process.argv.indexOf(name);
@@ -100,6 +102,58 @@ try {
       filePath,
       config,
     }).collect(store));
+  } else if (command === "confirm-reset") {
+    if (!process.argv.includes("--offline")) {
+      throw new Error(
+        "confirm-reset requires --offline after the live writer has been stopped",
+      );
+    }
+    if (!process.argv.includes("--attest-platform")) {
+      throw new Error(
+        "confirm-reset requires --attest-platform to distinguish a platform outcome from personal quota state",
+      );
+    }
+    const sourceStatus = argument("--source-status");
+    const actor = argument("--actor");
+    const effectiveAtArgument = argument("--effective-at");
+    const agoHoursArgument = argument("--ago-hours");
+    if (!sourceStatus || !actor) {
+      throw new TypeError(
+        "confirm-reset requires --source-status STATUS and --actor ID",
+      );
+    }
+    if (Boolean(effectiveAtArgument) === Boolean(agoHoursArgument)) {
+      throw new TypeError(
+        "confirm-reset requires exactly one of --effective-at ISO or --ago-hours HOURS",
+      );
+    }
+    let effectiveAt = effectiveAtArgument;
+    if (agoHoursArgument) {
+      const agoHours = Number(agoHoursArgument);
+      if (!Number.isFinite(agoHours) || agoHours <= 0 || agoHours > 168) {
+        throw new RangeError("--ago-hours must be greater than 0 and at most 168");
+      }
+      effectiveAt = new Date(now.getTime() - agoHours * 3_600_000);
+    }
+    const result = await confirmManualPlatformReset(store, config, {
+      sourceStatus,
+      effectiveAt,
+      actor,
+      note: argument("--note", ""),
+      knownAt: now,
+    });
+    output({
+      inserted: result.inserted,
+      unchanged: result.unchanged,
+      reason: result.reason,
+      outcome_ref: recordRef(result.outcome),
+      observation_ref: recordRef(result.observation),
+      candidate_ref: recordRef(result.candidate),
+      status: result.outcome.data.status,
+      label_grade: result.outcome.data.label_grade,
+      occurred_time_range: result.outcome.data.occurred_time_range,
+      known_at: result.outcome.data.known_at,
+    });
   } else if (command === "process") {
     output(await processRecords(store, config, { now }));
   } else if (command === "train") {
@@ -134,7 +188,7 @@ try {
   } else if (command === "status") {
     output(await getReadiness(store, config));
   } else {
-    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
+    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  confirm-reset --offline --attest-platform --source-status STATUS --actor ID (--effective-at ISO | --ago-hours HOURS) [--note TEXT] [--now ISO]\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
   }
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

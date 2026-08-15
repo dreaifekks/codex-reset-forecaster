@@ -20,6 +20,10 @@ services:
       X_SEARCH_GATEWAY_URL: "${X_SEARCH_GATEWAY_URL:-http://host.docker.internal:8787}"
       X_SEARCH_GATEWAY_PROVIDER: "${X_SEARCH_GATEWAY_PROVIDER:-grokbuild}"
       X_SEARCH_GATEWAY_TOKEN_FILE: "${X_SEARCH_GATEWAY_TOKEN_FILE:-/run/secrets/x-search-gateway-token}"
+      RESET_SEMANTIC_ASSISTANCE_ENABLED: "${RESET_SEMANTIC_ASSISTANCE_ENABLED:-false}"
+      RESET_SEMANTIC_ASSISTANCE_BASE_URL: "${RESET_SEMANTIC_ASSISTANCE_BASE_URL:-https://tokenflux.dev/v1}"
+      RESET_SEMANTIC_ASSISTANCE_MODEL: "${RESET_SEMANTIC_ASSISTANCE_MODEL:-deepseek-v4-flash}"
+      RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE: "${RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE:-}"
       RSSHUB_BASE_URL: "${RSSHUB_BASE_URL:-https://rss.dreaife.tokyo}"
       HISTORICAL_MONITOR_ENABLED: "${HISTORICAL_MONITOR_ENABLED:-false}"
       HISTORICAL_MONITOR_URL: "${HISTORICAL_MONITOR_URL:-https://codex-resets.com/}"
@@ -40,6 +44,7 @@ services:
       - ./config:/app/config:ro
       - "${X_BEARER_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/x-bearer-token:ro"
       - "${X_SEARCH_GATEWAY_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/x-search-gateway-token:ro"
+      - "${RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/semantic-assistance-token:ro"
       - "${WEB_PUSH_VAPID_KEYS_FILE_HOST:-/dev/null}:/run/secrets/web-push-vapid.json:ro"
       - "${FORECASTER_OPERATIONS_TOKEN_FILE_HOST:-/dev/null}:/run/secrets/forecaster-operations-token:ro"
     stop_grace_period: 120s

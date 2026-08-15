@@ -227,8 +227,9 @@ non-core groups, but the UI does not present it as community resonance.
 The public historical page is a factual outcome log, not a model-evaluation
 surface. It lists the latest eligible revision of every confirmed reset outcome in
 reverse occurrence order. Each row contains only the confirmed occurrence interval
-and precision, official-source publication time, confirmed status, and the exact
-official source used to verify it.
+and precision, verification time, confirmed status/grade, and the exact official
+or operator source used to verify it. Operator-confirmed rows must be visibly
+labeled `silver` and must not imply an official completion statement.
 
 The history endpoint is independent of evaluation availability. A missing,
 incompatible, incomplete, or failed evaluation must not hide a valid confirmed

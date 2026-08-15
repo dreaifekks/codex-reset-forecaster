@@ -6,6 +6,9 @@ import { DEMO_CONFIG_OVERRIDES } from "./demo/config.mjs";
 import { JsonlStore } from "./store/jsonl-store.mjs";
 import { createRequestHandler } from "./web/app.mjs";
 import { startScheduler } from "./runtime/scheduler.mjs";
+import {
+  completedRunOwnsServingSnapshot,
+} from "./runtime/startup-projection.mjs";
 import { createPublicationLedger } from "./notifications/ledger.mjs";
 import { createPublicationProjector } from "./notifications/projector.mjs";
 import {
@@ -102,20 +105,14 @@ async function initializeRuntime() {
   }
   try {
     const runtimeState = await store.readState("runtime", {});
-    const hasCompletedRun = Number.isFinite(
-      Date.parse(runtimeState.last_success_at),
-    );
-    const forecastBelongsToCompletedRun = hasCompletedRun &&
-      typeof runtimeState.last_prediction_id === "string" &&
-      snapshot?.prediction_ref?.record_id === runtimeState.last_prediction_id &&
-      Date.parse(snapshot?.prediction?.data?.issued_at) <=
-        Date.parse(runtimeState.last_success_at);
-    await publicationProjector.project({
-      snapshot,
-      emittedAt: new Date(),
-      allowInitialize: hasCompletedRun,
-    });
+    const forecastBelongsToCompletedRun =
+      completedRunOwnsServingSnapshot(runtimeState, snapshot);
     if (forecastBelongsToCompletedRun) {
+      await publicationProjector.project({
+        snapshot,
+        emittedAt: new Date(),
+        allowInitialize: true,
+      });
       await forecastInputProjector.project({
         snapshot,
         emittedAt: new Date(),
@@ -142,11 +139,13 @@ async function initializeRuntime() {
         });
       }
       const currentSnapshot = await requestHandler.refreshServingSnapshot(finished);
-      const publication = await publicationProjector.project({
-        snapshot: currentSnapshot,
-        emittedAt: finished,
-        allowInitialize: status === "success",
-      });
+      const publication = status === "success"
+        ? await publicationProjector.project({
+            snapshot: currentSnapshot,
+            emittedAt: finished,
+            allowInitialize: true,
+          })
+        : { events: [], reason: "pipeline_not_successful" };
       const forecastInput = status === "success"
         ? await forecastInputProjector.project({
             snapshot: currentSnapshot,

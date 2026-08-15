@@ -3,6 +3,10 @@ import path from "node:path";
 import { projectRoot } from "../core/config.mjs";
 import { hashLabel } from "../core/hash.mjs";
 import {
+  OUTCOME_ADJUDICATOR_VERSION,
+  OUTCOME_LABEL_POLICY_VERSION,
+} from "../core/outcome-contract.mjs";
+import {
   extractorContract,
   matchesExtractorContract,
 } from "../core/extractor-contract.mjs";
@@ -79,7 +83,7 @@ const CANONICAL_STATIC_REDIRECTS = new Map([
 const MAX_WEB_PUSH_REQUEST_BYTES = 16 * 1024;
 const API_COMPUTATION_CACHE_MS = 10_000;
 const HISTORY_RESULTS_CACHE_MS = 30_000;
-const SERVING_SNAPSHOT_SCHEMA_VERSION = "serving-snapshot/1";
+const SERVING_SNAPSHOT_SCHEMA_VERSION = "serving-snapshot/2";
 const SERVING_SNAPSHOT_STATE_KEY = "serving-snapshot";
 const SERVING_SNAPSHOT_DEFAULT_CADENCE_MINUTES = 10;
 const SERVING_SNAPSHOT_CADENCE_MULTIPLIER = 3;
@@ -436,7 +440,7 @@ async function currentEvaluation(store, config) {
   };
 }
 
-function servingSnapshotConfig(config) {
+export function servingSnapshotConfig(config) {
   const servingRuntime = {
     forecast_fresh_age_hours:
       config.runtime?.forecast_fresh_age_hours ?? null,
@@ -450,6 +454,8 @@ function servingSnapshotConfig(config) {
     config_hash: config.config_hash ?? hashLabel(config),
     config_version: config.config_version ?? null,
     feature_schema_version: config.feature_schema_version ?? null,
+    outcome_label_policy_version: OUTCOME_LABEL_POLICY_VERSION,
+    outcome_adjudicator_version: OUTCOME_ADJUDICATOR_VERSION,
     runtime: servingRuntime,
   };
   return {

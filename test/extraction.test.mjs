@@ -25,6 +25,9 @@ import {
   buildOutcomeEligibilityContext,
   isEligibleConfirmedOutcome,
 } from "../src/pipeline/outcomes.mjs";
+import {
+  isAuthorityTimingSupportSignal,
+} from "../src/model/authority-timing-eligibility.mjs";
 
 const config = await loadConfig();
 const authorityConfig = await loadConfig({ overrides: {
@@ -928,6 +931,83 @@ test("real archived rollout wording is recognized without promoting banked or fu
     "future",
   );
   assert.equal(future.data.claim.phase, "scheduled");
+});
+
+test("real /fast quote wrapper is a started primary timing signal, not a completed outcome", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reset-real-landing-wrapper-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const runConfig = await loadConfig({
+    configPath: "config/tibo-authority-live.json",
+    overrides: { runtime: { data_dir: directory } },
+  });
+  const store = await new JsonlStore(directory).init();
+  const quoted = observationForConfig(
+    "Codex usage limits were reset for all paid users.",
+    "2087423996115681767",
+    runConfig,
+    {
+      identityId: "community_member",
+      handle: "community",
+      publishedAt: "2026-08-12T06:20:00.000Z",
+      firstSeenAt: "2026-08-13T01:09:00.000Z",
+    },
+  );
+  const wrapper = observationForConfig(
+    "Old news actually from a bunch of days ago, but crossed that 15M. " +
+      "Enjoy a nice reset everyone. Landing in the next hour or so, go /fast.",
+    "2087706104814023111",
+    runConfig,
+    {
+      nativeRelations: [{
+        type: "quotes",
+        provider_item_id: "2087423996115681767",
+        url: "https://x.com/community/status/2087423996115681767",
+      }],
+      publishedAt: "2026-08-13T01:01:37.748Z",
+      firstSeenAt: "2026-08-13T01:10:00.000Z",
+    },
+  );
+  await store.appendMany([quoted, wrapper]);
+
+  await normalizeNewObservations(store, runConfig, {
+    now: new Date("2026-08-13T01:11:00.000Z"),
+  });
+  const wrapperSignal = (await store.all("normalized_signal"))
+    .find((signal) =>
+      signal.data.observation_refs[0].record_id === wrapper.record_id
+    );
+  assert.ok(wrapperSignal);
+  assert.equal(wrapperSignal.data.extraction.relevance.basis, "self");
+  assert.equal(wrapperSignal.data.provenance.derivation, "primary_statement");
+  assert.equal(wrapperSignal.data.claim.event_type, "quota_reset");
+  assert.equal(wrapperSignal.data.claim.phase, "started");
+  assert.equal(wrapperSignal.data.claim.scope.product, "codex");
+  assert.equal(wrapperSignal.data.claim.scope.population, "platform");
+  assert.deepEqual(wrapperSignal.data.claim.asserted_time_range, {
+    start: "2026-08-13T01:01:37.748Z",
+    end: "2026-08-13T02:01:37.748Z",
+    boundary: "[start,end)",
+    precision: "hour",
+    timezone_basis: "UTC",
+    original_text: "next hour",
+  });
+  assert.equal(isAuthorityTimingSupportSignal({
+    signal: wrapperSignal,
+    observation: wrapper,
+    policy: runConfig.model.authority_timing,
+    confirmationIdentityIds: confirmationIdentityIds(runConfig),
+    targetScope: runConfig.target,
+  }), true);
+
+  await linkEventCandidates(store, runConfig, {
+    asOf: new Date("2026-08-13T01:12:00.000Z"),
+  });
+  await adjudicateOutcomes(store, runConfig, {
+    now: new Date("2026-08-13T01:13:00.000Z"),
+  });
+  assert.equal((await store.all("reset_outcome")).length, 0);
 });
 
 test("authority scope policy recognizes general completed Codex resets without widening narrow plans", () => {

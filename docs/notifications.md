@@ -21,7 +21,7 @@ events use `publication-event/1`, are appended under the audit type
 must say that the reset is not confirmed. `experimental_probability` is a model
 projection, not evidence or an outcome. It may open only from a serving-ready,
 fresh, non-synthetic prediction at or above the configured minimum serving stage.
-Policy `publication-policy/1` opens the watch at a next-four-hour probability of
+Policy `publication-policy/2` opens the watch at a next-four-hour probability of
 `0.50` and closes it only at or below `0.30`, or when a same-cycle confirmed
 outcome ends the watch. Forecast refreshes inside an open watch do not create a new
 event. A stale or otherwise unusable forecast neither opens nor closes it.
@@ -32,7 +32,7 @@ Only `reset_outcome` can produce an `outcome.reset_confirmed.v1` event; an
 observation, candidate, extractor confidence, evidence count, LLM judgment, or
 forecast probability cannot.
 
-The fixed `publication-policy/1` probability watch remains the shared public
+The fixed `publication-policy/2` probability watch remains the shared public
 experimental event stream. Its `experimental_probability` entries always use the
 public next-four-hour `0.50` open and `0.30` close thresholds; they do not use a
 visitor's rule. Parameterized Atom and personalized Web Push reuse the topic name
@@ -71,24 +71,27 @@ The first successful pipeline generation observed by the projector is
 emits no historical backlog. An empty volume, a partial failed run, or a restart
 without a persisted pipeline `last_success_at` cannot establish that baseline.
 Subsequent events
-carry a monotonically increasing `sequence`, a stable `event_id`, a stable
-`entity_key`, the exact source record revisions, the publication policy version and
-hash, and `emitted_at`/`expires_at`. Consumers use `sequence` as their cursor and
-`event_id` as the local idempotency key. Re-reading or replaying an event must not
-create a second queued delivery. An ambiguous transport failure can still be
+carry a monotonically increasing `sequence`, an exact-provenance `event_id`, a
+content-stable `delivery_key`, a stable `entity_key`, the exact source record
+revisions, the publication policy version and hash, and
+`emitted_at`/`expires_at`. The ledger rejects a second event with the same
+`delivery_key`. Consumers use `sequence` as their cursor and persist both
+`event_id` and a recipient-scoped semantic delivery key. Re-reading, replaying, or
+regenerating the same visible notification under a new revision must not create a
+second queued delivery. An ambiguous transport failure can still be
 at-least-once because Atom, Web Push, and the Telegram Bot API do not provide a
 shared exactly-once transaction with this ledger.
 
 `emitted_at` means when the publication projection was appended. It is not source
 `published_at`, outcome `known_at`, the asserted future range, the adjudicated
-`occurred_time_range`, or a forecast `knowledge_cutoff`. A first outcome
-confirmation expires at the earlier of `known_at + outcome_max_delivery_delay`
-and `occurred_time_range.end + outcome_max_delivery_delay`, so reprocessing cannot
-turn a historical reset into a new notification. Later corrections, retractions,
-or verification withdrawals for an outcome that was actually published expire at
-their new `known_at + outcome_max_delivery_delay`. A revision that changes only
+`occurred_time_range`, or a forecast `knowledge_cutoff`. Every outcome event —
+confirmation, correction, retraction, or verification withdrawal — expires at the
+earlier of `known_at + outcome_max_delivery_delay` and
+`occurred_time_range.end + outcome_max_delivery_delay`. A newly learned revision
+can therefore update historical audit and accuracy state without reviving an old
+Telegram, Web Push, or feed notification. A revision that changes only
 lineage, exact references, or `known_at` updates projection state without emitting
-a correction; user-visible status, occurred range, label grade, or official-source
+a correction; user-visible status, occurred range, label grade, or verification-source
 content must materially change. Occurred-range identity uses its start, end, and
 precision; parser-only original text or timezone metadata cannot create a visible
 correction. Authority delivery expires at the earlier of the asserted range end and
@@ -183,6 +186,10 @@ separate forecast-input stream:
   consume forecast inputs, not the fixed global experimental ledger. The first
   forecast-input poll and every rule/cursor reset are silent; only an upward
   crossing queues a message, and close/rearm is silent.
+  Its persistent `telegram-bot-state/4` outbox deduplicates stable event jobs by
+  recipient, topic, and visible title/body after removing the generated send-time
+  footer, while retaining `event_id` as a second exact key. Both keys survive a
+  restart, so a regenerated event ID cannot resend the same visible message.
 
 The website advertises the stable feed with Atom autodiscovery metadata. Its
 notification configuration dialog controls the same horizon/threshold pair for

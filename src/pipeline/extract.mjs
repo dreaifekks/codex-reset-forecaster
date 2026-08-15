@@ -7,7 +7,11 @@ import {
   extractorContract,
 } from "../core/extractor-contract.mjs";
 import { canonicalXStatusUrl, xStatusIdentity } from "../providers/raw.mjs";
-import { MULTI_PRODUCT, UNKNOWN_PRODUCT } from "../core/product-scope.mjs";
+import {
+  MULTI_PRODUCT,
+  UNKNOWN_PRODUCT,
+  scopeIncludesProduct,
+} from "../core/product-scope.mjs";
 import {
   authorityReplyCommitmentSegment,
   isFirstPersonFutureResetReply,
@@ -16,8 +20,16 @@ import {
   assessTopicRelevance,
   TOPIC_RELEVANCE_POLICY_VERSION,
 } from "./topic-relevance.mjs";
+import {
+  createConfiguredSemanticTimingAssessor,
+} from "../semantic-assistance/openai-compatible-chat.mjs";
+import {
+  semanticTimingPhaseHasWrapperSupport,
+} from "../semantic-assistance/phase-policy.mjs";
 
 const RESET_TERMS = /\b(reset(?:s|ting|ing|ted)?|refill(?:s|ed|ing)?|refresh(?:ed|ing)?)\b/i;
+const SEMANTIC_RESET_TERMS =
+  /\b(?:reset(?:s|ting|ing|ted)?|refill(?:s|ed|ing)?)\b/i;
 const QUOTA_TERMS = /\b(usage|rate|quota|limit|limits|allowance)\b/i;
 const TARGET_RESET_TERMS = /\b(codex(?:er|ers)?|global|all paid|paid users|paid plans|chatgpt work)\b/i;
 const PLATFORM_SCOPE_TERMS = /\b(all paid|paid users|paid plans|all plans|all accounts|all users|all codex users|all paid chatgpt subscriptions|everyone(?:'s)?|everybody|across all|codex and chatgpt work|chatgpt work and codex|all (?:our )?(?:chatgpt work and codex|codex and chatgpt work) users)\b/i;
@@ -219,7 +231,14 @@ function classifyEvent(text) {
   if (CODEX_TERMS.test(text) && QUOTA_ANOMALY_TERMS.test(text)) {
     return "experience_issue";
   }
-  if (RESET_TERMS.test(text) && (QUOTA_TERMS.test(text) || TARGET_RESET_TERMS.test(text))) {
+  if (
+    RESET_TERMS.test(text) &&
+    (
+      QUOTA_TERMS.test(text) ||
+      TARGET_RESET_TERMS.test(text) ||
+      CODEX_MODE_ALIAS_TERMS.test(text)
+    )
+  ) {
     return /\brefill/i.test(text) ? "quota_refill" : "quota_reset";
   }
   if (COMPETITOR_TERMS.test(text) && QUOTA_TERMS.test(text)) return "competitor_limit_change";
@@ -467,13 +486,13 @@ function classifyPhase(text, eventType) {
   if (/\b(?:we(?:\s+are|'re|’re)|i(?:\s+am|'m|’m))\s+(?:now\s+)?(?:once again\s+)?reset(?:ting|ing)\b/i.test(text)) return "started";
   if (/\b(?:decision (?:to|of)|started)\s+reset(?:ting|ing)\b/i.test(text)) return "started";
   if (/\bwe(?:\s+are|'re)\s+(?:now\s+)?(?:giving|applying)\b[^.!?\n]{0,64}\b(?:usage\s+)?reset\b/i.test(text)) return "started";
-  if (RESET_TERMS.test(text) && /\b(?:propagating|lands?|should\s+land|should\s+be\s+showing|should\s+have\b[^.!?\n]{0,48}\bback)\b/i.test(text)) return "started";
+  if (RESET_TERMS.test(text) && /\b(?:propagating|land(?:s|ing)?|should\s+land|should\s+be\s+showing|should\s+have\b[^.!?\n]{0,48}\bback)\b/i.test(text)) return "started";
   if (/\benjoy\b[\s\S]{0,40}\breset(?:ted)?\b/i.test(text)) return "completed";
   if (
     /\bfeeling\s+like\s+(?:a\s+)?(?:(?:usage|rate|limit)\s+)?reset\b/i.test(text) &&
     /\bsee\s+you\s+in\s+(?:a\s+)?few\s+hours?\b/i.test(text)
   ) return "scheduled";
-  if (/\b(lands?|coming|incoming|arriv(?:e|es|ing)|will|going to|later|tomorrow|this evening|next hour|tonight|soon|in a bit)\b/i.test(text) ||
+  if (/\b(land(?:s|ing)?|coming|incoming|arriv(?:e|es|ing)|will|going to|later|tomorrow|this evening|next hour|tonight|soon|in a bit)\b/i.test(text) ||
       /\bgive\s+us\s+\d{1,3}\s+hours?\b/i.test(text)) {
     return "scheduled";
   }
@@ -503,7 +522,7 @@ function resetTimingText(text) {
   const timingTerms =
     /\b(?:next|within|over|in|later|tomorrow|tonight|evening|morning|monday|tuesday|wednesday|thursday|friday|saturday|sunday|minutes?|hours?|soon|incoming|in a bit)\b/i;
   const timingActions =
-    /\b(?:lands?|arriv(?:e|es|ing)|coming|showing|back|return(?:s|ed|ing)?|give us)\b/i;
+    /\b(?:land(?:s|ing)?|arriv(?:e|es|ing)|coming|showing|back|return(?:s|ed|ing)?|give us)\b/i;
   const segments = text
     .split(/(?<=[.!?])\s+|\n+/)
     .filter(Boolean);
@@ -791,12 +810,192 @@ function relationContexts(observation, observationsByRelationId) {
   };
 }
 
+function exactReferenceKey(reference) {
+  return reference &&
+    typeof reference.record_id === "string" &&
+    Number.isInteger(reference.revision)
+    ? `${reference.record_id}@${reference.revision}`
+    : null;
+}
+
+function configuredSemanticAuthority({ observation, config, role }) {
+  const identityId = observation.data.author.identity_id;
+  return config.outcome_definition?.event_semantics ===
+      "qualifying_authority_completion_statement" &&
+    config.outcome_definition?.scope_policy === AUTHORITY_SCOPE_POLICY &&
+    new Set(config.outcome_definition.authority_identity_ids ?? [])
+      .has(identityId) &&
+    confirmationIdentityIds(config).has(identityId) &&
+    ["official", "product_lead", "product_team_member"].includes(role);
+}
+
+function semanticQuoteContext(contexts, contextRef) {
+  const expectedKey = exactReferenceKey(contextRef);
+  const quotes = contexts.filter((context) =>
+    context.relation_type === "quotes" &&
+    exactReferenceKey(context.observation_ref) !== null &&
+    typeof context.available_at === "string" &&
+    Number.isFinite(Date.parse(context.available_at))
+  );
+  if (quotes.length !== 1) return null;
+  return exactReferenceKey(quotes[0].observation_ref) === expectedKey
+    ? quotes[0]
+    : null;
+}
+
+function targetScopeFromSemanticQuote(context, config) {
+  const contextScope = classifyProductScope(context.text, config);
+  if (
+    contextScope.vendor !== config.target.vendor ||
+    !scopeIncludesProduct(contextScope, config.target.product)
+  ) {
+    return null;
+  }
+  return {
+    vendor: config.target.vendor,
+    product: config.target.product,
+  };
+}
+
+function semanticAssistanceCandidate({
+  observation,
+  config,
+  signal,
+  contexts,
+  hasUnresolvedContext,
+  now,
+}) {
+  const policy = config.extractor?.semantic_assistance;
+  const text = observation.data.content.text.replace(/[*_`]/g, "");
+  const relevance = signal?.data?.extraction?.relevance;
+  const role = signal?.data?.provenance?.source_role;
+  const firstSeenMs = Date.parse(observation.data.first_seen_at);
+  const nowMs = Date.parse(now);
+  const maximumAgeMs = policy?.maximum_observation_age_hours * 3_600_000;
+  const hasDeterministicTimingRange = ["scheduled", "expected", "started"]
+    .some((phase) => assertedRange(
+      text,
+      observation.data.published_at,
+      phase,
+    ) !== null);
+  if (
+    policy?.enabled !== true ||
+    observation.data.content.media_type !== "text/plain" ||
+    observation.data.selection_context?.feature_eligible === false ||
+    observation.data.selection_context?.outcome_conditioned === true ||
+    !configuredSemanticAuthority({ observation, config, role }) ||
+    relevance?.decision !== "relevant" ||
+    relevance.basis !== "quote" ||
+    hasUnresolvedContext ||
+    signal.data.provenance.derivation !== "quotes" ||
+    !SEMANTIC_RESET_TERMS.test(text) ||
+    !hasDeterministicTimingRange ||
+    isBankedResetOnly(text) ||
+    hasNarrowScopeQualifier(text) ||
+    !Number.isFinite(firstSeenMs) ||
+    !Number.isFinite(nowMs) ||
+    nowMs < firstSeenMs ||
+    nowMs - firstSeenMs > maximumAgeMs ||
+    relevance.context_refs.length !== 1
+  ) {
+    return null;
+  }
+  const quote = semanticQuoteContext(contexts, relevance.context_refs[0]);
+  if (!quote || !targetScopeFromSemanticQuote(quote, config)) return null;
+  return {
+    wrapper_text: text,
+    quote_text: quote.text,
+    target_product: config.target.product,
+    context_ref: quote.observation_ref,
+  };
+}
+
+// Re-check every deterministic gate at the application boundary. The remote
+// model can select only a non-terminal timing phase; it cannot supply identity,
+// product, scope, event type, evidence lineage, or a completion label.
+function validatedSemanticTimingAssistance({
+  observation,
+  config,
+  text,
+  role,
+  relevance,
+  contexts,
+  hasUnresolvedContext,
+  semanticAssistance,
+}) {
+  const policy = config.extractor?.semantic_assistance;
+  const completedAtMs = Date.parse(semanticAssistance?.completed_at);
+  const firstSeenMs = Date.parse(observation.data.first_seen_at);
+  const maximumAgeMs = policy?.maximum_observation_age_hours * 3_600_000;
+  const contextRef = semanticAssistance?.context_ref;
+  const quote = semanticQuoteContext(contexts, contextRef);
+  const quoteAvailableAtMs = Date.parse(quote?.available_at);
+  const targetScope = quote
+    ? targetScopeFromSemanticQuote(quote, config)
+    : null;
+  const semanticTimingRange = assertedRange(
+    text,
+    observation.data.published_at,
+    semanticAssistance?.phase,
+  );
+  if (
+    policy?.enabled !== true ||
+    observation.data.content.media_type !== "text/plain" ||
+    observation.data.selection_context?.feature_eligible === false ||
+    observation.data.selection_context?.outcome_conditioned === true ||
+    !configuredSemanticAuthority({ observation, config, role }) ||
+    relevance.decision !== "relevant" ||
+    relevance.basis !== "quote" ||
+    hasUnresolvedContext ||
+    relevance.context_refs.length !== 1 ||
+    exactReferenceKey(relevance.context_refs[0]) !==
+      exactReferenceKey(contextRef) ||
+    semanticAssistance?.policy_version !== policy.policy_version ||
+    semanticAssistance?.protocol !== policy.protocol ||
+    semanticAssistance?.model !== policy.model ||
+    semanticAssistance?.prompt_version !== policy.prompt_version ||
+    semanticAssistance?.decision !== "applied" ||
+    !["scheduled", "expected", "started"].includes(
+      semanticAssistance?.phase,
+    ) ||
+    !Number.isFinite(semanticAssistance?.confidence) ||
+    semanticAssistance.confidence < policy.minimum_confidence ||
+    semanticAssistance.confidence > 1 ||
+    !/^sha256:[a-f0-9]{64}$/.test(
+      semanticAssistance?.response_hash ?? "",
+    ) ||
+    !Number.isFinite(completedAtMs) ||
+    !Number.isFinite(firstSeenMs) ||
+    !Number.isFinite(quoteAvailableAtMs) ||
+    completedAtMs < Math.max(firstSeenMs, quoteAvailableAtMs) ||
+    completedAtMs - firstSeenMs > maximumAgeMs ||
+    !quote ||
+    !targetScope ||
+    !SEMANTIC_RESET_TERMS.test(text) ||
+    !semanticTimingPhaseHasWrapperSupport(text, semanticAssistance?.phase) ||
+    semanticTimingRange === null ||
+    isBankedResetOnly(text) ||
+    hasNarrowScopeQualifier(text)
+  ) {
+    return null;
+  }
+  return {
+    ...semanticAssistance,
+    context_ref: {
+      record_id: contextRef.record_id,
+      revision: contextRef.revision,
+    },
+    target_scope: targetScope,
+  };
+}
+
 export function extractSignal(observation, config, {
   availableAt = observation.data.fetched_at,
   createdAt = observation.data.fetched_at,
   evidenceRootOverride = null,
   contexts = [],
   hasUnresolvedContext = false,
+  semanticAssistance = null,
 } = {}) {
   if (!SIGNAL_MEDIA_TYPES.has(observation.data.content.media_type)) {
     return null;
@@ -818,7 +1017,7 @@ export function extractSignal(observation, config, {
     text,
     role,
   });
-  const relevance = assessTopicRelevance({
+  const deterministicRelevance = assessTopicRelevance({
     text,
     sourceRole: role,
     contexts,
@@ -826,6 +1025,25 @@ export function extractSignal(observation, config, {
     authorityReplyCommitment,
     authorityReplyTargetProduct: config.target.product,
   });
+  const appliedSemanticAssistance = validatedSemanticTimingAssistance({
+    observation,
+    config,
+    text,
+    role,
+    relevance: deterministicRelevance,
+    contexts,
+    hasUnresolvedContext,
+    semanticAssistance,
+  });
+  const relevance = appliedSemanticAssistance
+    ? {
+        decision: "relevant",
+        reason_code: "semantic_authority_quote_timing",
+        basis: "self",
+        matched_segments: [text],
+        context_refs: [appliedSemanticAssistance.context_ref],
+      }
+    : deterministicRelevance;
   const authorityReplyClaim =
     relevance.reason_code === "authority_reply_reset_commitment";
   const claimText = authorityReplyClaim
@@ -833,16 +1051,22 @@ export function extractSignal(observation, config, {
     : relevance.basis === "self"
       ? text
       : relevance.matched_segments.join("\n");
-  const eventType = classifyEvent(claimText) ?? (
-    authorityReplyClaim
+  const eventType = appliedSemanticAssistance
+    ? (/\brefill/i.test(claimText) ? "quota_refill" : "quota_reset")
+    : classifyEvent(claimText) ?? (
+      authorityReplyClaim
       ? (/\brefill/i.test(claimText) ? "quota_refill" : "quota_reset")
       : null
-  );
+    );
   if (!eventType) return null;
-  const phase = authorityReplyClaim
+  const phase = appliedSemanticAssistance
+    ? appliedSemanticAssistance.phase
+    : authorityReplyClaim
     ? "scheduled"
     : classifyPhase(claimText, eventType);
-  const productScope = authorityReplyClaim
+  const productScope = appliedSemanticAssistance
+    ? appliedSemanticAssistance.target_scope
+    : authorityReplyClaim
     ? { vendor: config.target.vendor, product: config.target.product }
     : classifyProductScope(claimText, config);
   const impact = classifyImpact(claimText, eventType, role);
@@ -897,7 +1121,7 @@ export function extractSignal(observation, config, {
   const usedContextKeys = new Set(contextRefs.map((reference) =>
     `${reference.record_id}@${reference.revision}`
   ));
-  const effectiveAvailableAtMs = contexts
+  const contextAvailableAtMs = contexts
     .filter((context) => {
       const reference = context.observation_ref ?? context.context_ref ?? context.ref;
       return reference && usedContextKeys.has(
@@ -908,7 +1132,19 @@ export function extractSignal(observation, config, {
       const value = Date.parse(context.available_at);
       return Number.isFinite(value) ? Math.max(maximum, value) : maximum;
     }, Date.parse(availableAt));
+  const effectiveAvailableAtMs = appliedSemanticAssistance
+    ? Math.max(
+        contextAvailableAtMs,
+        Date.parse(appliedSemanticAssistance.completed_at),
+      )
+    : contextAvailableAtMs;
   const effectiveAvailableAt = new Date(effectiveAvailableAtMs).toISOString();
+  const effectiveCreatedAt = appliedSemanticAssistance
+    ? new Date(Math.max(
+        Date.parse(createdAt),
+        Date.parse(appliedSemanticAssistance.completed_at),
+      )).toISOString()
+    : createdAt;
   return createRecord({
     recordType: "normalized_signal",
     naturalKey: [
@@ -921,7 +1157,7 @@ export function extractSignal(observation, config, {
       extractor.prompt_version,
       extractor.semantic_policy_hash,
     ].join(":"),
-    createdAt,
+    createdAt: effectiveCreatedAt,
     producer: producer("rule-claim-extractor", extractor.model_version, {
       taxonomy_version: config.taxonomy_version,
       extractor_model: extractor.model,
@@ -986,6 +1222,22 @@ export function extractSignal(observation, config, {
         prompt_version: extractor.prompt_version,
         semantic_policy_hash: extractor.semantic_policy_hash,
         confidence,
+        ...(appliedSemanticAssistance
+          ? {
+              semantic_assistance: {
+                policy_version: appliedSemanticAssistance.policy_version,
+                protocol: appliedSemanticAssistance.protocol,
+                model: appliedSemanticAssistance.model,
+                prompt_version: appliedSemanticAssistance.prompt_version,
+                decision: appliedSemanticAssistance.decision,
+                phase: appliedSemanticAssistance.phase,
+                confidence: appliedSemanticAssistance.confidence,
+                response_hash: appliedSemanticAssistance.response_hash,
+                completed_at: appliedSemanticAssistance.completed_at,
+                context_ref: appliedSemanticAssistance.context_ref,
+              },
+            }
+          : {}),
         relevance: {
           policy_version: TOPIC_RELEVANCE_POLICY_VERSION,
           decision: relevance.decision,
@@ -999,7 +1251,10 @@ export function extractSignal(observation, config, {
   });
 }
 
-export async function normalizeNewObservations(store, config, { now = new Date() } = {}) {
+export async function normalizeNewObservations(store, config, {
+  now = new Date(),
+  semanticAssessor = createConfiguredSemanticTimingAssessor(config),
+} = {}) {
   const extractor = extractorContract(config);
   const observations = (await store.all("raw_observation", { latestOnly: false }))
     .sort((left, right) =>
@@ -1110,22 +1365,66 @@ export async function normalizeNewObservations(store, config, { now = new Date()
       priorContextSignatures[key] !== nextContextSignatures[key]
     );
   });
-  const records = pending
-    .map((observation) => {
-      const relationContext = relationContextByRef.get(exactRef(observation));
-      return extractSignal(observation, config, {
-        createdAt: now,
-        availableAt: previouslyProcessedRefs.has(exactRef(observation))
-          ? now
-          : observation.revision === 1
-            ? observation.data.availability_attestation?.available_at ??
-              observation.data.fetched_at
-            : observation.data.fetched_at ?? observation.created_at,
-        evidenceRootOverride: evidenceRoots.get(exactRef(observation)),
-        ...relationContext,
+  const semanticSummary = {
+    enabled: semanticAssessor !== null,
+    attempted: 0,
+    applied: 0,
+    rejected: 0,
+    failed: 0,
+  };
+  const records = [];
+  for (const observation of pending) {
+    const relationContext = relationContextByRef.get(exactRef(observation));
+    const extractionOptions = {
+      createdAt: now,
+      availableAt: previouslyProcessedRefs.has(exactRef(observation))
+        ? now
+        : observation.revision === 1
+          ? observation.data.availability_attestation?.available_at ??
+            observation.data.fetched_at
+          : observation.data.fetched_at ?? observation.created_at,
+      evidenceRootOverride: evidenceRoots.get(exactRef(observation)),
+      ...relationContext,
+    };
+    const deterministic = extractSignal(observation, config, extractionOptions);
+    let record = deterministic;
+    if (semanticAssessor && deterministic) {
+      const candidate = semanticAssistanceCandidate({
+        observation,
+        config,
+        signal: deterministic,
+        contexts: relationContext.contexts,
+        hasUnresolvedContext: relationContext.hasUnresolvedContext,
+        now,
       });
-    })
-    .filter(Boolean);
+      if (candidate) {
+        semanticSummary.attempted += 1;
+        try {
+          const assessment = await semanticAssessor.assess(candidate);
+          if (assessment) {
+            const assisted = extractSignal(observation, config, {
+              ...extractionOptions,
+              semanticAssistance: {
+                ...assessment,
+                context_ref: candidate.context_ref,
+              },
+            });
+            if (assisted?.data?.extraction?.semantic_assistance) {
+              record = assisted;
+              semanticSummary.applied += 1;
+            } else {
+              semanticSummary.rejected += 1;
+            }
+          } else {
+            semanticSummary.rejected += 1;
+          }
+        } catch {
+          semanticSummary.failed += 1;
+        }
+      }
+    }
+    if (record) records.push(record);
+  }
   const results = await store.appendMany(records);
   normalizationState.versions[versionKey] = {
     processed: Object.fromEntries([
@@ -1139,5 +1438,9 @@ export async function normalizeNewObservations(store, config, { now = new Date()
     updated_at: new Date(now).toISOString(),
   };
   await store.writeState("normalization", normalizationState);
-  return { normalized: results.filter((result) => result.inserted).length, records };
+  return {
+    normalized: results.filter((result) => result.inserted).length,
+    records,
+    semantic_assistance: semanticSummary,
+  };
 }

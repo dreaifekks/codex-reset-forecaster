@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { hashLabel } from "../src/core/hash.mjs";
+import {
+  OUTCOME_ADJUDICATOR_VERSION,
+  OUTCOME_LABEL_POLICY_VERSION,
+} from "../src/core/outcome-contract.mjs";
 import { createPublicationLedger } from "../src/notifications/ledger.mjs";
 import { createPublicationProjector } from "../src/notifications/projector.mjs";
+import {
+  completedRunOwnsServingSnapshot,
+} from "../src/runtime/startup-projection.mjs";
 
 function config() {
   return {
@@ -10,7 +17,7 @@ function config() {
       public_base_url: "https://codexreset.example",
       publication: {
         enabled: true,
-        policy_version: "publication-policy/1",
+        policy_version: "publication-policy/2",
         bootstrap_mode: "baseline_only",
         outcome_max_delivery_delay_hours: 24,
         authority_max_delivery_delay_hours: 48,
@@ -105,13 +112,22 @@ function outcomeItem({
   occurredEnd = "2026-08-10T02:00:00.000Z",
   occurredOriginalText = null,
   sourceRevision = null,
+  contractCurrent = true,
 }) {
   const verificationRevision = sourceRevision ?? 1;
   const outcome = {
     record_id: recordId,
     revision,
+    producer: {
+      name: "outcome-adjudicator",
+      version: contractCurrent ? OUTCOME_ADJUDICATOR_VERSION : "legacy",
+      config_hash: "sha256:test",
+    },
     data: {
       status,
+      label_policy_version: contractCurrent
+        ? OUTCOME_LABEL_POLICY_VERSION
+        : "legacy",
       known_at: knownAt,
       label_grade: "confirmed",
       occurred_time_range: {
@@ -304,6 +320,287 @@ test("lineage-only revisions of baseline outcomes stay silent", async () => {
     2,
   );
   assert.equal((await ledger.all()).length, 0);
+});
+
+test("an undelivered verification gap cannot turn lineage replay into a correction", async () => {
+  const store = fakeStore();
+  const ledger = createPublicationLedger(store);
+  let outcomes = [];
+  const projector = createPublicationProjector({
+    store,
+    config: config(),
+    ledger,
+    loadOutcomes: async () => outcomes,
+  });
+  await projector.project({
+    snapshot: snapshot({
+      id: "p0",
+      issuedAt: "2026-08-10T00:00:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:00:00.000Z",
+  });
+
+  outcomes = [outcomeItem({
+    revision: 1,
+    knownAt: "2026-08-10T00:05:00.000Z",
+    sourceRevision: 1,
+  })];
+  const confirmed = await projector.project({
+    snapshot: snapshot({
+      id: "p1",
+      issuedAt: "2026-08-10T00:06:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:06:00.000Z",
+  });
+  assert.deepEqual(confirmed.events.map((event) => event.event_type), [
+    "outcome.reset_confirmed.v1",
+  ]);
+
+  const temporarilyUnverified = outcomeItem({
+    revision: 1,
+    knownAt: "2026-08-10T00:05:00.000Z",
+    sourceRevision: 1,
+  });
+  temporarilyUnverified.verification = null;
+  temporarilyUnverified.source = null;
+  outcomes = [temporarilyUnverified];
+  const expiredGap = await projector.project({
+    snapshot: snapshot({
+      id: "p2",
+      issuedAt: "2026-08-12T00:06:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-12T00:07:00.000Z",
+  });
+  assert.deepEqual(expiredGap.events, []);
+  const gapState = store.states.get("publication-projection")
+    .outcomes["outcome-1"];
+  assert.equal(gapState.status, "verification_withdrawn");
+  assert.equal(gapState.delivery_status, "eligible_confirmed");
+
+  outcomes = [outcomeItem({
+    revision: 2,
+    knownAt: "2026-08-12T00:08:00.000Z",
+    sourceRevision: 1,
+  })];
+  const restored = await projector.project({
+    snapshot: snapshot({
+      id: "p3",
+      issuedAt: "2026-08-12T00:09:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-12T00:10:00.000Z",
+  });
+  assert.deepEqual(restored.events, []);
+  assert.equal((await ledger.all()).length, 1);
+  const restoredState = store.states.get("publication-projection")
+    .outcomes["outcome-1"];
+  assert.equal(restoredState.revision, 2);
+  assert.equal(restoredState.status, "eligible_confirmed");
+  assert.equal(
+    restoredState.published_event_id,
+    confirmed.events[0].event_id,
+  );
+});
+
+test("an outcome contract migration gap stays silent inside the delivery window", async () => {
+  const store = fakeStore();
+  const ledger = createPublicationLedger(store);
+  let outcomes = [];
+  const projector = createPublicationProjector({
+    store,
+    config: config(),
+    ledger,
+    loadOutcomes: async () => outcomes,
+  });
+  await projector.project({
+    snapshot: snapshot({
+      id: "p0",
+      issuedAt: "2026-08-10T00:00:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:00:00.000Z",
+  });
+
+  outcomes = [outcomeItem({
+    revision: 1,
+    knownAt: "2026-08-10T00:05:00.000Z",
+    sourceRevision: 1,
+  })];
+  const confirmed = await projector.project({
+    snapshot: snapshot({
+      id: "p-confirmed",
+      issuedAt: "2026-08-10T00:06:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:06:00.000Z",
+  });
+  assert.deepEqual(confirmed.events.map((event) => event.event_type), [
+    "outcome.reset_confirmed.v1",
+  ]);
+
+  const pending = outcomeItem({
+    revision: 1,
+    knownAt: "2026-08-10T00:05:00.000Z",
+    sourceRevision: 1,
+    contractCurrent: false,
+  });
+  pending.verification = null;
+  pending.source = null;
+  outcomes = [pending];
+  const gap = await projector.project({
+    snapshot: snapshot({
+      id: "p1",
+      issuedAt: "2026-08-10T00:07:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:07:00.000Z",
+  });
+  assert.deepEqual(gap.events, []);
+  const gapState = store.states.get("publication-projection")
+    .outcomes["outcome-1"];
+  assert.equal(gapState.status, "contract_pending");
+  assert.equal(gapState.delivery_status, "eligible_confirmed");
+
+  outcomes = [outcomeItem({
+    revision: 2,
+    knownAt: "2026-08-10T00:08:00.000Z",
+    sourceRevision: 1,
+  })];
+  const restored = await projector.project({
+    snapshot: snapshot({
+      id: "p2",
+      issuedAt: "2026-08-10T00:09:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:09:00.000Z",
+  });
+  assert.deepEqual(restored.events, []);
+  assert.equal((await ledger.all()).length, 1);
+});
+
+test("fresh revisions of an old outcome update audit state without notifying", async () => {
+  const store = fakeStore();
+  const ledger = createPublicationLedger(store);
+  let outcomes = [];
+  const projector = createPublicationProjector({
+    store,
+    config: config(),
+    ledger,
+    loadOutcomes: async () => outcomes,
+  });
+  await projector.project({
+    snapshot: snapshot({
+      id: "p0",
+      issuedAt: "2026-08-10T00:00:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:00:00.000Z",
+  });
+
+  outcomes = [outcomeItem({
+    revision: 1,
+    knownAt: "2026-08-10T00:05:00.000Z",
+    occurredStart: "2026-08-10T00:01:00.000Z",
+    occurredEnd: "2026-08-10T00:02:00.000Z",
+    sourceRevision: 1,
+  })];
+  const confirmed = await projector.project({
+    snapshot: snapshot({
+      id: "p1",
+      issuedAt: "2026-08-10T00:06:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-10T00:06:00.000Z",
+  });
+  assert.deepEqual(confirmed.events.map((event) => event.event_type), [
+    "outcome.reset_confirmed.v1",
+  ]);
+
+  const withdrawn = outcomeItem({
+    revision: 2,
+    knownAt: "2026-08-12T00:05:00.000Z",
+    occurredStart: "2026-08-10T00:01:00.000Z",
+    occurredEnd: "2026-08-10T00:02:00.000Z",
+    sourceRevision: 1,
+  });
+  withdrawn.verification = null;
+  withdrawn.source = null;
+  outcomes = [withdrawn];
+  const staleWithdrawal = await projector.project({
+    snapshot: snapshot({
+      id: "p2",
+      issuedAt: "2026-08-12T00:06:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-12T00:06:00.000Z",
+  });
+  assert.deepEqual(staleWithdrawal.events, []);
+
+  outcomes = [outcomeItem({
+    revision: 3,
+    knownAt: "2026-08-12T00:07:00.000Z",
+    occurredStart: "2026-08-10T00:11:00.000Z",
+    occurredEnd: "2026-08-10T00:12:00.000Z",
+    sourceRevision: 2,
+  })];
+  const staleCorrection = await projector.project({
+    snapshot: snapshot({
+      id: "p3",
+      issuedAt: "2026-08-12T00:08:00.000Z",
+      probability: 0.2,
+    }),
+    emittedAt: "2026-08-12T00:08:00.000Z",
+  });
+  assert.deepEqual(staleCorrection.events, []);
+  assert.equal((await ledger.all()).length, 1);
+  const state = store.states.get("publication-projection").outcomes["outcome-1"];
+  assert.equal(state.revision, 3);
+  assert.equal(state.status, "eligible_confirmed");
+  assert.equal(state.published_event_id, confirmed.events[0].event_id);
+});
+
+test("startup projection accepts only the forecast owned by the last completed run", () => {
+  const current = snapshot({
+    id: "prediction-current",
+    issuedAt: "2026-08-10T00:10:00.000Z",
+    probability: 0.2,
+  });
+  const runtimeState = {
+    last_success_at: "2026-08-10T00:11:00.000Z",
+    last_prediction_id: "prediction-current",
+  };
+  assert.equal(
+    completedRunOwnsServingSnapshot(runtimeState, current),
+    true,
+  );
+  assert.equal(
+    completedRunOwnsServingSnapshot({
+      ...runtimeState,
+      last_prediction_id: "prediction-older",
+    }, current),
+    false,
+  );
+  assert.equal(
+    completedRunOwnsServingSnapshot({
+      ...runtimeState,
+      last_success_at: "2026-08-10T00:09:00.000Z",
+    }, current),
+    false,
+  );
+  assert.equal(
+    completedRunOwnsServingSnapshot(runtimeState, {
+      ...current,
+      readiness: {
+        ...current.readiness,
+        serving_ready: false,
+      },
+    }),
+    false,
+  );
+  assert.equal(completedRunOwnsServingSnapshot(runtimeState, null), false);
 });
 
 test("an already handled confirmation cannot reopen a stale high-probability cycle", async () => {

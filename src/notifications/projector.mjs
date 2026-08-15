@@ -1,6 +1,14 @@
 import { hashLabel } from "../core/hash.mjs";
+import {
+  OUTCOME_ADJUDICATOR_VERSION,
+  OUTCOME_LABEL_POLICY_VERSION,
+} from "../core/outcome-contract.mjs";
 import { confirmedOutcomeHistoryRow, loadOutcomePublicationProjection } from "../query/history-results.mjs";
-import { createPublicationLedger, PUBLICATION_EVENT_SCHEMA_VERSION } from "./ledger.mjs";
+import {
+  createPublicationLedger,
+  publicationDeliveryKey,
+  PUBLICATION_EVENT_SCHEMA_VERSION,
+} from "./ledger.mjs";
 import {
   authorityNotification,
   forecastReport,
@@ -40,7 +48,15 @@ function outcomeStatus(item) {
   if (["rejected", "cancelled"].includes(item.outcome.data.status)) {
     return item.outcome.data.status;
   }
-  if (item.outcome.data.status === "confirmed") return "verification_withdrawn";
+  if (item.outcome.data.status === "confirmed") {
+    const outcome = item.outcome;
+    if (
+      outcome.data.label_policy_version !== OUTCOME_LABEL_POLICY_VERSION ||
+      outcome.producer?.name !== "outcome-adjudicator" ||
+      outcome.producer?.version !== OUTCOME_ADJUDICATOR_VERSION
+    ) return "contract_pending";
+    return "verification_withdrawn";
+  }
   return String(item.outcome.data.status ?? "unknown");
 }
 
@@ -76,6 +92,18 @@ function materialOutcomeTransition(previous, currentStatus, currentRow) {
     previous.status !== currentStatus ||
     outcomeDeliveryFingerprint(previous.row) !==
       outcomeDeliveryFingerprint(currentRow);
+}
+
+// Projection state tracks both the latest observed canonical revision and the
+// last material state used as the delivery baseline. A stale, failed, or
+// temporarily unverifiable intermediate state must not become the comparison
+// point for a later notification when no event about that state was delivered.
+function outcomeDeliveryBaseline(previous) {
+  if (!previous) return null;
+  return {
+    status: previous.delivery_status ?? previous.status,
+    row: previous.delivery_row ?? previous.row,
+  };
 }
 
 function usableForecastSnapshot(snapshot, emittedAt) {
@@ -123,12 +151,18 @@ function initialState({
     policy_hash: policyHash,
     outcomes: Object.fromEntries(outcomeItems.map((item) => [
       item.outcome.record_id,
-      {
-        revision: item.outcome.revision,
-        status: outcomeStatus(item),
-        row: outcomeRow(item),
-        published_event_id: null,
-      },
+      (() => {
+        const status = outcomeStatus(item);
+        const row = outcomeRow(item);
+        return {
+          revision: item.outcome.revision,
+          status,
+          row,
+          delivery_status: status,
+          delivery_row: row,
+          published_event_id: null,
+        };
+      })(),
     ])),
     seen_authority_signal_refs: authority ? [authority] : [],
     active_authority_signal_ref: authority,
@@ -163,7 +197,7 @@ function publicationEvent({
     policy_hash: policy.hash,
     supersedes_event_id: supersedesEventId,
   });
-  return {
+  const event = {
     schema_version: PUBLICATION_EVENT_SCHEMA_VERSION,
     event_id: id,
     event_type: eventType,
@@ -186,6 +220,10 @@ function publicationEvent({
     summary: notification.body,
     url: notification.url,
     notification,
+  };
+  return {
+    ...event,
+    delivery_key: publicationDeliveryKey(event),
   };
 }
 
@@ -260,16 +298,38 @@ export function createPublicationProjector({
       const currentStatus = outcomeStatus(item);
       const currentRow = outcomeRow(item);
       const previous = state.outcomes[outcome.record_id] ?? null;
+      const deliveryBaseline = outcomeDeliveryBaseline(previous);
       if (
         previous?.revision === outcome.revision &&
         previous?.status === currentStatus
       ) continue;
-      if (!materialOutcomeTransition(previous, currentStatus, currentRow)) {
+      if (!materialOutcomeTransition(
+        deliveryBaseline,
+        currentStatus,
+        currentRow,
+      )) {
         state.outcomes[outcome.record_id] = {
           revision: outcome.revision,
           status: currentStatus,
           row: currentRow,
+          delivery_status: currentStatus,
+          delivery_row: currentRow,
           published_event_id: previous.published_event_id,
+        };
+        continue;
+      }
+      if (
+        previous?.status === "contract_pending" &&
+        currentStatus === "eligible_confirmed" &&
+        !previous.published_event_id
+      ) {
+        state.outcomes[outcome.record_id] = {
+          revision: outcome.revision,
+          status: currentStatus,
+          row: currentRow,
+          delivery_status: currentStatus,
+          delivery_row: currentRow,
+          published_event_id: null,
         };
         continue;
       }
@@ -285,10 +345,7 @@ export function createPublicationProjector({
           )
         : null;
       const occurredEnd = currentRow?.occurred_time_range?.end ?? null;
-      const firstConfirmation = currentStatus === "eligible_confirmed" &&
-        !previous?.published_event_id;
-      const expiresAt = firstConfirmation && knownExpiresAt &&
-          Number.isFinite(Date.parse(occurredEnd))
+      const expiresAt = knownExpiresAt && Number.isFinite(Date.parse(occurredEnd))
         ? earliestTimestamp(
             knownExpiresAt,
             addMilliseconds(
@@ -325,8 +382,8 @@ export function createPublicationProjector({
         const eventType = kind === "verification_withdrawn"
           ? "outcome.verification_withdrawn.v1"
           : `outcome.reset_${kind}.v1`;
-        const row = kind === "retracted" && previous?.row
-          ? previous.row
+        const row = kind === "retracted" && deliveryBaseline?.row
+          ? deliveryBaseline.row
           : currentRow;
         const notification = outcomeNotification(row, publicBaseUrl, kind);
         const candidate = publicationEvent({
@@ -345,13 +402,19 @@ export function createPublicationProjector({
           supersedesEventId: previous?.published_event_id ?? null,
         });
         const appended = await ledger.append(candidate);
-        pending.push(appended.event);
+        if (appended.inserted) pending.push(appended.event);
         publishedEventId = appended.event.event_id;
       }
       state.outcomes[outcome.record_id] = {
         revision: outcome.revision,
         status: currentStatus,
         row: currentRow,
+        delivery_status: kind
+          ? currentStatus
+          : deliveryBaseline?.status ?? currentStatus,
+        delivery_row: kind
+          ? currentRow
+          : deliveryBaseline?.row ?? currentRow,
         published_event_id: publishedEventId,
       };
     }
@@ -381,7 +444,8 @@ export function createPublicationProjector({
           supersedesEventId: state.probability_watch.opened_event_id,
           experimental: true,
         });
-        pending.push((await ledger.append(candidate)).event);
+        const appended = await ledger.append(candidate);
+        if (appended.inserted) pending.push(appended.event);
       }
       state.probability_watch = {
         active: false,
@@ -425,7 +489,8 @@ export function createPublicationProjector({
         report: { forecast: report },
         notification,
       });
-      pending.push((await ledger.append(candidate)).event);
+      const appended = await ledger.append(candidate);
+      if (appended.inserted) pending.push(appended.event);
       state.seen_authority_signal_refs.push(authority);
       state.seen_authority_signal_refs = state.seen_authority_signal_refs.slice(-256);
     }
@@ -466,8 +531,9 @@ export function createPublicationProjector({
         notification,
         experimental: true,
       });
-      const opened = (await ledger.append(candidate)).event;
-      pending.push(opened);
+      const appended = await ledger.append(candidate);
+      const opened = appended.event;
+      if (appended.inserted) pending.push(opened);
       state.probability_watch = {
         active: true,
         episode_id: episodeId,

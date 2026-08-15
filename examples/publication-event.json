@@ -1,6 +1,7 @@
 {
   "schema_version": "publication-event/1",
   "event_id": "pub_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "delivery_key": "delivery_7264e26a1fa6a0c6f63af7f46b7a78ff79f6b8be558078f2f7d6b5654982dcde",
   "event_type": "outcome.reset_confirmed.v1",
   "entity_key": "reset_outcome:out_example_001",
   "topic": "outcome",
@@ -9,7 +10,7 @@
   "experimental": false,
   "supersedes_event_id": null,
   "policy": {
-    "version": "publication-policy/1",
+    "version": "publication-policy/2",
     "hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
   "source": {

@@ -1,8 +1,9 @@
 import { hasNarrowAuthorityResetScope } from "../core/authority-reply.mjs";
 
-export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/5";
+export const TOPIC_RELEVANCE_POLICY_VERSION = "reset-topic-relevance/6";
 
 const TARGET_PRODUCT_TERMS = /\b(?:codex(?:er|ers)?|chatgpt\s+work)\b/i;
+const TARGET_AUTHORITY_ALIAS_TERMS = /(?:\/fast\b|\bultra\b)/i;
 const CODEX_PRODUCT_TERMS = /\bcodex(?:er|ers)?\b/i;
 const CHATGPT_WORK_PRODUCT_TERMS = /\bchatgpt\s+work\b/i;
 const ECOSYSTEM_PRODUCT_TERMS =
@@ -402,6 +403,7 @@ export function assessTopicRelevance({
     ["official", "product_lead", "product_team_member"].includes(sourceRole) &&
     (
       TARGET_PRODUCT_TERMS.test(text) ||
+      TARGET_AUTHORITY_ALIAS_TERMS.test(text) ||
       PLATFORM_SCOPE_TERMS.test(text)
     ) &&
     (
@@ -411,7 +413,10 @@ export function assessTopicRelevance({
         !ECOSYSTEM_PRODUCT_TERMS.test(segment)
       ) ||
       (
-        TARGET_PRODUCT_TERMS.test(text) &&
+        (
+          TARGET_PRODUCT_TERMS.test(text) ||
+          TARGET_AUTHORITY_ALIAS_TERMS.test(text)
+        ) &&
         RESET_ACTION.test(text) &&
         !ECOSYSTEM_PRODUCT_TERMS.test(text)
       )
@@ -422,7 +427,9 @@ export function assessTopicRelevance({
       "target_authority_operational_claim",
       "self",
       segments.filter((segment) =>
-        RESET_ACTION.test(segment) || TARGET_PRODUCT_TERMS.test(segment)
+        RESET_ACTION.test(segment) ||
+        TARGET_PRODUCT_TERMS.test(segment) ||
+        TARGET_AUTHORITY_ALIAS_TERMS.test(segment)
       ),
     );
   }

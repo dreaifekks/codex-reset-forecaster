@@ -32,6 +32,10 @@ been validated.
   Tibo identity.
 - A `started` statement, schedule, expectation, rumor, summary, or model judgment
   is not a positive outcome.
+- An authenticated host operator may explicitly attest that a linked authority
+  reset candidate completed at a supplied UTC time. That append-only path is
+  labeled `silver` and `operator_confirmation`; it re-anchors recurrence and the
+  post-outcome refractory curve, but is never presented as an official statement.
 - The internal time base is 168 hourly anchors per week.
 - At each hourly anchor, the product-facing forecast is the probability of the
   selected qualifying outcome during the next four hours.
@@ -292,6 +296,61 @@ eligible days pending, and any later promotion records its real fetch time inste
 of backdating coverage to day-end. See `docs/operations.md` for service switching
 and restart commands.
 
+### Optional semantic timing assistance
+
+The extractor has a disabled-by-default OpenAI-compatible helper for rare,
+ambiguous native-quote wrappers from a configured confirmation authority. It sends
+only the public wrapper text, the exact public quote text, and the already
+deterministically established target product. It can promote only
+`scheduled`, `expected`, or `started` timing. A model response of `completed`, a
+low-confidence response, malformed JSON, timeout, HTTP failure, stale observation,
+unresolved quote, unconfigured author, narrow-plan reset, or banked reset falls
+back to the deterministic record and can never create a `reset_outcome`.
+The model's confidence is stored separately as extraction confidence and is never
+used as reset probability.
+
+The checked-in endpoint and model defaults are TokenFlux
+`https://tokenflux.dev/v1` and `deepseek-v4-flash`; the adapter calls the standard
+`/chat/completions` route. Keep the API key in a regular file with mode `0400` or
+`0600`:
+
+```bash
+export RESET_SEMANTIC_ASSISTANCE_ENABLED=true
+export RESET_SEMANTIC_ASSISTANCE_BASE_URL=https://tokenflux.dev/v1
+export RESET_SEMANTIC_ASSISTANCE_MODEL=deepseek-v4-flash
+export RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE=/path/to/tokenflux-token
+```
+
+The Docker variables and read-only secret mount are documented in `.env.example`.
+Enabling the helper changes the versioned extraction semantic contract, so existing
+raw observations are replayed under a new contract and compatible model artifacts
+must be fitted before serving.
+
+### Manual platform confirmation
+
+When a configured-authority plan is present but no later official completion post
+exists, a host operator can explicitly record the observed platform completion.
+This is deliberately an offline, filesystem-authorized operation rather than a
+public web endpoint. Stop the only live writer first, then bind the assertion to
+the exact authority status and supply either an exact effective timestamp or a
+relative age:
+
+```bash
+node src/cli.mjs confirm-reset \
+  --offline \
+  --attest-platform \
+  --source-status 2087706104814023111 \
+  --actor dreaife \
+  --effective-at 2026-08-13T04:35:00Z
+```
+
+`--ago-hours 1` may replace `--effective-at`; `--now` can freeze the assertion
+clock for a reproducible run. The command refuses personal-quota observations,
+unknown or community-only statuses, future effective times, and times before the
+linked authority plan. The resulting minute-level `silver` outcome is eligible for
+forecast recurrence/refractory logic and notification projection, while the public
+history and messages retain its manual provenance.
+
 ## Status
 
 Version `0.7.0` with canonical contract `reset-intel/0.2` implements the website,
@@ -307,9 +366,9 @@ follows from that fit. The `validated` status still requires at least 1,008
 evaluated hourly windows, 20 eligible events, and a compatible challenger that
 passes the fixed-policy walk-forward and calibration gates.
 
-The current checked-in configuration contract is `provider-config/0.3.5`, with
+The current checked-in configuration contract is `provider-config/0.3.6`, with
 `reset-taxonomy/0.3.1`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
-rules `0.3.3` (`reset-extract/rules-0.3.3`). The model contract also binds the
+rules `0.3.4` (`reset-extract/rules-0.3.4`). The model contract also binds the
 `winsorized-zscore/1` transform:
 standardized feature values are clipped to `[-3, 3]` during fitting and live
 inference. Coefficient priors use raw-feature logit units and are converted into

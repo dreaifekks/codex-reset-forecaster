@@ -7,7 +7,14 @@ import {
   assessEvaluationCompatibility,
   getReadiness,
 } from "../src/runtime/readiness.mjs";
-import { createRequestHandler } from "../src/web/app.mjs";
+import {
+  createRequestHandler,
+  servingSnapshotConfig,
+} from "../src/web/app.mjs";
+import {
+  OUTCOME_ADJUDICATOR_VERSION,
+  OUTCOME_LABEL_POLICY_VERSION,
+} from "../src/core/outcome-contract.mjs";
 import { impactEpisodeContract } from "../src/pipeline/impact-episodes.mjs";
 import {
   evaluationArtifactHash,
@@ -26,6 +33,19 @@ import {
 } from "../src/model/logistic-hazard.mjs";
 
 const HOUR_MS = 3_600_000;
+
+test("serving snapshot reuse is bound to the current outcome contract", () => {
+  const snapshotConfig = servingSnapshotConfig(config());
+  assert.equal(
+    snapshotConfig.outcome_label_policy_version,
+    OUTCOME_LABEL_POLICY_VERSION,
+  );
+  assert.equal(
+    snapshotConfig.outcome_adjudicator_version,
+    OUTCOME_ADJUDICATOR_VERSION,
+  );
+  assert.match(snapshotConfig.serving_config_hash, /^sha256:[a-f0-9]{64}$/);
+});
 
 class MemoryStore {
   constructor({ records = {}, states = {}, models = {}, blobs = {} } = {}) {
@@ -537,7 +557,7 @@ test("exact forecast snapshots are immutable while current forecasts remain no-s
   assert.equal(health.synthetic_only, false);
   assert.equal(
     store.states["serving-snapshot"].schema_version,
-    "serving-snapshot/1",
+    "serving-snapshot/2",
   );
   assert.equal(
     store.states["serving-snapshot"].prediction_hash,

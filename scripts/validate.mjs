@@ -18,6 +18,7 @@ import {
   FORECAST_PRODUCER_VERSION,
 } from "../src/core/prediction-contract.mjs";
 import { assertCanonicalRecord } from "../src/core/validate-record.mjs";
+import { publicationDeliveryKey } from "../src/notifications/ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = path.join(root, "schemas", "reset-intel.schema.json");
@@ -140,6 +141,8 @@ function validatePublicationEvent(event, fileName) {
     event.schema_version !== "publication-event/1" ||
     Object.hasOwn(event, "record_type") ||
     !/^pub_[a-f0-9]{64}$/.test(event.event_id ?? "") ||
+    !/^delivery_[a-f0-9]{64}$/.test(event.delivery_key ?? "") ||
+    event.delivery_key !== publicationDeliveryKey(event) ||
     !eventContract ||
     !Number.isSafeInteger(event.sequence) ||
     event.sequence < 1 ||
@@ -171,7 +174,9 @@ function validatePublicationEvent(event, fileName) {
     fail(`${fileName}: topic delivery class is inconsistent`);
   }
   if (
-    event.policy?.version !== "publication-policy/1" ||
+    !["publication-policy/1", "publication-policy/2"].includes(
+      event.policy?.version,
+    ) ||
     !/^sha256:[a-f0-9]{64}$/.test(event.policy?.hash ?? "")
   ) {
     fail(`${fileName}: publication policy binding is invalid`);
@@ -341,6 +346,7 @@ if (
   !providerSchema.$defs?.historicalDailyLedgerAttestation ||
   !providerSchema.$defs?.outcomeDefinition ||
   !providerSchema.$defs?.extractorPolicy ||
+  !providerSchema.$defs?.semanticAssistancePolicy ||
   !providerSchema.$defs?.impactTrackingPolicy ||
   !providerSchema.$defs?.authorityTimingPolicy
 ) {
@@ -397,15 +403,18 @@ if (
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
 const defaultExtractor = extractorContract(defaultConfig);
 if (
-  defaultConfig.config_version !== "provider-config/0.3.5" ||
+  defaultConfig.config_version !== "provider-config/0.3.6" ||
   defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.1" ||
   defaultConfig.feature_schema_version !== "reset-features/0.3.1" ||
   defaultConfig.deduplication_version !== "reset-dedup/0.2.3" ||
-  defaultExtractor.model_version !== "0.3.3" ||
-  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.3" ||
-  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/5" ||
+  defaultExtractor.model_version !== "0.3.4" ||
+  defaultExtractor.prompt_version !== "reset-extract/rules-0.3.4" ||
+  defaultExtractor.topic_relevance_policy_version !== "reset-topic-relevance/6" ||
   !Array.isArray(defaultConfig.extractor?.authority_reply_identity_ids) ||
   defaultConfig.extractor.authority_reply_identity_ids.length !== 0 ||
+  defaultConfig.extractor?.semantic_assistance?.policy_version !==
+    "semantic-timing-assistance/1" ||
+  defaultConfig.extractor.semantic_assistance.enabled !== false ||
   defaultConfig.model?.standardized_feature_clip !== 3 ||
   defaultConfig.model?.authority_timing?.version !==
     "authority-timing-first-event-mixture/2" ||

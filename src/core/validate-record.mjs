@@ -751,6 +751,50 @@ export function assertCanonicalRecord(record) {
       /^sha256:[a-f0-9]{64}$/.test(data.extraction?.semantic_policy_hash ?? ""),
       "signal extraction semantic policy hash invalid",
     );
+    if (data.extraction?.semantic_assistance !== undefined) {
+      const assistance = data.extraction.semantic_assistance;
+      invariant(
+        assistance.policy_version === "semantic-timing-assistance/1" &&
+          assistance.protocol ===
+            "openai-compatible-chat-completions/1" &&
+          typeof assistance.model === "string" &&
+          assistance.model.length > 0 &&
+          assistance.prompt_version === "authority-quote-timing/1" &&
+          assistance.decision === "applied" &&
+          ["scheduled", "expected", "started"].includes(assistance.phase) &&
+          /^sha256:[a-f0-9]{64}$/.test(assistance.response_hash ?? "") &&
+          isUtc(assistance.completed_at),
+        "signal semantic assistance invalid",
+      );
+      probability(
+        assistance.confidence,
+        "semantic assistance extraction confidence",
+      );
+      recordReference(
+        assistance.context_ref,
+        "semantic assistance context ref",
+      );
+      invariant(
+        data.claim?.phase === assistance.phase &&
+          ["quota_reset", "quota_refill"].includes(data.claim?.event_type) &&
+          data.provenance?.derivation === "primary_statement" &&
+          data.provenance?.feature_eligible !== false &&
+          data.extraction?.relevance?.basis === "self" &&
+          data.extraction?.relevance?.reason_code ===
+            "semantic_authority_quote_timing" &&
+          Array.isArray(data.extraction.relevance.context_refs) &&
+          data.extraction.relevance.context_refs.some((reference) =>
+            reference.record_id === assistance.context_ref.record_id &&
+            reference.revision === assistance.context_ref.revision
+          ) &&
+          data.observation_refs.some((reference) =>
+            reference.record_id === assistance.context_ref.record_id &&
+            reference.revision === assistance.context_ref.revision
+          ) &&
+          Date.parse(data.available_at) >= Date.parse(assistance.completed_at),
+        "signal semantic assistance lineage invalid",
+      );
+    }
     if (data.extraction?.relevance !== undefined) {
       const relevance = data.extraction.relevance;
       invariant(
@@ -804,7 +848,12 @@ export function assertCanonicalRecord(record) {
         Array.isArray(data.candidate_refs) &&
         data.candidate_refs.length > 0 &&
         data.verification.every((entry) =>
-          entry.kind === "official_confirmation" &&
+          (
+            (data.label_grade === "gold" &&
+              entry.kind === "official_confirmation") ||
+            (data.label_grade === "silver" &&
+              entry.kind === "operator_confirmation")
+          ) &&
           typeof entry.independence_group_id === "string" &&
           entry.independence_group_id.length > 0
         ) &&

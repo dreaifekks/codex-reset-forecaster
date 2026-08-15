@@ -562,6 +562,45 @@
               "pattern": "^sha256:[a-f0-9]{64}$"
             },
             "confidence": { "$ref": "#/$defs/probability" },
+            "semantic_assistance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_version",
+                "protocol",
+                "model",
+                "prompt_version",
+                "decision",
+                "phase",
+                "confidence",
+                "response_hash",
+                "completed_at",
+                "context_ref"
+              ],
+              "properties": {
+                "policy_version": {
+                  "const": "semantic-timing-assistance/1"
+                },
+                "protocol": {
+                  "const": "openai-compatible-chat-completions/1"
+                },
+                "model": { "type": "string", "minLength": 1 },
+                "prompt_version": {
+                  "const": "authority-quote-timing/1"
+                },
+                "decision": { "const": "applied" },
+                "phase": {
+                  "enum": ["scheduled", "expected", "started"]
+                },
+                "confidence": { "$ref": "#/$defs/probability" },
+                "response_hash": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "completed_at": { "$ref": "#/$defs/utcTimestamp" },
+                "context_ref": { "$ref": "#/$defs/recordRef" }
+              }
+            },
             "relevance": {
               "type": "object",
               "additionalProperties": false,
@@ -866,7 +905,7 @@
           "then": {
             "required": ["label_policy_version", "event_identity"],
             "properties": {
-              "label_policy_version": { "const": "completed-direct/0.3.1" },
+              "label_policy_version": { "const": "completed-evidence/0.4.0" },
               "event_identity": { "type": "string", "minLength": 1 },
               "occurred_time_range": { "$ref": "#/$defs/timeRange" },
               "candidate_refs": {
@@ -882,9 +921,51 @@
                   "additionalProperties": false,
                   "required": ["kind", "observation_ref", "independence_group_id"],
                   "properties": {
-                    "kind": { "const": "official_confirmation" },
+                    "kind": {
+                      "enum": ["official_confirmation", "operator_confirmation"]
+                    },
                     "observation_ref": { "$ref": "#/$defs/recordRef" },
                     "independence_group_id": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": { "const": "confirmed" },
+              "label_grade": { "const": "gold" }
+            },
+            "required": ["status", "label_grade"]
+          },
+          "then": {
+            "properties": {
+              "verification": {
+                "items": {
+                  "properties": {
+                    "kind": { "const": "official_confirmation" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": { "const": "confirmed" },
+              "label_grade": { "const": "silver" }
+            },
+            "required": ["status", "label_grade"]
+          },
+          "then": {
+            "properties": {
+              "verification": {
+                "items": {
+                  "properties": {
+                    "kind": { "const": "operator_confirmation" }
                   }
                 }
               }
@@ -920,7 +1001,7 @@
             "additionalProperties": false,
             "required": ["kind", "observation_ref", "independence_group_id"],
             "properties": {
-              "kind": { "enum": ["direct_platform_observation", "official_confirmation", "independent_user_confirmation"] },
+              "kind": { "enum": ["direct_platform_observation", "official_confirmation", "independent_user_confirmation", "operator_confirmation"] },
               "observation_ref": { "$ref": "#/$defs/recordRef" },
               "independence_group_id": { "type": "string" }
             }

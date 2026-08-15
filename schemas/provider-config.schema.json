@@ -154,7 +154,8 @@
         "model_version",
         "prompt_version",
         "topic_relevance_policy_version",
-        "authority_reply_identity_ids"
+        "authority_reply_identity_ids",
+        "semantic_assistance"
       ],
       "properties": {
         "model": { "type": "string", "minLength": 1 },
@@ -168,6 +169,72 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
+        },
+        "semantic_assistance": {
+          "$ref": "#/$defs/semanticAssistancePolicy"
+        }
+      }
+    },
+    "semanticAssistancePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_version",
+        "enabled",
+        "protocol",
+        "base_url",
+        "model",
+        "token_file",
+        "prompt_version",
+        "request_timeout_ms",
+        "maximum_input_chars",
+        "maximum_output_bytes",
+        "max_tokens",
+        "minimum_confidence",
+        "maximum_observation_age_hours"
+      ],
+      "properties": {
+        "policy_version": { "const": "semantic-timing-assistance/1" },
+        "enabled": { "type": "boolean" },
+        "protocol": { "const": "openai-compatible-chat-completions/1" },
+        "base_url": { "type": "string", "format": "uri" },
+        "model": { "type": "string", "minLength": 1 },
+        "token_file": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1 }
+          ]
+        },
+        "prompt_version": { "const": "authority-quote-timing/1" },
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 60000
+        },
+        "maximum_input_chars": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 20000
+        },
+        "maximum_output_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 1048576
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 2048
+        },
+        "minimum_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "maximum_observation_age_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 168
         }
       }
     },

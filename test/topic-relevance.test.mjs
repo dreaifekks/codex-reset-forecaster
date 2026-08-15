@@ -20,7 +20,7 @@ const relevantParent = {
 test("topic relevance policy exposes a stable version", () => {
   assert.equal(
     TOPIC_RELEVANCE_POLICY_VERSION,
-    "reset-topic-relevance/5",
+    "reset-topic-relevance/6",
   );
 });
 
@@ -210,6 +210,25 @@ test("source authority alone cannot turn a vague other-limit comment into a targ
   });
   assert.equal(assessed.decision, "irrelevant");
   assert.equal(assessed.reason_code, "generic_discussion");
+});
+
+test("Codex mode aliases bridge authority sentences without widening community relevance", () => {
+  const text =
+    "Enjoy a nice reset everyone. Landing in the next hour or so, go /fast.";
+  const authority = assessTopicRelevance({
+    text,
+    sourceRole: "product_lead",
+  });
+  assert.equal(authority.decision, "relevant");
+  assert.equal(authority.reason_code, "target_authority_operational_claim");
+  assert.equal(authority.basis, "self");
+
+  const community = assessTopicRelevance({
+    text,
+    sourceRole: "community",
+  });
+  assert.equal(community.decision, "irrelevant");
+  assert.equal(community.reason_code, "generic_discussion");
 });
 
 test("genuine target operations and ecosystem policy or release claims are relevant", () => {

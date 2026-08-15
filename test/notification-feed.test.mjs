@@ -131,3 +131,37 @@ test("publication ledger serializes one writer and rejects a cursor ahead of his
     /cursor is ahead of the ledger/,
   );
 });
+
+test("publication ledger deduplicates the same visible event across provenance revisions", async () => {
+  const audit = [];
+  const store = {
+    async allAudit() {
+      return structuredClone(audit);
+    },
+    async appendAudit(_type, event) {
+      audit.push(structuredClone(event));
+      return { inserted: true, event: structuredClone(event) };
+    },
+  };
+  const ledger = createPublicationLedger(store);
+  const first = publicationCandidate("semantic-outcome");
+  const inserted = await ledger.append(first);
+  const regenerated = {
+    ...structuredClone(first),
+    event_id: `pub_${createHash("sha256").update("regenerated").digest("hex")}`,
+    emitted_at: "2026-08-10T01:05:00.000Z",
+    source: {
+      outcome_ref: { record_id: "semantic-outcome", revision: 2 },
+      verification_ref: {
+        record_id: "verification-semantic-outcome",
+        revision: 2,
+      },
+    },
+  };
+  const duplicate = await ledger.append(regenerated);
+
+  assert.equal(inserted.inserted, true);
+  assert.equal(duplicate.inserted, false);
+  assert.equal(duplicate.event.event_id, inserted.event.event_id);
+  assert.equal(await ledger.getCursor(), 1);
+});

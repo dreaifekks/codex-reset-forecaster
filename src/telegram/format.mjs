@@ -410,13 +410,16 @@ export function formatForecast({
 function historyRow(result, index, timeZone) {
   const range = result?.occurred_time_range;
   const source = result?.source;
+  const operatorConfirmed = result?.label_grade === "silver";
   const lines = [
-    `${index}. 已确认重置`,
+    `${index}. ${operatorConfirmed ? "人工确认重置（silver）" : "已确认重置"}`,
     `发生：${dateTime(range?.start, timeZone)} — ${dateTime(range?.end, timeZone)}`,
   ];
   if (range?.precision) lines.push(`精度：${clean(range.precision)}`);
   if (source?.published_at) {
-    lines.push(`官方来源发布：${dateTime(source.published_at, timeZone)}`);
+    lines.push(
+      `${operatorConfirmed ? "人工确认时间" : "官方来源发布"}：${dateTime(source.published_at, timeZone)}`,
+    );
   }
   const url = safeUrl(source?.canonical_url);
   if (url) lines.push(`来源：${url}`);
@@ -462,17 +465,21 @@ function outcomeEventSummary(event, timeZone) {
     dateTime(range.end, timeZone)
   }`;
   const kind = report.correction_kind;
+  const operatorConfirmed = row?.label_grade === "silver";
+  const verificationBasis = operatorConfirmed ? "人工确认" : "官方来源";
   if (kind === "retracted") {
     return `先前发布的重置记录（${rangeText}）已被新的 canonical revision 撤回。`;
   }
   if (kind === "verification_withdrawn") {
-    return `先前记录（${rangeText}）当前不再满足官方来源验证合同；这不等同于断言重置未发生。`;
+    return `先前记录（${rangeText}）当前不再满足${verificationBasis}验证合同；这不等同于断言重置未发生。`;
   }
   if (kind === "corrected") {
-    return `确认记录已更新为 ${rangeText}，请以最新 revision 和官方来源为准。`;
+    return `确认记录已更新为 ${rangeText}，请以最新 revision 和${verificationBasis}为准。`;
   }
   if (kind === "confirmed") {
-    return `当前 outcome 合同确认发生时间为 ${rangeText}。`;
+    return operatorConfirmed
+      ? `操作员以 silver 级别确认发生时间为 ${rangeText}；这不是官方完成声明。`
+      : `当前 outcome 合同确认发生时间为 ${rangeText}。`;
   }
   return null;
 }

@@ -97,6 +97,55 @@ test("authority generic-completion scope policy is part of the extractor contrac
   );
 });
 
+test("semantic assistance behavior, but not its credential path, is contract-bound", async () => {
+  const baseline = await loadConfig();
+  const enabled = await loadConfig({
+    overrides: {
+      extractor: {
+        semantic_assistance: {
+          enabled: true,
+          token_file: "/tmp/semantic-token-a",
+        },
+      },
+    },
+  });
+  const sameBehaviorDifferentCredential = await loadConfig({
+    overrides: {
+      extractor: {
+        semantic_assistance: {
+          enabled: true,
+          token_file: "/tmp/semantic-token-b",
+        },
+      },
+    },
+  });
+  const differentModel = await loadConfig({
+    overrides: {
+      extractor: {
+        semantic_assistance: {
+          enabled: true,
+          model: "another-model",
+          token_file: "/tmp/semantic-token-a",
+        },
+      },
+    },
+  });
+
+  assert.notEqual(
+    extractorContract(enabled).semantic_policy_hash,
+    extractorContract(baseline).semantic_policy_hash,
+  );
+  assert.equal(
+    extractorContract(enabled).semantic_policy_hash,
+    extractorContract(sameBehaviorDifferentCredential).semantic_policy_hash,
+  );
+  assert.equal(enabled.config_hash, sameBehaviorDifferentCredential.config_hash);
+  assert.notEqual(
+    extractorContract(enabled).semantic_policy_hash,
+    extractorContract(differentModel).semantic_policy_hash,
+  );
+});
+
 test("conflicting roles for one provider-neutral identity fail closed", async () => {
   const conflicting = await loadConfig({
     overrides: {

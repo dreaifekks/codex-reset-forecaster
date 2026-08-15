@@ -283,6 +283,45 @@ curl http://127.0.0.1:8799/api/readiness
 candidates. Do not start a second manual ingestion process while the scheduled
 pipeline is running.
 
+#### Offline operator confirmation
+
+If the configured authority announced a reset rollout but did not publish a later
+completion statement, an authenticated host operator may record an observed
+platform completion as a minute-level `silver` outcome. This is not an official
+source claim and must not be used for a personal account's quota refresh. The
+command requires the exact authority status already resolved to a current primary
+platform-reset candidate, an operator identifier, and an explicit platform
+attestation.
+
+The `--offline` flag is an assertion, not a cross-process lock. Stop the only
+writer before mounting the live volume into the one-shot command:
+
+```bash
+docker compose -f compose.yaml -f compose.cloudflare.yaml \
+  stop reset-forecaster
+docker compose -f compose.yaml -f compose.cloudflare.yaml \
+  run --rm --no-deps \
+  -e RESET_SCHEDULER_ENABLED=false \
+  -e RESET_RUN_ON_START=false \
+  reset-forecaster \
+  node src/cli.mjs confirm-reset \
+    --offline \
+    --attest-platform \
+    --source-status 2087706104814023111 \
+    --actor dreaife \
+    --ago-hours 1
+docker compose -f compose.yaml -f compose.cloudflare.yaml \
+  up -d --no-deps reset-forecaster
+```
+
+Prefer `--effective-at <RFC3339 UTC>` when the observed minute is known; use
+`--now` with `--ago-hours` to make a relative assertion reproducible. Repeating an
+identical assertion is idempotent. A changed effective minute appends a correction
+revision, an existing `gold` outcome wins unchanged, and an official denial or
+cancellation blocks the manual path. After restart, `run_on_start` issues a fresh
+forecast and the publication projector emits only the new material confirmation;
+it does not replay historical outcomes.
+
 While coverage is waiting, the scheduler keeps the normal 10-minute cadence and
 also wakes just after `earliest_recheck_at` when that deadline falls before the
 next scheduled run. A due stability recheck bypasses the provider's normal refresh
@@ -575,7 +614,8 @@ refreshes the projection after final runtime state is written.
 
 `/accuracy` is intentionally a confirmed-history page despite its retained legacy
 path. It calls `/api/history/results`, lists the latest eligible confirmed outcome
-revisions and exact official sources, and does not depend on evaluation state.
+revisions and exact verification sources (official `gold` or operator `silver`),
+and does not depend on evaluation state.
 Walk-forward and `as_issued` scores remain available through operator APIs and
 continue to govern promotion and validated publication. Those scores use only the
 immutable hourly forecasts that users could actually have seen; evidence modes are
@@ -854,6 +894,42 @@ retracted, or verification-withdrawn events that point at the prior event.
 Verification withdrawal means the current exact source no longer satisfies the
 confirmation contract; it does not prove that no reset occurred. See
 `docs/notifications.md` for the event schema, expiry, and topic semantics.
+
+## Search indexing and language routes
+
+The public site exposes stable, independently indexable language URLs:
+
+```text
+/                 Chinese forecast
+/accuracy         Chinese confirmed history
+/en               English forecast
+/en/accuracy      English confirmed history
+```
+
+Each page has a self-referencing canonical URL plus reciprocal `zh-Hans`, `en`,
+and `x-default` alternates. The browser language is used only to reveal a
+non-blocking language suggestion. It never causes an IP- or header-based redirect,
+and the explicit language switch stores the visitor's choice locally. This keeps
+both language variants crawlable even when a crawler does not send an
+`Accept-Language` header.
+
+For Google Search Console, create a Domain property for `dreaife.tokyo` (or a
+URL-prefix property for `https://codexreset.dreaife.tokyo/`), complete the supplied
+DNS TXT or HTML verification, then submit:
+
+```text
+https://codexreset.dreaife.tokyo/sitemap.xml
+```
+
+The verification token is deployment-specific and must not be invented or
+committed before Search Console provides it. Public crawl checks:
+
+```bash
+curl -I https://codexreset.dreaife.tokyo/
+curl -I https://codexreset.dreaife.tokyo/en
+curl https://codexreset.dreaife.tokyo/robots.txt
+curl https://codexreset.dreaife.tokyo/sitemap.xml
+```
 
 ## Docker
 

@@ -29,6 +29,10 @@
   "properties": {
     "schema_version": { "const": "publication-event/1" },
     "event_id": { "type": "string", "pattern": "^pub_[a-f0-9]{64}$" },
+    "delivery_key": {
+      "type": "string",
+      "pattern": "^delivery_[a-f0-9]{64}$"
+    },
     "event_type": {
       "enum": [
         "forecast.authority_window.opened.v1",
@@ -58,7 +62,9 @@
       "additionalProperties": false,
       "required": ["version", "hash"],
       "properties": {
-        "version": { "const": "publication-policy/1" },
+        "version": {
+          "enum": ["publication-policy/1", "publication-policy/2"]
+        },
         "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
       }
     },
@@ -105,6 +111,18 @@
     "supersedes": { "type": "null" }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "policy": {
+            "properties": { "version": { "const": "publication-policy/2" } },
+            "required": ["version"]
+          }
+        },
+        "required": ["policy"]
+      },
+      "then": { "required": ["delivery_key"] }
+    },
     {
       "if": {
         "properties": { "topic": { "const": "experimental_probability" } },

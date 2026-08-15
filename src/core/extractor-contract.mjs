@@ -4,7 +4,7 @@ import { canonicalSourceIdentityPolicy } from "./sources.mjs";
 export const AUTHORITY_SCOPE_POLICY =
   "explicit-platform-or-authority-general-codex/1";
 export const DEFAULT_TOPIC_RELEVANCE_POLICY_VERSION =
-  "reset-topic-relevance/5";
+  "reset-topic-relevance/6";
 
 function normalizedTarget(target) {
   return {
@@ -28,9 +28,24 @@ function normalizedAuthorityScopePolicy(outcomeDefinition) {
   };
 }
 
+function normalizedSemanticAssistance(policy) {
+  return {
+    policy_version: policy?.policy_version ?? null,
+    enabled: policy?.enabled === true,
+    protocol: policy?.protocol ?? null,
+    model: policy?.model ?? null,
+    prompt_version: policy?.prompt_version ?? null,
+    maximum_input_chars: policy?.maximum_input_chars ?? null,
+    max_tokens: policy?.max_tokens ?? null,
+    minimum_confidence: policy?.minimum_confidence ?? null,
+    maximum_observation_age_hours:
+      policy?.maximum_observation_age_hours ?? null,
+  };
+}
+
 export function extractionSemanticPolicy(config) {
   return {
-    version: "extractor-semantic-policy/5",
+    version: "extractor-semantic-policy/6",
     target: normalizedTarget(config?.target),
     source_identity_policy: canonicalSourceIdentityPolicy(config),
     authority_scope_policy: normalizedAuthorityScopePolicy(config?.outcome_definition),
@@ -40,6 +55,9 @@ export function extractionSemanticPolicy(config) {
     topic_relevance_policy_version:
       config?.extractor?.topic_relevance_policy_version ??
       DEFAULT_TOPIC_RELEVANCE_POLICY_VERSION,
+    semantic_assistance: normalizedSemanticAssistance(
+      config?.extractor?.semantic_assistance,
+    ),
   };
 }
 

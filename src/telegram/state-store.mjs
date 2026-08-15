@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { hashLabel } from "../core/hash.mjs";
 import { normalizeTelegramId } from "./config.mjs";
 import {
   normalizeNotificationPreferences,
@@ -8,9 +9,10 @@ import {
   notificationPreferencesHash,
 } from "../notifications/subscription-policy.mjs";
 
-export const TELEGRAM_STATE_SCHEMA_VERSION = "telegram-bot-state/3";
+export const TELEGRAM_STATE_SCHEMA_VERSION = "telegram-bot-state/4";
 const LEGACY_STATE_SCHEMA_VERSION = "telegram-bot-state/1";
 const PREVIOUS_STATE_SCHEMA_VERSION = "telegram-bot-state/2";
+const PREVIOUS_SEMANTIC_DEDUPE_SCHEMA_VERSION = "telegram-bot-state/3";
 const OUTBOX_STATUSES = new Set([
   "pending",
   "sending",
@@ -18,7 +20,7 @@ const OUTBOX_STATUSES = new Set([
   "delivered",
   "dead",
 ]);
-const DELIVERY_KEY_LIMIT = 4_096;
+const DELIVERY_KEY_LIMIT = 16_384;
 const TERMINAL_JOB_LIMIT = 256;
 const NO_STATE_CHANGE = Symbol("NO_STATE_CHANGE");
 
@@ -38,6 +40,27 @@ function eventCursor(value, name = "event cursor") {
     throw new TypeError(`${name} must be a canonical non-negative safe integer`);
   }
   return text;
+}
+
+function stableEventMessageText(value) {
+  return String(value ?? "").replace(
+    /\n\n(?:时间|Time)[：:][^\n]*\n(?:详情|Details)[：:][^\n]*\s*$/u,
+    "",
+  );
+}
+
+function semanticJobDeliveryKey(job) {
+  if (job?.kind !== "event") return String(job?.dedupe_key ?? job?.id ?? "");
+  return `semantic:event:${hashLabel({
+    topic: job.event_topic ?? null,
+    chat_id: String(job.chat_id ?? ""),
+    message: stableEventMessageText(job.text),
+  }).slice("sha256:".length)}`;
+}
+
+function rememberJobDelivery(state, job) {
+  state.delivery_keys.push(job.id);
+  if (job.dedupe_key !== job.id) state.delivery_keys.push(job.dedupe_key);
 }
 
 function defaultOutcomeRevisionGate() {
@@ -205,7 +228,8 @@ function validateJob(job) {
     job.id.length < 1 ||
     job.id.length > 512 ||
     typeof job.dedupe_key !== "string" ||
-    job.dedupe_key !== job.id ||
+    job.dedupe_key.length < 1 ||
+    job.dedupe_key.length > 512 ||
     ![
       "command",
       "admin_command",
@@ -359,7 +383,7 @@ export async function readTelegramStateFile(filePath) {
   state.last_operations_delivery_failure_at ??= null;
   state.last_operations_delivery_failure_error ??= null;
   if (state.schema_version === PREVIOUS_STATE_SCHEMA_VERSION) {
-    state.schema_version = TELEGRAM_STATE_SCHEMA_VERSION;
+    state.schema_version = PREVIOUS_SEMANTIC_DEDUPE_SCHEMA_VERSION;
     state.forecast_input_cursor = null;
     state.forecast_input_baseline_initialized = false;
     state.forecast_input_outcome_revision_gate = defaultOutcomeRevisionGate();
@@ -391,6 +415,18 @@ export async function readTelegramStateFile(filePath) {
   for (const value of Object.values(state.dynamic_subscriptions ?? {})) {
     value.stable_since ??= value.updated_at ?? state.updated_at;
   }
+  if (state.schema_version === PREVIOUS_SEMANTIC_DEDUPE_SCHEMA_VERSION) {
+    for (const job of state.outbox ?? []) {
+      const previousKey = job.dedupe_key;
+      job.dedupe_key = semanticJobDeliveryKey(job);
+      if (["delivered", "dead"].includes(job.status)) {
+        state.delivery_keys.push(previousKey, job.id, job.dedupe_key);
+      }
+    }
+    state.schema_version = TELEGRAM_STATE_SCHEMA_VERSION;
+    state.delivery_keys = [...new Set(state.delivery_keys)]
+      .slice(-DELIVERY_KEY_LIMIT);
+  }
   return assertTelegramState(state);
 }
 
@@ -411,18 +447,18 @@ function pruneState(state) {
 function addJobs(state, jobs, now) {
   const known = new Set([
     ...state.delivery_keys,
+    ...state.outbox.map((job) => job.id),
     ...state.outbox.map((job) => job.dedupe_key),
   ]);
   let added = 0;
   for (const input of jobs ?? []) {
-    if (known.has(input.id)) continue;
     const timestamp = now.toISOString();
     const topicJob = ["event", "probability"].includes(input.kind);
     const eventTopic = topicJob &&
         typeof input.eventTopic === "string"
       ? input.eventTopic.trim().toLowerCase()
       : null;
-    const job = {
+    const draftJob = {
       id: String(input.id),
       dedupe_key: String(input.id),
       kind: input.kind,
@@ -448,8 +484,14 @@ function addJobs(state, jobs, now) {
       last_error: null,
       telegram_message_id: null,
     };
+    const job = {
+      ...draftJob,
+      dedupe_key: semanticJobDeliveryKey(draftJob),
+    };
+    if (known.has(job.id) || known.has(job.dedupe_key)) continue;
     validateJob(job);
     state.outbox.push(job);
+    known.add(job.id);
     known.add(job.dedupe_key);
     added += 1;
   }
@@ -556,7 +598,7 @@ export class TelegramStateStore {
             job.status = "dead";
             job.last_error = "subscription_removed";
             job.updated_at = cancelledAt;
-            state.delivery_keys.push(job.dedupe_key);
+            rememberJobDelivery(state, job);
           }
         } else {
           const probabilityPreferences = change.value.probability_preferences !==
@@ -595,7 +637,7 @@ export class TelegramStateStore {
               job.status = "dead";
               job.last_error = "subscription_changed";
               job.updated_at = cancelledAt;
-              state.delivery_keys.push(job.dedupe_key);
+              rememberJobDelivery(state, job);
             }
           }
           const updatedAt = this.now().toISOString();
@@ -724,7 +766,7 @@ export class TelegramStateStore {
         job.status = "dead";
         job.last_error = "forecast_input_cursor_reset";
         job.updated_at = resetAt;
-        state.delivery_keys.push(job.dedupe_key);
+        rememberJobDelivery(state, job);
       }
     });
   }
@@ -886,7 +928,7 @@ export class TelegramStateStore {
         job.status = "dead";
         job.last_error = "recipient_not_authorized";
         job.updated_at = nowIso;
-        state.delivery_keys.push(job.dedupe_key);
+        rememberJobDelivery(state, job);
         claimed = structuredClone(job);
         return;
       }
@@ -905,7 +947,7 @@ export class TelegramStateStore {
       job.telegram_message_id = telegramMessageId;
       job.last_error = null;
       job.updated_at = this.now().toISOString();
-      state.delivery_keys.push(job.dedupe_key);
+      rememberJobDelivery(state, job);
     });
   }
 
@@ -936,7 +978,7 @@ export class TelegramStateStore {
         state.last_operations_delivery_failure_at = updatedAt;
         state.last_operations_delivery_failure_error = errorText;
       }
-      state.delivery_keys.push(job.dedupe_key);
+      rememberJobDelivery(state, job);
     });
   }
 }

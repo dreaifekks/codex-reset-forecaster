@@ -1,10 +1,10 @@
 {
   "schema_version": "reset-intel/0.2",
   "record_type": "reset_outcome",
-  "record_id": "out_example_001",
+  "record_id": "out_operator_example_001",
   "revision": 1,
   "supersedes": null,
-  "created_at": "2026-07-23T09:51:00Z",
+  "created_at": "2026-08-13T05:35:00Z",
   "producer": {
     "name": "outcome-adjudicator",
     "version": "0.4.0",
@@ -13,35 +13,35 @@
   "data": {
     "status": "confirmed",
     "label_policy_version": "completed-evidence/0.4.0",
-    "event_identity": "evt_example_001",
+    "event_identity": "evt_operator_example_001",
     "event_type": "quota_reset",
     "scope": {
       "vendor": "openai",
       "product": "codex",
       "population": "platform",
-      "plans": ["unknown"],
+      "plans": ["paid"],
       "regions": ["global"],
       "quota_bucket": null
     },
     "occurred_time_range": {
-      "start": "2026-07-23T09:31:00Z",
-      "end": "2026-07-23T09:39:00Z",
+      "start": "2026-08-13T04:35:00Z",
+      "end": "2026-08-13T04:36:00Z",
       "boundary": "[start,end)",
-      "precision": "interval_observed",
+      "precision": "minute",
       "timezone_basis": "UTC",
-      "original_text": null
+      "original_text": "authenticated operator-reported effective minute"
     },
-    "known_at": "2026-07-23T09:48:00Z",
+    "known_at": "2026-08-13T05:35:00Z",
     "replay_available_at": null,
-    "label_grade": "gold",
+    "label_grade": "silver",
     "verification": [
       {
-        "kind": "official_confirmation",
+        "kind": "operator_confirmation",
         "observation_ref": {
-          "record_id": "obs_official_example_001",
+          "record_id": "obs_operator_confirmation_example_001",
           "revision": 1
         },
-        "independence_group_id": "verify_official_statement"
+        "independence_group_id": "ind_operator_example_001"
       }
     ],
     "candidate_refs": [

@@ -428,8 +428,8 @@ primary color value is its `first_reset_probability`; the current-anchor
 ## Historical results product and internal evaluation
 
 The public historical page reads the latest eligible `reset_outcome` revisions and
-shows only confirmed facts: occurrence interval and precision, official-source
-publication time, confirmed status, and the exact official source reference. It
+shows only confirmed facts: occurrence interval and precision, verification time,
+confirmed status/grade, and the exact official or operator source reference. It
 does not read evaluation artifacts and does not expose model accuracy, probability
 scores, calibration, alert policy results, lead time, model version, or gate state.
 Evaluation invalidation or insufficient samples therefore cannot suppress valid

@@ -97,6 +97,8 @@ export function probabilityNotification(report, { opened }) {
 
 export function outcomeNotification(row, publicBaseUrl, kind) {
   const historyUrl = publicUrl(publicBaseUrl, "/accuracy");
+  const operatorConfirmed = row.label_grade === "silver";
+  const verificationBasis = operatorConfirmed ? "人工确认" : "官方来源";
   const range = row.occurred_time_range;
   const rangeText = range
     ? `${range.start} 至 ${range.end}`
@@ -112,7 +114,7 @@ export function outcomeNotification(row, publicBaseUrl, kind) {
   if (kind === "verification_withdrawn") {
     return {
       title: "重置记录的验证已失效",
-      body: `先前记录（${rangeText}）当前不再满足官方来源验证合同；这不等同于断言重置未发生。`,
+      body: `先前记录（${rangeText}）当前不再满足${verificationBasis}验证合同；这不等同于断言重置未发生。`,
       url: historyUrl,
       tag: `outcome-${row.outcome_ref.record_id}`,
     };
@@ -120,14 +122,16 @@ export function outcomeNotification(row, publicBaseUrl, kind) {
   if (kind === "corrected") {
     return {
       title: "已确认重置记录已修正",
-      body: `确认记录已更新为 ${rangeText}，请以最新 revision 和官方来源为准。`,
+      body: `确认记录已更新为 ${rangeText}，请以最新 revision 和${verificationBasis}为准。`,
       url: historyUrl,
       tag: `outcome-${row.outcome_ref.record_id}`,
     };
   }
   return {
-    title: "Codex 重置已确认",
-    body: `当前 outcome 合同确认发生时间为 ${rangeText}。`,
+    title: operatorConfirmed ? "Codex 重置已人工确认" : "Codex 重置已确认",
+    body: operatorConfirmed
+      ? `操作员以 silver 级别确认发生时间为 ${rangeText}；这不是官方完成声明。`
+      : `当前 outcome 合同确认发生时间为 ${rangeText}。`,
     url: historyUrl,
     tag: `outcome-${row.outcome_ref.record_id}`,
   };

@@ -1236,6 +1236,63 @@ test("event polling establishes a no-replay baseline and gates experimental deli
   assert.equal(eventJobs.filter((job) => /实验性通知/.test(job.text)).length, 1);
 });
 
+test("Telegram persists semantic event deduplication across a restart", async (t) => {
+  const config = runtimeConfig({
+    staticNotificationChatIds: new Set(["10"]),
+  });
+  const first = await setupRuntime(t, { config });
+  first.forecaster.eventBatches.push({ events: [], cursor: "0", hasMore: false });
+  await first.runtime.pollEventsOnce();
+  const event = {
+    event_id: "pub_semantic_first",
+    topic: "outcome",
+    experimental: false,
+    emitted_at: "2026-08-10T04:01:00Z",
+    expires_at: "2026-08-10T05:00:00Z",
+    report: {
+      title: "确认重置",
+      summary: "已确认新的平台重置。",
+      public_url: "https://forecast.example.test/accuracy",
+      default_delivery: true,
+    },
+  };
+  first.forecaster.eventBatches.push({ events: [event], cursor: "1", hasMore: false });
+  assert.equal((await first.runtime.pollEventsOnce()).jobs, 1);
+  assert.equal(await first.runtime.dispatchOnce(), true);
+  assert.equal(first.telegram.sent.length, 1);
+
+  const telegram = new FakeTelegram();
+  const forecaster = new FakeForecaster();
+  forecaster.eventBatches.push({
+    events: [{
+      ...event,
+      event_id: "pub_semantic_regenerated",
+      emitted_at: "2026-08-10T04:02:00Z",
+    }],
+    cursor: "2",
+    hasMore: false,
+  });
+  const stateStore = new TelegramStateStore({
+    directory: first.directory,
+    now: () => new Date("2026-08-10T04:03:00Z"),
+  });
+  const restarted = new TelegramBotRuntime({
+    telegram,
+    forecaster,
+    stateStore,
+    config,
+    now: () => new Date("2026-08-10T04:03:00Z"),
+    random: () => 0,
+    logger: { error() {} },
+  });
+  await restarted.initialize();
+  const replay = await restarted.pollEventsOnce();
+
+  assert.deepEqual(replay, { baseline: false, events: 1, jobs: 0 });
+  assert.equal((await stateStore.read()).event_cursor, "2");
+  assert.equal(telegram.sent.length, 0);
+});
+
 test("an event that expires in the outbox is marked dead before Telegram send", async (t) => {
   let current = new Date("2026-08-10T04:00:00Z");
   const now = () => new Date(current);
@@ -2436,7 +2493,7 @@ test("Telegram state upgrades the pre-operations state schema", async (t) => {
   );
   const upgraded = await new TelegramStateStore({ directory }).init();
   const state = await upgraded.read();
-  assert.equal(state.schema_version, "telegram-bot-state/3");
+  assert.equal(state.schema_version, "telegram-bot-state/4");
   assert.equal(state.operations_alert_cursor, null);
   assert.equal(state.operations_alert_baseline_initialized, false);
 });
@@ -2452,6 +2509,7 @@ test("Telegram state backfills a stable subscription start for older v3 files", 
     subscriptionChanges: [{ chatId: "20", value: { experimental: false } }],
   });
   const olderV3 = await first.read();
+  olderV3.schema_version = "telegram-bot-state/3";
   delete olderV3.dynamic_subscriptions["20"].stable_since;
   await fs.writeFile(
     path.join(directory, "state.json"),
@@ -2465,6 +2523,60 @@ test("Telegram state backfills a stable subscription start for older v3 files", 
     state.dynamic_subscriptions["20"].stable_since,
     state.dynamic_subscriptions["20"].updated_at,
   );
+});
+
+test("Telegram v3 migration seeds semantic keys from delivered event jobs", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const first = await new TelegramStateStore({
+    directory,
+    now: () => new Date("2026-08-13T05:45:00Z"),
+  }).init();
+  await first.commitEvents({
+    cursor: "1",
+    jobs: [{
+      id: "event:pub_old_revision:10",
+      kind: "event",
+      chatId: "10",
+      eventTopic: "outcome",
+      experimental: false,
+      text: "重置记录的验证已失效\n\n旧记录不再满足验证合同。\n\n时间：2026/08/13 14:45 UTC+9\n详情：https://forecast.example.test/accuracy",
+      expiresAt: "2026-08-14T05:45:00Z",
+    }],
+  });
+  await first.markDelivered("event:pub_old_revision:10", 80);
+  const olderV3 = await first.read();
+  olderV3.schema_version = "telegram-bot-state/3";
+  olderV3.outbox[0].dedupe_key = olderV3.outbox[0].id;
+  olderV3.delivery_keys = [olderV3.outbox[0].id];
+  await fs.writeFile(
+    path.join(directory, "state.json"),
+    `${JSON.stringify(olderV3)}\n`,
+    { mode: 0o600 },
+  );
+
+  const upgraded = await new TelegramStateStore({
+    directory,
+    now: () => new Date("2026-08-13T05:50:00Z"),
+  }).init();
+  const migrated = await upgraded.read();
+  assert.equal(migrated.schema_version, "telegram-bot-state/4");
+  assert.match(migrated.outbox[0].dedupe_key, /^semantic:event:/);
+  assert.ok(migrated.delivery_keys.includes(migrated.outbox[0].dedupe_key));
+
+  const added = await upgraded.commitEvents({
+    cursor: "2",
+    jobs: [{
+      id: "event:pub_new_revision:10",
+      kind: "event",
+      chatId: "10",
+      eventTopic: "outcome",
+      experimental: false,
+      text: "重置记录的验证已失效\n\n旧记录不再满足验证合同。\n\n时间：2026/08/13 14:50 UTC+9\n详情：https://forecast.example.test/accuracy",
+      expiresAt: "2026-08-14T05:50:00Z",
+    }],
+  });
+  assert.equal(added, 0);
+  assert.equal((await upgraded.read()).event_cursor, "2");
 });
 
 test("Telegram state upgrades an older v2 file without cursor reset audit fields", async (t) => {
@@ -2525,7 +2637,7 @@ test("Telegram state upgrades an older v2 file without cursor reset audit fields
   assert.equal(state.operations_alert_generation, 0);
   assert.equal(state.last_operations_delivery_failure_at, null);
   assert.equal(state.last_operations_delivery_failure_error, null);
-  assert.equal(state.schema_version, "telegram-bot-state/3");
+  assert.equal(state.schema_version, "telegram-bot-state/4");
   assert.deepEqual(state.dynamic_subscriptions["20"].probability_preferences, {
     schema_version: "notification-preferences/1",
     horizon_hours: 4,

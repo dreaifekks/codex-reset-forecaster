@@ -66,14 +66,14 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
-  assert.equal(live.config_version, "provider-config/0.3.5");
+  assert.equal(live.config_version, "provider-config/0.3.6");
   assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.1");
   assert.equal(live.feature_schema_version, "reset-features/0.3.1");
   assert.equal(live.deduplication_version, "reset-dedup/0.2.3");
-  assert.equal(live.extractor.model_version, "0.3.3");
+  assert.equal(live.extractor.model_version, "0.3.4");
   assert.equal(
     live.extractor.prompt_version,
-    "reset-extract/rules-0.3.3",
+    "reset-extract/rules-0.3.4",
   );
   assert.equal(
     live.model.coefficient_priors.renewal_periodic_kernel ?? 0,
