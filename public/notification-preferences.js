@@ -1,3 +1,5 @@
+import { tr } from "./i18n.js?v=seo-i18n-1";
+
 export const NOTIFICATION_HORIZON_HOURS = Object.freeze([
   ...Array.from({ length: 12 }, (_, index) => index + 1),
   ...Array.from({ length: 9 }, (_, index) => 16 + index * 4),
@@ -10,7 +12,7 @@ export const NOTIFICATION_CALIBRATION_CACHE_TTL_MS = 10 * 60_000;
 function calibrationHorizon(hours) {
   const value = Number(hours);
   if (!Number.isSafeInteger(value) || value < 1 || value > 168) {
-    throw new TypeError("历史可靠度缓存的时间窗无效");
+    throw new TypeError(tr("历史可靠度缓存的时间窗无效", "Invalid historical reliability cache window"));
   }
   return value;
 }
@@ -20,10 +22,10 @@ export function createNotificationCalibrationCache({
   now = () => Date.now(),
 } = {}) {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
-    throw new TypeError("历史可靠度缓存有效期必须大于零");
+    throw new TypeError(tr("历史可靠度缓存有效期必须大于零", "Historical reliability cache TTL must be greater than zero"));
   }
   if (typeof now !== "function") {
-    throw new TypeError("历史可靠度缓存时钟必须是函数");
+    throw new TypeError(tr("历史可靠度缓存时钟必须是函数", "Historical reliability cache clock must be a function"));
   }
   const entries = new Map();
 
@@ -51,11 +53,11 @@ export function createNotificationCalibrationCache({
         typeof calibration !== "object" ||
         calibration.horizon_hours !== horizonHours
       ) {
-        throw new TypeError("历史可靠度缓存内容与时间窗不匹配");
+        throw new TypeError(tr("历史可靠度缓存内容与时间窗不匹配", "Historical reliability cache entry does not match its window"));
       }
       const storedAt = Number(now());
       if (!Number.isFinite(storedAt)) {
-        throw new TypeError("历史可靠度缓存时钟无效");
+        throw new TypeError(tr("历史可靠度缓存时钟无效", "Historical reliability cache clock is invalid"));
       }
       entries.set(horizonHours, {
         stored_at: storedAt,
@@ -89,9 +91,12 @@ export function formatNotificationHorizon(hours) {
   const value = Number(hours);
   if (!Number.isFinite(value)) return "—";
   if (value >= 24 && value % 24 === 0) {
-    return `${value / 24} 天（${value} 小时）`;
+    return tr(
+      `${value / 24} 天（${value} 小时）`,
+      `${value / 24} ${value === 24 ? "day" : "days"} (${value} hours)`,
+    );
   }
-  return `${value} 小时`;
+  return tr(`${value} 小时`, `${value} ${value === 1 ? "hour" : "hours"}`);
 }
 
 function unitInterval(value) {
@@ -150,7 +155,10 @@ function confidenceInterval(value) {
 
 function probabilityRange(value, label, { allowPoint = true } = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`历史概率分布的${label}无效`);
+    throw new TypeError(tr(
+      `历史概率分布的${label}无效`,
+      `The historical probability distribution has an invalid ${label}`,
+    ));
   }
   const lower = strictUnitInterval(value.lower);
   const upper = strictUnitInterval(value.upper);
@@ -160,7 +168,10 @@ function probabilityRange(value, label, { allowPoint = true } = {}) {
     lower > upper ||
     (!allowPoint && lower === upper)
   ) {
-    throw new TypeError(`历史概率分布的${label}无效`);
+    throw new TypeError(tr(
+      `历史概率分布的${label}无效`,
+      `The historical probability distribution has an invalid ${label}`,
+    ));
   }
   return { lower, upper };
 }
@@ -171,7 +182,7 @@ function normalizeDistributionSummary(value) {
   // silently falling back to a misleading 0%-100% plot.
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("历史概率分布摘要无效");
+    throw new TypeError(tr("历史概率分布摘要无效", "The historical probability distribution summary is invalid"));
   }
   const displayStandardDeviations = value.display_range?.standard_deviations;
   const clippedBelow = strictNonNegativeInteger(
@@ -196,7 +207,7 @@ function normalizeDistributionSummary(value) {
       clippedAbove !== 0 ||
       suggestedStandardDeviations !== 2
     ) {
-      throw new TypeError("历史概率分布摘要无效");
+      throw new TypeError(tr("历史概率分布摘要无效", "The historical probability distribution summary is invalid"));
     }
     return {
       mean_probability: null,
@@ -217,8 +228,8 @@ function normalizeDistributionSummary(value) {
   }
   const meanProbability = strictUnitInterval(value.mean_probability);
   const standardDeviation = strictNonNegative(value.standard_deviation);
-  const observedRange = probabilityRange(value.observed_range, "观测范围");
-  const displayRange = probabilityRange(value.display_range, "显示范围", {
+  const observedRange = probabilityRange(value.observed_range, tr("观测范围", "observed range"));
+  const displayRange = probabilityRange(value.display_range, tr("显示范围", "display range"), {
     allowPoint: false,
   });
   const suggestedProbability = strictUnitInterval(
@@ -240,7 +251,7 @@ function normalizeDistributionSummary(value) {
     suggestedProbability > displayRange.upper ||
     suggestedStandardDeviations !== 2
   ) {
-    throw new TypeError("历史概率分布摘要无效");
+    throw new TypeError(tr("历史概率分布摘要无效", "The historical probability distribution summary is invalid"));
   }
   return {
     mean_probability: meanProbability,
@@ -261,7 +272,7 @@ function normalizeDistributionSummary(value) {
 
 export function normalizeCalibrationPayload(payload, expectedHorizonHours) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new TypeError("历史可靠度响应必须是对象");
+    throw new TypeError(tr("历史可靠度响应必须是对象", "The historical reliability response must be an object"));
   }
   const horizonHours = Number(payload.horizon_hours);
   if (
@@ -270,7 +281,7 @@ export function normalizeCalibrationPayload(payload, expectedHorizonHours) {
     horizonHours > 168 ||
     (expectedHorizonHours !== undefined && horizonHours !== expectedHorizonHours)
   ) {
-    throw new TypeError("历史可靠度响应的时间窗不匹配");
+    throw new TypeError(tr("历史可靠度响应的时间窗不匹配", "The historical reliability response window does not match"));
   }
   const sampleCount = nonNegativeInteger(payload.sample_count) ?? 0;
   const minimumSampleCount = nonNegativeInteger(payload.min_sample_count) ?? 20;

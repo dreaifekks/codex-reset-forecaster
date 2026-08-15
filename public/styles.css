@@ -98,6 +98,12 @@ a {
   gap: 5px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .beta-badge,
 .badge {
   display: inline-flex;
@@ -137,6 +143,63 @@ nav a {
   padding: 7px 10px;
   font-size: 13px;
   text-decoration: none;
+}
+
+.language-switch {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: #86efac;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.language-switch:hover,
+.language-switch:focus-visible {
+  border-color: rgba(134, 239, 172, 0.55);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.language-switch:focus-visible {
+  outline: 2px solid rgba(134, 239, 172, 0.85);
+  outline-offset: 2px;
+}
+
+.language-suggestion {
+  width: min(calc(100% - 32px), 1008px);
+  margin: 12px auto 0;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 9px;
+  background: rgba(34, 197, 94, 0.08);
+  color: var(--muted-foreground);
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+
+.language-suggestion[hidden] {
+  display: none;
+}
+
+.language-suggestion a {
+  color: #86efac;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.language-suggestion button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .repository-link {
@@ -2164,6 +2227,10 @@ button:focus-visible {
     gap: 8px;
   }
 
+  .header-actions {
+    gap: 2px;
+  }
+
   .page-shell {
     padding-top: 32px;
   }
@@ -2315,6 +2382,15 @@ button:focus-visible {
   nav a {
     padding: 7px 8px;
     font-size: 12px;
+  }
+
+  .language-switch {
+    padding: 6px;
+  }
+
+  .language-suggestion {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .watch-value-row {

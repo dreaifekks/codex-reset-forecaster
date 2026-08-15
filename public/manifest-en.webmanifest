@@ -1,0 +1,19 @@
+{
+  "name": "Codex Reset Forecast",
+  "short_name": "Codex Reset",
+  "description": "Codex platform-wide reset forecasts and confirmed reset history.",
+  "lang": "en",
+  "start_url": "/en",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

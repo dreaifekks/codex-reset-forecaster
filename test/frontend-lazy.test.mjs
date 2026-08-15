@@ -372,10 +372,15 @@ async function createHarness(fetchImpl, {
     path.join(projectRoot, "public", "app.js"),
     "utf8",
   );
-  const source = moduleSource.replace(
-    /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js\?v=[^"]+";\s*/,
-    "",
-  );
+  const source = moduleSource
+    .replace(
+      /^import \{[\s\S]*?\} from "\.\/notification-preferences\.js\?v=[^"]+";\s*/,
+      "",
+    )
+    .replace(
+      /^import \{ tr, uiLocale \} from "\.\/i18n\.js\?v=[^"]+";\s*/,
+      "",
+    );
   assert.notEqual(source, moduleSource, "test harness must bind frontend imports");
   const instrumented = source.replace(
     /\nvoid initializeWebPushControls\(\);\s*\n\s*void load\(\);\s*$/,
@@ -513,6 +518,10 @@ globalThis.__frontendLazyTest = {
     formatNotificationHorizon,
     nearestHorizonIndex,
     normalizeCalibrationPayload,
+    tr(chinese) {
+      return chinese;
+    },
+    uiLocale: "zh-CN",
     setTimeout: setTimeoutImpl,
     clearTimeout: clearTimeoutImpl,
     window,

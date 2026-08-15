@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="description" content="See the probability of a Codex platform-wide quota reset over the next 168 hours, hourly risk, current signals, and confirmed reset history.">
+    <meta name="robots" content="index,follow,max-image-preview:large">
+    <meta name="theme-color" content="#09090b">
+    <title>Codex Reset Forecast: 7-Day Quota Reset Probability</title>
+    <link rel="canonical" href="https://codexreset.dreaife.tokyo/en">
+    <link rel="alternate" hreflang="zh-Hans" href="https://codexreset.dreaife.tokyo/">
+    <link rel="alternate" hreflang="en" href="https://codexreset.dreaife.tokyo/en">
+    <link rel="alternate" hreflang="x-default" href="https://codexreset.dreaife.tokyo/en">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://codexreset.dreaife.tokyo/en">
+    <meta property="og:title" content="Codex Reset Forecast: 7-Day Quota Reset Probability">
+    <meta property="og:description" content="See Codex reset probability over the next 168 hours, hourly risk, current signals, and confirmed results.">
+    <meta property="og:site_name" content="Codex Reset Forecast">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:locale:alternate" content="zh_CN">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Codex Reset Forecast: 7-Day Quota Reset Probability">
+    <meta name="twitter:description" content="See Codex reset probability over the next 168 hours and the latest signals.">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="manifest" href="/manifest-en.webmanifest?v=seo-i18n-1">
+    <link rel="alternate" type="application/atom+xml" title="Codex reset alerts" href="/feed.xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="/styles.css?v=seo-i18n-1">
+    <script
+      defer
+      src="https://vibecafe.ai/telemetry/v1.js"
+      data-vc-product-id="cms37qho500000bl2g4vpcf9b"
+      data-vc-auth-key="vc_web__qNoqm01G9r2-8F-e7i7NC7xD4WmbnNBhsvDYfg59mk"
+    ></script>
+    <script src="/locale-choice.js?v=seo-i18n-1" type="module"></script>
+    <script src="/app.js?v=seo-i18n-1" type="module"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <div class="header-brand-group">
+          <a class="brand" href="/en" aria-label="Codex Reset Forecast home">
+            <img class="brand-icon" src="/favicon.svg" alt="">
+            <span>Codex Reset</span>
+            <span class="beta-badge">Beta</span>
+          </a>
+          <a
+            class="repository-link"
+            href="https://github.com/dreaifekks/codex-reset-forecaster"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="GitHub repository"
+            aria-label="Open the GitHub repository in a new tab"
+          >
+            <img class="repository-mark" src="/github-mark.svg" alt="">
+          </a>
+        </div>
+        <div class="header-actions">
+          <nav aria-label="Main navigation">
+            <a class="active" href="/en">Forecast</a>
+            <a href="/en/accuracy">History</a>
+          </nav>
+          <a class="language-switch" href="/" lang="zh-CN" hreflang="zh-Hans" data-locale-choice="zh">中文</a>
+        </div>
+      </div>
+    </header>
+
+    <aside class="language-suggestion" id="language-suggestion" hidden aria-live="polite">
+      <span>Your browser prefers Chinese. Switch to 中文？</span>
+      <a href="/" lang="zh-CN" hreflang="zh-Hans" data-locale-choice="zh">切换到中文</a>
+      <button type="button" data-locale-dismiss aria-label="Keep using English">×</button>
+    </aside>
+
+    <main class="page-shell">
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow">CODEX · PAID-PLAN PLATFORM-WIDE RESET</p>
+          <h1>7-Day Reset Forecast</h1>
+          <p class="lede">The probability of a reset within the next 168 hours.</p>
+          <p class="feed-links">
+            <span>Get alerts:</span>
+            <button
+              class="feed-subscribe-button"
+              id="notification-open"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="notification-dialog"
+            >Set a window and probability threshold</button>
+            <span aria-hidden="true">·</span>
+            <a
+              class="feed-subscribe-button"
+              href="https://t.me/codex_reset_7day_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Open Telegram Bot @codex_reset_7day_bot in a new tab"
+            >Telegram Bot</a>
+          </p>
+        </div>
+        <div class="heading-meta">
+          <div class="timezone-display" id="timezone-display">Time zone · —</div>
+          <div class="status-popover">
+            <button
+              class="status-pill"
+              id="source-status"
+              type="button"
+              aria-describedby="data-quality-tooltip"
+              aria-expanded="false"
+            >
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="status-text">Loading forecast</span>
+            </button>
+            <div class="status-tooltip" id="data-quality-tooltip" role="tooltip">
+              <p id="data-quality-label">Data status</p>
+              <strong id="data-quality">—</strong>
+              <small id="coverage">Coverage is not available yet</small>
+            </div>
+          </div>
+          <p class="sr-only" id="status-announcement" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="panel watch-card" aria-label="Current reset forecast">
+        <div class="watch-main">
+          <span class="badge">Current forecast</span>
+          <p>7-day reset probability</p>
+          <div class="watch-value-row">
+            <strong id="probability-7d">—</strong>
+            <span>Probability of a reset within the next 168 hours</span>
+          </div>
+          <small class="interval-note" id="interval-7d">Approximate 80% range: waiting for data</small>
+          <div class="publication-warning" id="publication-warning" role="alert" hidden></div>
+        </div>
+        <div class="watch-aside">
+          <span>Forecast window</span>
+          <strong id="forecast-window">Waiting for data</strong>
+          <small>168 continuous hours</small>
+          <small id="authority-window">Authority condition: waiting for forecast</small>
+          <small id="recurrence-anchor">Reset-cycle anchor: waiting for forecast</small>
+        </div>
+      </section>
+
+      <section class="summary-grid" aria-label="Forecast summary">
+        <article class="summary-card">
+          <p>Next 4 hours</p>
+          <strong id="probability-4h">—</strong>
+          <small id="interval-4h">Approximate 80% range: waiting for data</small>
+        </article>
+        <article class="summary-card">
+          <p>Next 24 hours</p>
+          <strong id="probability-24h">—</strong>
+          <small id="interval-24h">Approximate 80% range: waiting for data</small>
+        </article>
+        <article class="summary-card">
+          <p>Next 3 days</p>
+          <strong id="probability-72h">—</strong>
+          <small id="interval-72h">Probability of a reset within the next 72 hours</small>
+        </article>
+      </section>
+
+      <section class="panel forecast-panel" aria-labelledby="timeline-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">NEXT 7 DAYS · HOURLY</p>
+            <h2 id="timeline-title">Hourly Reset Probability</h2>
+            <p class="section-description">Each cell is one hour; brighter cells indicate higher probability.</p>
+          </div>
+        </div>
+        <div class="legend" id="heatmap-legend" aria-label="Probability color scale">
+          <span>Lower</span>
+          <span class="legend-cells" aria-hidden="true">
+            <i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i>
+          </span>
+          <span>Higher</span>
+          <span class="legend-note">Relative intensity within 7 days</span>
+        </div>
+        <div class="heatmap-scroll">
+          <div id="heatmap" class="heatmap" aria-live="polite"></div>
+        </div>
+        <div class="heat-tooltip" id="heat-tooltip" role="tooltip" hidden></div>
+        <div class="heat-detail" id="heat-detail" data-mode="empty" aria-live="polite">
+          <strong>—</strong>
+          <div>
+            <time>Hover for an hour; click to pin a cumulative window</time>
+            <span>Probability of a first reset in this hour: —</span>
+            <span>Cumulative probability through this hour: —</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="lower-grid signal-grid" aria-label="Recent forecast signals" tabindex="-1">
+        <article class="panel core-signal-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">CORE SOURCES</p>
+              <h2>Tibo and Official Updates</h2>
+              <p class="section-description">Reset updates from Tibo and related official announcements.</p>
+            </div>
+          </div>
+          <p class="cutoff-note" id="evidence-cutoff">Only signals known by the forecast knowledge cutoff are shown.</p>
+          <ol class="evidence-list" id="core-signal-list" aria-live="polite"><li>Scroll here to load core signals…</li></ol>
+        </article>
+        <article class="panel reference-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">EXPERIENCE AND COMPETITION</p>
+              <h2>Codex Experience Impact</h2>
+              <p class="section-description">Real bugs, incidents, and workflow regressions ranked by impact severity rather than discussion volume.</p>
+            </div>
+          </div>
+          <ol class="evidence-list" id="experience-signal-list" aria-live="polite"><li>Scroll here to load experience issues…</li></ol>
+          <div class="reference-subsection">
+            <h3>Competing Model Releases</h3>
+            <p class="section-description">Only directly relevant models and coding agents that were explicitly announced, previewed, or released.</p>
+            <ol class="evidence-list" id="competition-signal-list" aria-live="polite"><li>Scroll here to load competing releases…</li></ol>
+          </div>
+        </article>
+      </section>
+
+      <section class="lower-grid context-grid" aria-label="Latest raw updates and issue tracking">
+        <article class="panel timeline-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">RAW TIMELINE</p>
+              <h2>Latest Tibo Updates</h2>
+              <p class="section-description">Latest exact updates by publication time, including items not yet matched as forecast signals.</p>
+            </div>
+          </div>
+          <p class="context-disclaimer">Raw updates are not necessarily reset signals; each item's match status determines whether it enters the forecast.</p>
+          <ol class="evidence-list timeline-list" id="tibo-timeline-list" aria-live="polite"><li>Scroll here to load the latest Tibo updates…</li></ol>
+        </article>
+        <article class="panel impact-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">ONGOING TRACKING</p>
+              <h2>Issue Momentum</h2>
+              <p class="section-description">Independent evidence grouped to track an issue's state, trend, and current impact.</p>
+            </div>
+          </div>
+          <p class="context-disclaimer pressure-disclaimer">Impact pressure measures issue momentum, not reset probability, and should not be read as a probability.</p>
+          <ol class="evidence-list impact-episode-list" id="impact-episode-list" aria-live="polite"><li>Scroll here to load issue momentum…</li></ol>
+        </article>
+      </section>
+
+      <section class="panel pending-panel" aria-labelledby="pending-title">
+        <div class="panel-heading compact">
+          <div>
+            <p class="eyebrow">NEW SIGNALS</p>
+            <h2 id="pending-title">Next Forecast Run</h2>
+            <p class="section-description">Newly received signals will enter the next forecast.</p>
+          </div>
+        </div>
+        <ol class="evidence-list" id="pending-signal-list" aria-live="polite"><li>Scroll here to check for post-cutoff signals…</li></ol>
+      </section>
+    </main>
+
+    <dialog
+      class="subscription-dialog"
+      id="notification-dialog"
+      aria-labelledby="notification-dialog-title"
+      aria-describedby="notification-dialog-description"
+    >
+      <div class="subscription-dialog-card">
+        <header class="subscription-dialog-header">
+          <div>
+            <p class="eyebrow">BROWSER NOTIFICATIONS</p>
+            <h2 id="notification-dialog-title">Configure Reset Alerts</h2>
+            <p id="notification-dialog-description">Choose the reset updates you care about and optionally set a probability threshold or subscribe through Atom.</p>
+          </div>
+          <button class="signal-dialog-close" id="notification-close" type="button" aria-label="Close notification settings">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+
+        <div class="subscription-dialog-body">
+          <fieldset class="notification-topics" aria-describedby="notification-topics-help">
+            <legend>Choose alert topics</legend>
+            <p class="notification-topics-help" id="notification-topics-help">Choose the updates to receive in this browser.</p>
+            <label>
+              <input id="notification-topic-authority" type="checkbox" value="authority" checked>
+              <span>
+                <strong>Forecast timing changes</strong>
+                <small>Alert when the expected reset moves earlier or later, or a new window appears.</small>
+                <small class="notification-topic-channel">Browser notification · also included in stable Atom</small>
+              </span>
+            </label>
+            <label>
+              <input id="notification-topic-outcome" type="checkbox" value="outcome" checked>
+              <span>
+                <strong>Reset outcome updates</strong>
+                <small>Alert when a reset is confirmed or a confirmed result is later corrected.</small>
+                <small class="notification-topic-channel">Browser notification · also included in stable Atom</small>
+              </span>
+            </label>
+            <label>
+              <input id="notification-topic-probability" type="checkbox" value="experimental_probability" aria-controls="notification-probability-rule" aria-expanded="false">
+              <span>
+                <strong>Probability reaches my threshold</strong>
+                <small>Alert the first time reset probability exceeds your threshold in the selected window.</small>
+                <small class="notification-topic-channel">Browser notification · can generate a personalized Atom feed</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <section class="notification-rule" id="notification-probability-rule" aria-labelledby="notification-horizon-label" data-enabled="false" hidden inert>
+            <div class="notification-control-heading">
+              <label id="notification-horizon-label" for="notification-horizon">Advance window</label>
+              <output id="notification-horizon-value" for="notification-horizon">4 hours</output>
+            </div>
+            <input
+              class="notification-range"
+              id="notification-horizon"
+              type="range"
+              min="0"
+              max="27"
+              step="1"
+              value="3"
+              aria-describedby="notification-horizon-help"
+            >
+            <div class="notification-range-ticks" id="notification-horizon-ticks" aria-hidden="true"></div>
+            <p class="notification-control-help" id="notification-horizon-help">Hourly from 1–12 hours, then in steps of 4 hours, 12 hours, and 1 day. The personalized Atom feed uses this same window.</p>
+
+            <section class="calibration-card" aria-labelledby="calibration-title">
+              <div class="calibration-heading">
+                <div>
+                  <h3 id="calibration-title">Historical Probability Distribution and Reliability</h3>
+                  <p>The curve focuses on the historical forecast distribution within mean ±4σ; the dashed position shows historical hit rate above that probability.</p>
+                </div>
+                <div class="calibration-heading-values">
+                  <span class="calibration-sample" id="calibration-sample">Waiting for history</span>
+                  <label for="notification-threshold">Trigger threshold <output id="notification-threshold-value" for="notification-threshold">50%</output></label>
+                </div>
+              </div>
+              <div class="calibration-plot" id="calibration-plot" data-state="idle">
+                <input
+                  class="calibration-threshold-input"
+                  id="notification-threshold"
+                  type="range"
+                  min="1"
+                  max="99"
+                  step="1"
+                  value="50"
+                  aria-label="Probability trigger threshold"
+                  aria-describedby="notification-threshold-help calibration-summary"
+                >
+                <svg viewBox="0 0 600 190" preserveAspectRatio="none" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="calibration-fill" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stop-color="#4ade80" stop-opacity=".42"></stop>
+                      <stop offset="100%" stop-color="#4ade80" stop-opacity=".03"></stop>
+                    </linearGradient>
+                    <linearGradient id="calibration-threshold-fill" x1="0" x2="1" y1="0" y2="0">
+                      <stop offset="0%" stop-color="#22c55e" stop-opacity=".04"></stop>
+                      <stop offset="100%" stop-color="#22c55e" stop-opacity=".14"></stop>
+                    </linearGradient>
+                  </defs>
+                  <line class="calibration-grid-line" x1="20" x2="580" y1="165" y2="165"></line>
+                  <path class="calibration-area" id="calibration-area"></path>
+                  <rect class="calibration-threshold-range" id="calibration-threshold-range" x="20" y="24" width="0" height="141" hidden></rect>
+                  <path class="calibration-curve" id="calibration-curve"></path>
+                  <line class="calibration-crosshair" id="calibration-crosshair" y1="24" y2="165" hidden></line>
+                  <circle class="calibration-marker" id="calibration-marker" r="4" hidden></circle>
+                  <rect class="calibration-hit-area" id="calibration-hit-area" x="20" y="18" width="560" height="147"></rect>
+                </svg>
+                <output class="calibration-threshold-pin" id="calibration-threshold-pin" for="notification-threshold" hidden>Trigger · 50%</output>
+                <div class="calibration-tooltip" id="calibration-tooltip" hidden></div>
+                <p class="calibration-state" id="calibration-state" role="status" aria-live="polite">Choose a window to load history.</p>
+                <div class="calibration-axis" aria-hidden="true"><span id="calibration-axis-lower">0%</span><span>Forecast probability</span><span id="calibration-axis-upper">100%</span></div>
+              </div>
+              <p class="calibration-range-note" id="calibration-range-note">After the distribution profile loads, the chart keeps mean ±4σ and clips outlying windows outside that range.</p>
+              <p class="notification-control-help" id="notification-threshold-help">The x-axis is the trigger threshold. Click or drag the chart, or focus it and use the keyboard across the full 1%–99% range. New settings start at the suggested distribution mean +2σ and are not overwritten after manual adjustment.</p>
+              <p class="calibration-summary" id="calibration-summary" aria-live="polite">Historical reliability helps choose a threshold; it is not model confidence.</p>
+            </section>
+
+            <div class="personalized-feed">
+              <strong id="feed-options-title">Personalized Atom for the same rule</strong>
+              <p>This parameterized subscription is separate from browser Push. Opening or subscribing to it does not enable Push, and the link follows the window and probability threshold above.</p>
+              <div class="personalized-feed-url-row">
+                <input id="personalized-feed-url" type="text" readonly aria-label="Personalized Atom subscription URL">
+                <button class="notification-button secondary" id="personalized-feed-copy" type="button">Copy link</button>
+                <a class="notification-button secondary" id="personalized-feed-open" target="_blank" rel="noopener noreferrer">Open in reader</a>
+              </div>
+              <p id="personalized-feed-status" role="status" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <aside class="feed-options" aria-labelledby="public-feed-title">
+            <div class="public-feed-row">
+              <div>
+                <strong id="public-feed-title">Independent public Atom feeds</strong>
+                <p>No browser Push opt-in is needed. The public experimental feed always uses a 4-hour / 50% observation rule, not your personal window or threshold.</p>
+              </div>
+              <div class="feed-option-links">
+                <a href="/feed.xml" target="_blank" rel="noopener noreferrer">Stable events (authority windows + confirmations and corrections)</a>
+                <a href="/feeds/experimental.xml" target="_blank" rel="noopener noreferrer">Stable events + public 4h experiment</a>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <footer class="subscription-dialog-footer">
+          <p id="notification-status" aria-live="polite">Notification permission is requested only after you click save.</p>
+          <div class="notification-actions">
+            <button class="notification-button secondary" id="notification-disable" type="button" hidden>Turn off notifications</button>
+            <button class="notification-button secondary" id="notification-cancel" type="button">Cancel</button>
+            <button class="notification-button" id="notification-enable" type="button">Enable notifications</button>
+          </div>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog class="signal-dialog" id="signal-dialog" aria-labelledby="signal-dialog-title">
+      <div class="signal-dialog-card">
+        <header class="signal-dialog-header">
+          <div>
+            <p class="eyebrow">UPDATE DETAILS</p>
+            <h2 id="signal-dialog-title">Full Content</h2>
+          </div>
+          <button class="signal-dialog-close" id="signal-dialog-close" type="button" aria-label="Close update details">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div class="signal-dialog-body">
+          <div class="signal-dialog-badges" id="signal-dialog-badges"></div>
+          <p class="signal-dialog-text" id="signal-dialog-text"></p>
+          <dl class="signal-dialog-times">
+            <div>
+              <dt>Published</dt>
+              <dd id="signal-dialog-published-at">—</dd>
+            </div>
+            <div>
+              <dt>Available to the model</dt>
+              <dd id="signal-dialog-available-at">—</dd>
+            </div>
+          </dl>
+        </div>
+        <footer class="signal-dialog-footer">
+          <span id="signal-dialog-source">Source unavailable</span>
+          <a
+            class="signal-dialog-source-link"
+            id="signal-dialog-source-link"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View source
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 3h7v7M13 3 6.5 9.5M11 8.5V13H3V5h4.5"/>
+            </svg>
+          </a>
+        </footer>
+      </div>
+    </dialog>
+  </body>
+</html>

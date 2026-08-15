@@ -5,130 +5,131 @@ import {
   formatNotificationHorizon,
   nearestHorizonIndex,
   normalizeCalibrationPayload,
-} from "./notification-preferences.js?v=subscription-preferences-6";
+} from "./notification-preferences.js?v=seo-i18n-1";
+import { tr, uiLocale } from "./i18n.js?v=seo-i18n-1";
 
 const percent = (value, digits = 0) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "—";
 const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const displayZone = localZone === "Etc/UTC" ? "UTC" : localZone;
-const dateFormatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" });
-const weekdayFormatter = new Intl.DateTimeFormat("zh-CN", { weekday: "short" });
-const clockFormatter = new Intl.DateTimeFormat("zh-CN", {
+const dateFormatter = new Intl.DateTimeFormat(uiLocale, { month: "long", day: "numeric" });
+const weekdayFormatter = new Intl.DateTimeFormat(uiLocale, { weekday: "short" });
+const clockFormatter = new Intl.DateTimeFormat(uiLocale, {
   hour: "2-digit",
   minute: "2-digit",
   hour12: false,
 });
 
 const eventTypeLabels = {
-  quota_reset: "额度重置",
-  quota_refill: "额度补充",
-  limit_policy_change: "限额调整",
-  capacity_restore: "容量恢复",
-  incident: "服务事件",
-  release: "产品发布",
-  development_activity: "开发动态",
-  competitor_limit_change: "竞品限额调整",
-  competitor_model_release: "竞争模型发布",
-  experience_issue: "体验问题",
-  experience_recovery: "体验恢复",
+  quota_reset: tr("额度重置", "Quota reset"),
+  quota_refill: tr("额度补充", "Quota refill"),
+  limit_policy_change: tr("限额调整", "Limit policy change"),
+  capacity_restore: tr("容量恢复", "Capacity restoration"),
+  incident: tr("服务事件", "Service incident"),
+  release: tr("产品发布", "Product release"),
+  development_activity: tr("开发动态", "Development update"),
+  competitor_limit_change: tr("竞品限额调整", "Competitor limit change"),
+  competitor_model_release: tr("竞争模型发布", "Competing model release"),
+  experience_issue: tr("体验问题", "Experience issue"),
+  experience_recovery: tr("体验恢复", "Experience recovery"),
 };
 
 const phaseLabels = {
-  rumor: "传闻",
-  expected: "预期",
-  scheduled: "已计划",
-  started: "声称开始",
-  completed: "声称完成",
-  denied: "已否认",
-  cancelled: "已取消",
+  rumor: tr("传闻", "Rumor"),
+  expected: tr("预期", "Expected"),
+  scheduled: tr("已计划", "Scheduled"),
+  started: tr("声称开始", "Reported started"),
+  completed: tr("声称完成", "Reported complete"),
+  denied: tr("已否认", "Denied"),
+  cancelled: tr("已取消", "Cancelled"),
 };
 
 const sourceRoleLabels = {
-  official: "官方",
-  product_lead: "产品负责人",
-  product_team_member: "产品团队",
-  community: "用户报告",
-  aggregator: "聚合摘要",
-  media: "媒体",
-  unknown: "角色未知",
+  official: tr("官方", "Official"),
+  product_lead: tr("产品负责人", "Product lead"),
+  product_team_member: tr("产品团队", "Product team"),
+  community: tr("用户报告", "User report"),
+  aggregator: tr("聚合摘要", "Aggregator"),
+  media: tr("媒体", "Media"),
+  unknown: tr("角色未知", "Unknown role"),
 };
 
 const impactSeverityLabels = {
-  critical: "严重级 · S1",
-  high: "严重级 · S2",
-  medium: "严重级 · S3",
-  low: "严重级 · S4",
-  unknown: "严重级待确认",
+  critical: tr("严重级 · S1", "Severity · S1"),
+  high: tr("严重级 · S2", "Severity · S2"),
+  medium: tr("严重级 · S3", "Severity · S3"),
+  low: tr("严重级 · S4", "Severity · S4"),
+  unknown: tr("严重级待确认", "Severity pending"),
 };
 
 const timelineRelevanceLabels = {
-  relevant: "相关信号",
-  irrelevant: "已筛除",
-  pending_context: "等待上下文",
-  unclassified: "未形成信号",
+  relevant: tr("相关信号", "Relevant signal"),
+  irrelevant: tr("已筛除", "Filtered out"),
+  pending_context: tr("等待上下文", "Awaiting context"),
+  unclassified: tr("未形成信号", "Not classified as signal"),
 };
 
 const episodeStateLabels = {
-  active: "持续中",
-  investigating: "调查中",
-  mitigating: "缓解中",
-  resolved: "已缓解",
-  reopened: "再次出现",
-  unknown: "状态待确认",
+  active: tr("持续中", "Active"),
+  investigating: tr("调查中", "Investigating"),
+  mitigating: tr("缓解中", "Mitigating"),
+  resolved: tr("已缓解", "Resolved"),
+  reopened: tr("再次出现", "Reopened"),
+  unknown: tr("状态待确认", "State pending"),
 };
 
 const episodeTrendLabels = {
-  rising: "升温",
-  stable: "持平",
-  falling: "降温",
-  resolved: "已解决",
-  unknown: "趋势待确认",
+  rising: tr("升温", "Rising"),
+  stable: tr("持平", "Stable"),
+  falling: tr("降温", "Falling"),
+  resolved: tr("已解决", "Resolved"),
+  unknown: tr("趋势待确认", "Trend pending"),
 };
 
 const impactCategoryLabels = {
-  availability: "可用性",
-  performance: "性能",
-  correctness: "正确性",
-  tool_execution: "工具执行",
-  session_state: "会话状态",
-  quota_accounting: "额度计量",
-  auth: "认证",
-  client_ux: "客户端体验",
-  security_privacy: "安全与隐私",
-  data_integrity: "数据完整性",
-  compatibility: "兼容性",
-  other: "其他问题",
+  availability: tr("可用性", "Availability"),
+  performance: tr("性能", "Performance"),
+  correctness: tr("正确性", "Correctness"),
+  tool_execution: tr("工具执行", "Tool execution"),
+  session_state: tr("会话状态", "Session state"),
+  quota_accounting: tr("额度计量", "Quota accounting"),
+  auth: tr("认证", "Authentication"),
+  client_ux: tr("客户端体验", "Client UX"),
+  security_privacy: tr("安全与隐私", "Security and privacy"),
+  data_integrity: tr("数据完整性", "Data integrity"),
+  compatibility: tr("兼容性", "Compatibility"),
+  other: tr("其他问题", "Other issue"),
 };
 
 const impactScopeLabels = {
-  individual: "单个用户",
-  multiple_users: "多个用户",
-  platform: "平台范围",
-  unknown: "范围待确认",
+  individual: tr("单个用户", "Individual user"),
+  multiple_users: tr("多个用户", "Multiple users"),
+  platform: tr("平台范围", "Platform-wide"),
+  unknown: tr("范围待确认", "Scope pending"),
 };
 
 const publicationBlockerLabels = {
-  champion_missing: "模型尚未就绪",
-  champion_incompatible: "模型版本需要更新",
-  champion_artifact_missing: "模型文件缺失",
-  forecast_missing: "尚无预测",
-  forecast_stale: "预测已经过期",
-  forecast_invalid: "预测时间范围无效",
-  forecast_not_validated: "试用模型仍在积累严格验证",
-  forecast_model_mismatch: "模型版本需要更新",
-  forecast_model_artifact_mismatch: "模型版本需要更新",
-  forecast_model_contract_mismatch: "模型版本需要更新",
-  forecast_integrity_failed: "预测校验未通过",
-  synthetic_only: "当前为合成演示数据",
-  real_walk_forward_not_proven: "真实数据评估不足",
-  live_evaluation_incompatible: "发布评估需要更新",
-  live_evaluation_gate_failed: "发布评估未通过",
-  model_evaluation_pending: "正在积累真实评估数据",
-  negative_label_coverage_pending: "历史覆盖正在复验",
-  negative_label_coverage_missing: "历史覆盖数据不足",
-  required_outcome_source_not_fresh: "核心来源更新不及时",
-  exact_source_not_fresh: "核心来源更新不及时",
-  pipeline_error: "数据更新失败",
+  champion_missing: tr("模型尚未就绪", "Model is not ready"),
+  champion_incompatible: tr("模型版本需要更新", "Model version needs an update"),
+  champion_artifact_missing: tr("模型文件缺失", "Model artifact is missing"),
+  forecast_missing: tr("尚无预测", "No forecast yet"),
+  forecast_stale: tr("预测已经过期", "Forecast has expired"),
+  forecast_invalid: tr("预测时间范围无效", "Forecast time range is invalid"),
+  forecast_not_validated: tr("试用模型仍在积累严格验证", "Trial model is still accumulating strict validation"),
+  forecast_model_mismatch: tr("模型版本需要更新", "Model version needs an update"),
+  forecast_model_artifact_mismatch: tr("模型版本需要更新", "Model version needs an update"),
+  forecast_model_contract_mismatch: tr("模型版本需要更新", "Model version needs an update"),
+  forecast_integrity_failed: tr("预测校验未通过", "Forecast integrity check failed"),
+  synthetic_only: tr("当前为合成演示数据", "Currently showing synthetic demo data"),
+  real_walk_forward_not_proven: tr("真实数据评估不足", "Insufficient real-data evaluation"),
+  live_evaluation_incompatible: tr("发布评估需要更新", "Publication evaluation needs an update"),
+  live_evaluation_gate_failed: tr("发布评估未通过", "Publication evaluation gate failed"),
+  model_evaluation_pending: tr("正在积累真实评估数据", "Accumulating real evaluation data"),
+  negative_label_coverage_pending: tr("历史覆盖正在复验", "Historical coverage is being revalidated"),
+  negative_label_coverage_missing: tr("历史覆盖数据不足", "Historical coverage is insufficient"),
+  required_outcome_source_not_fresh: tr("核心来源更新不及时", "Core source is not fresh"),
+  exact_source_not_fresh: tr("核心来源更新不及时", "Core source is not fresh"),
+  pipeline_error: tr("数据更新失败", "Data refresh failed"),
 };
 
 const publicationBlockerPriority = [
@@ -150,13 +151,13 @@ function primaryPublicationBlocker(blockers = []) {
 
 function formatTime(value) {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间未知";
+  if (Number.isNaN(date.getTime())) return tr("时间未知", "Unknown time");
   return `${dateFormatter.format(date)} ${weekdayFormatter.format(date)} ${clockFormatter.format(date)}`;
 }
 
 function formatCompactTime(value) {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间未知";
+  if (Number.isNaN(date.getTime())) return tr("时间未知", "Unknown time");
   return `${dateFormatter.format(date)} ${clockFormatter.format(date)}`;
 }
 
@@ -197,34 +198,37 @@ function openSignalDialog(item, trigger) {
   if (!signalDialog) return;
   const source = item.source ?? {};
   const sourceUrl = safeExternalUrl(source.canonical_url);
-  const sourceName = source.display_handle ?? "来源不可用";
-  const eventType = eventTypeLabels[item.event_type] ?? "其他信号";
-  const phase = phaseLabels[item.phase] ?? "状态未知";
-  const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? "角色未知";
+  const sourceName = source.display_handle ?? tr("来源不可用", "Source unavailable");
+  const eventType = eventTypeLabels[item.event_type] ?? tr("其他信号", "Other signal");
+  const phase = phaseLabels[item.phase] ?? tr("状态未知", "Unknown state");
+  const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? tr("角色未知", "Unknown role");
   const badges = document.querySelector("#signal-dialog-badges");
   const sourceLink = document.querySelector("#signal-dialog-source-link");
 
   document.querySelector("#signal-dialog-title").textContent = eventType;
-  document.querySelector("#signal-dialog-text").textContent = source.text ?? "暂无原始文本";
+  document.querySelector("#signal-dialog-text").textContent = source.text ?? tr("暂无原始文本", "No source text");
   document.querySelector("#signal-dialog-published-at").textContent = source.published_at
     ? formatTime(source.published_at)
-    : "时间未知";
+    : tr("时间未知", "Unknown time");
   document.querySelector("#signal-dialog-available-at").textContent = item.available_at
     ? formatTime(item.available_at)
-    : "时间未知";
+    : tr("时间未知", "Unknown time");
   document.querySelector("#signal-dialog-source").textContent = `${sourceName} · ${phase}`;
 
   badges.replaceChildren();
   addSignalDialogBadge(badges, eventType);
   addSignalDialogBadge(badges, role, "secondary");
   if (item.pending_next_forecast) {
-    addSignalDialogBadge(badges, "待下一轮纳入", "pending");
+    addSignalDialogBadge(badges, tr("待下一轮纳入", "Pending next run"), "pending");
   }
 
   if (sourceUrl) {
     sourceLink.href = sourceUrl;
     sourceLink.hidden = false;
-    sourceLink.setAttribute("aria-label", `在新窗口打开 ${sourceName} 的原文`);
+    sourceLink.setAttribute("aria-label", tr(
+      `在新窗口打开 ${sourceName} 的原文`,
+      `Open the original post from ${sourceName} in a new window`,
+    ));
   } else {
     sourceLink.removeAttribute("href");
     sourceLink.hidden = true;
@@ -295,8 +299,11 @@ function cumulativeInterval(forecast, key) {
 
 function intervalText(interval) {
   return interval
-    ? `大致范围（80%）：${percent(interval[0], 1)}–${percent(interval[1], 1)}`
-    : "大致范围（80%）：暂无";
+    ? tr(
+      `大致范围（80%）：${percent(interval[0], 1)}–${percent(interval[1], 1)}`,
+      `Approximate 80% range: ${percent(interval[0], 1)}–${percent(interval[1], 1)}`,
+    )
+    : tr("大致范围（80%）：暂无", "Approximate 80% range: unavailable");
 }
 
 function levelForProbability(probability, maximum) {
@@ -322,8 +329,14 @@ function formatSlotRange(slot) {
 function describeSlot(slot, cumulativeProbability) {
   return [
     formatSlotRange(slot),
-    `该小时发生首次重置的概率：${percent(slot.first_reset_probability, 2)}`,
-    `从现在到该小时结束的累计重置概率：${percent(cumulativeProbability, 2)}`,
+    tr(
+      `该小时发生首次重置的概率：${percent(slot.first_reset_probability, 2)}`,
+      `Probability of a first reset in this hour: ${percent(slot.first_reset_probability, 2)}`,
+    ),
+    tr(
+      `从现在到该小时结束的累计重置概率：${percent(cumulativeProbability, 2)}`,
+      `Cumulative probability through this hour: ${percent(cumulativeProbability, 2)}`,
+    ),
   ].join("\n");
 }
 
@@ -385,20 +398,22 @@ document.querySelector(".heatmap-scroll")?.addEventListener(
 function showHourlySlotDetail(slot, cumulativeProbability) {
   const detail = document.querySelector("#heat-detail");
   detail.dataset.mode = "hourly";
-  detail.innerHTML = `<strong>${escapeHtml(percent(slot.first_reset_probability, 2))}</strong><div><time>${escapeHtml(formatSlotRange(slot))}</time><span>该小时发生首次重置的概率：${escapeHtml(percent(slot.first_reset_probability, 2))}</span><span>从现在到该小时结束的累计重置概率：${escapeHtml(percent(cumulativeProbability, 2))}</span></div>`;
+  detail.innerHTML = `<strong>${escapeHtml(percent(slot.first_reset_probability, 2))}</strong><div><time>${escapeHtml(formatSlotRange(slot))}</time><span>${tr("该小时发生首次重置的概率", "Probability of a first reset in this hour")}: ${escapeHtml(percent(slot.first_reset_probability, 2))}</span><span>${tr("从现在到该小时结束的累计重置概率", "Cumulative probability through this hour")}: ${escapeHtml(percent(cumulativeProbability, 2))}</span></div>`;
 }
 
 function showSelectedSlotDetail(slot, cumulativeProbability) {
   const detail = document.querySelector("#heat-detail");
   detail.dataset.mode = "cumulative";
-  detail.innerHTML = `<strong>${escapeHtml(percent(cumulativeProbability, 2))}</strong><div><time>${escapeHtml(formatSlotRange(slot))} · 已选累计区间</time><span>所选结束小时的首次重置概率：${escapeHtml(percent(slot.first_reset_probability, 2))}</span><span>从现在到所选小时结束的累计重置概率：${escapeHtml(percent(cumulativeProbability, 2))}</span></div>`;
+  detail.innerHTML = `<strong>${escapeHtml(percent(cumulativeProbability, 2))}</strong><div><time>${escapeHtml(formatSlotRange(slot))} · ${tr("已选累计区间", "Selected cumulative window")}</time><span>${tr("所选结束小时的首次重置概率", "First-reset probability in the selected end hour")}: ${escapeHtml(percent(slot.first_reset_probability, 2))}</span><span>${tr("从现在到所选小时结束的累计重置概率", "Cumulative probability through the selected hour")}: ${escapeHtml(percent(cumulativeProbability, 2))}</span></div>`;
 }
 
 function resetSlotDetail() {
   const detail = document.querySelector("#heat-detail");
   detail.dataset.mode = "empty";
-  detail.innerHTML =
-    "<strong>—</strong><div><time>悬停格子查看该小时，点击可固定累计区间</time><span>该小时发生首次重置的概率：—</span><span>从现在到该小时结束的累计重置概率：—</span></div>";
+  detail.innerHTML = tr(
+    "<strong>—</strong><div><time>悬停格子查看该小时，点击可固定累计区间</time><span>该小时发生首次重置的概率：—</span><span>从现在到该小时结束的累计重置概率：—</span></div>",
+    "<strong>—</strong><div><time>Hover for an hour; click to pin a cumulative window</time><span>Probability of a first reset in this hour: —</span><span>Cumulative probability through this hour: —</span></div>",
+  );
 }
 
 function restoreSlotDetail() {
@@ -639,11 +654,17 @@ function dayBlock(slots, offset, maximum, visibleSlots, dayIndex) {
     visibleSlots,
     offset + slots.length - 1,
   );
-  const dayMessage =
-    `未来${dayNames[dayIndex]}天内重置概率：${percent(dayProbability, 1)}`;
+  const dayCount = dayIndex + 1;
+  const dayMessage = tr(
+    `未来${dayNames[dayIndex]}天内重置概率：${percent(dayProbability, 1)}`,
+    `Reset probability within ${dayCount} ${dayCount === 1 ? "day" : "days"}: ${percent(dayProbability, 1)}`,
+  );
   label.setAttribute(
     "aria-label",
-    `${dateFormatter.format(new Date(slots[0].start))}，${dayMessage}`,
+    tr(
+      `${dateFormatter.format(new Date(slots[0].start))}，${dayMessage}`,
+      `${dateFormatter.format(new Date(slots[0].start))}, ${dayMessage}`,
+    ),
   );
   label.addEventListener("mouseenter", () => showHeatTooltip(label, [dayMessage]));
   label.addEventListener("mouseleave", () => {
@@ -665,7 +686,10 @@ function renderHeatmap(slots) {
   target.replaceChildren();
   target.className = "heatmap week-view";
   target.setAttribute("role", "grid");
-  target.setAttribute("aria-label", "从预测起点开始的 168 个连续小时");
+  target.setAttribute(
+    "aria-label",
+    tr("从预测起点开始的 168 个连续小时", "168 continuous hours from the forecast origin"),
+  );
   target.setAttribute("aria-rowcount", "12");
   target.setAttribute("aria-colcount", "14");
   target.setAttribute("aria-multiselectable", "true");
@@ -713,32 +737,32 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     row.dataset.sourceRole = item.source_role ?? "unknown";
     const source = item.source;
     const sourceUrl = safeExternalUrl(source?.canonical_url);
-    const sourceDisplayName = source?.display_handle ?? "来源不可用";
+    const sourceDisplayName = source?.display_handle ?? tr("来源不可用", "Source unavailable");
     const sourceName = escapeHtml(sourceDisplayName);
     const sourceLabel = `<span>${sourceName}</span>`;
-    const eventType = eventTypeLabels[item.event_type] ?? "其他信号";
-    const phase = phaseLabels[item.phase] ?? "状态未知";
-    const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? "角色未知";
+    const eventType = eventTypeLabels[item.event_type] ?? tr("其他信号", "Other signal");
+    const phase = phaseLabels[item.phase] ?? tr("状态未知", "Unknown state");
+    const role = sourceRoleLabels[item.source_role] ?? item.source_role ?? tr("角色未知", "Unknown role");
     const signalTime = source?.published_at ?? item.available_at;
     const pending = item.pending_next_forecast
-      ? "<span class=\"signal-badge pending\">待下一轮纳入</span>"
+      ? `<span class="signal-badge pending">${tr("待下一轮纳入", "Pending next run")}</span>`
       : "";
     const impact = item.impact?.severity
       ? `<span class="signal-badge severity-${escapeHtml(item.impact.severity)}">${escapeHtml(
-          impactSeverityLabels[item.impact.severity] ?? "严重级待确认",
+          impactSeverityLabels[item.impact.severity] ?? tr("严重级待确认", "Severity pending"),
         )}</span>`
       : "";
     const competitionStage = item.competitive_context?.stage
       ? `<span class="signal-badge secondary">${escapeHtml(
           item.competitive_context.stage === "rolled_out"
-            ? "已发布"
+            ? tr("已发布", "Released")
             : item.competitive_context.stage === "general_availability"
-              ? "正式可用"
+              ? tr("正式可用", "Generally available")
               : item.competitive_context.stage === "preview"
-                ? "预览"
+                ? tr("预览", "Preview")
                 : item.competitive_context.stage === "rumor"
-                  ? "传闻"
-                  : "已宣布",
+                  ? tr("传闻", "Rumor")
+                  : tr("已宣布", "Announced"),
         )}</span>`
       : "";
     const preview = document.createElement("button");
@@ -750,17 +774,20 @@ function renderEvidence(targetSelector, items, emptyText, tier) {
     preview.setAttribute("aria-haspopup", "dialog");
     preview.setAttribute(
       "aria-label",
-      `查看 ${sourceDisplayName} ${formatCompactTime(signalTime)} 的${eventType}完整动态`,
+      tr(
+        `查看 ${sourceDisplayName} ${formatCompactTime(signalTime)} 的${eventType}完整动态`,
+        `View the full ${eventType} update from ${sourceDisplayName} at ${formatCompactTime(signalTime)}`,
+      ),
     );
-    preview.title = "点击查看完整内容";
-    preview.innerHTML = `<span class="signal-head"><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${impact}${competitionStage}${pending}</span><time title="系统首次获取并可用于分析的时间：${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></span><span class="signal-card-text">${escapeHtml(source?.text ?? "暂无原始文本")}</span>`;
+    preview.title = tr("点击查看完整内容", "Click to view full content");
+    preview.innerHTML = `<span class="signal-head"><span class="signal-badges"><span class="signal-badge">${escapeHtml(eventType)}</span><span class="signal-badge secondary">${escapeHtml(role)}</span>${impact}${competitionStage}${pending}</span><time title="${tr("系统首次获取并可用于分析的时间", "First available to the system for analysis")}: ${escapeHtml(formatCompactTime(item.available_at))}">${escapeHtml(formatCompactTime(signalTime))}</time></span><span class="signal-card-text">${escapeHtml(source?.text ?? tr("暂无原始文本", "No source text"))}</span>`;
     preview.addEventListener("click", () => openSignalDialog(item, preview));
     row.append(preview);
 
     const footer = document.createElement("div");
     footer.className = "signal-footer";
     footer.innerHTML = `<small>${sourceLabel} · ${escapeHtml(phase)}</small>${sourceUrl
-      ? `<a class="signal-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="在新窗口打开 ${sourceName} 的原文" title="查看原文"><span>原文</span>${externalLinkIcon}</a>`
+      ? `<a class="signal-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="${tr(`在新窗口打开 ${sourceDisplayName} 的原文`, `Open the original post from ${sourceDisplayName} in a new window`)}" title="${tr("查看原文", "View source")}"><span>${tr("原文", "Source")}</span>${externalLinkIcon}</a>`
       : ""}`;
     row.append(footer);
     target.append(row);
@@ -772,7 +799,7 @@ function renderTimeline(items) {
   const target = document.querySelector(targetSelector);
   target.replaceChildren();
   if (!Array.isArray(items) || items.length === 0) {
-    setListMessage(targetSelector, "暂无可展示的 Tibo 精确动态");
+    setListMessage(targetSelector, tr("暂无可展示的 Tibo 精确动态", "No exact Tibo updates to show"));
     return;
   }
   for (const item of items.slice(0, 12)) {
@@ -781,21 +808,24 @@ function renderTimeline(items) {
     const sourceUrl = safeExternalUrl(item.canonical_url);
     const eventType = item.event_type
       ? eventTypeLabels[item.event_type] ?? item.event_type
-      : "未匹配信号";
+      : tr("未匹配信号", "Unmatched signal");
     const relevance = timelineRelevanceLabels[item.relevance] ??
       item.relevance ??
-      "状态未知";
+      tr("状态未知", "Unknown state");
     const featureStatus = item.quarantined_relation
-      ? "已安全隔离"
+      ? tr("已安全隔离", "Safely quarantined")
       : item.matched_signal
         ? item.forecast_feature_eligible
-          ? "可进入预测特征"
-          : "仅展示"
-        : "未抽取";
+          ? tr("可进入预测特征", "Eligible for forecast features")
+          : tr("仅展示", "Display only")
+        : tr("未抽取", "Not extracted");
     const publishedAt = item.published_at ?? item.first_seen_at;
     const firstSeenTitle = item.first_seen_at
-      ? `系统首次获取：${formatCompactTime(item.first_seen_at)}`
-      : "首次获取时间不可用";
+      ? tr(
+        `系统首次获取：${formatCompactTime(item.first_seen_at)}`,
+        `First seen by the system: ${formatCompactTime(item.first_seen_at)}`,
+      )
+      : tr("首次获取时间不可用", "First-seen time unavailable");
     row.innerHTML = `
       <div class="signal-head">
         <span class="signal-badges">
@@ -805,11 +835,11 @@ function renderTimeline(items) {
         </span>
         <time title="${escapeHtml(firstSeenTitle)}">${escapeHtml(formatCompactTime(publishedAt))}</time>
       </div>
-      <p class="signal-card-text">${escapeHtml(item.text ?? "暂无原始文本")}</p>
+      <p class="signal-card-text">${escapeHtml(item.text ?? tr("暂无原始文本", "No source text"))}</p>
       <div class="signal-footer">
         <small>${escapeHtml(item.display_handle ?? "@thsottiaux")} · ${escapeHtml(item.ingest_provider ?? "exact source")}</small>
         ${sourceUrl
-          ? `<a class="signal-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="在新窗口打开 Tibo 原文"><span>原文</span>${externalLinkIcon}</a>`
+          ? `<a class="signal-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="${tr("在新窗口打开 Tibo 原文", "Open the original Tibo post in a new window")}"><span>${tr("原文", "Source")}</span>${externalLinkIcon}</a>`
           : ""}
       </div>
     `;
@@ -817,11 +847,13 @@ function renderTimeline(items) {
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "timeline-expand";
-      toggle.textContent = "展开完整内容";
+      toggle.textContent = tr("展开完整内容", "Show full content");
       toggle.setAttribute("aria-expanded", "false");
       toggle.addEventListener("click", () => {
         const expanded = row.classList.toggle("expanded");
-        toggle.textContent = expanded ? "收起内容" : "展开完整内容";
+        toggle.textContent = expanded
+          ? tr("收起内容", "Collapse content")
+          : tr("展开完整内容", "Show full content");
         toggle.setAttribute("aria-expanded", String(expanded));
       });
       row.querySelector(".signal-footer")?.before(toggle);
@@ -838,7 +870,7 @@ function pressureScore(value) {
 
 function impactSummary(value) {
   if (typeof value === "string" && value.trim()) return value.trim();
-  if (!value || typeof value !== "object") return "当前影响尚待补充";
+  if (!value || typeof value !== "object") return tr("当前影响尚待补充", "Current impact pending");
   if (typeof value.summary === "string" && value.summary.trim()) {
     return value.summary.trim();
   }
@@ -857,7 +889,7 @@ function impactSummary(value) {
       ? impactScopeLabels[value.affected_scope] ?? value.affected_scope
       : null,
   ].filter(Boolean);
-  return fields.length > 0 ? fields.join(" · ") : "当前影响尚待补充";
+  return fields.length > 0 ? fields.join(" · ") : tr("当前影响尚待补充", "Current impact pending");
 }
 
 function renderImpactEpisodes(items, tracking = {}) {
@@ -865,11 +897,11 @@ function renderImpactEpisodes(items, tracking = {}) {
   const target = document.querySelector(targetSelector);
   target.replaceChildren();
   if (tracking.enabled === false) {
-    setListMessage(targetSelector, "问题发酵追踪当前已关闭");
+    setListMessage(targetSelector, tr("问题发酵追踪当前已关闭", "Issue-momentum tracking is disabled"));
     return;
   }
   if (!Array.isArray(items) || items.length === 0) {
-    setListMessage(targetSelector, "暂无形成持续发酵的问题");
+    setListMessage(targetSelector, tr("暂无形成持续发酵的问题", "No sustained issue momentum yet"));
     return;
   }
   for (const item of items.slice(0, 8)) {
@@ -885,10 +917,10 @@ function renderImpactEpisodes(items, tracking = {}) {
     const relativeWidth = Number.isFinite(current)
       ? Math.max(0, Math.min(100, (current / denominator) * 100))
       : 0;
-    const state = episodeStateLabels[item.state] ?? item.state ?? "状态未知";
-    const trend = episodeTrendLabels[item.trend] ?? item.trend ?? "趋势未知";
+    const state = episodeStateLabels[item.state] ?? item.state ?? tr("状态未知", "Unknown state");
+    const trend = episodeTrendLabels[item.trend] ?? item.trend ?? tr("趋势未知", "Unknown trend");
     const category = impactCategoryLabels[item.category] ??
-      String(item.category ?? "其他问题").replaceAll("_", " ");
+      String(item.category ?? tr("其他问题", "Other issue")).replaceAll("_", " ");
     const evidenceCount = Array.isArray(item.evidence)
       ? item.evidence.length
       : item.evidence && typeof item.evidence === "object"
@@ -896,13 +928,13 @@ function renderImpactEpisodes(items, tracking = {}) {
         : 0;
     const lastUpdate = item.last_independent_update_at
       ? formatCompactTime(item.last_independent_update_at)
-      : "更新时间未知";
+      : tr("更新时间未知", "Update time unknown");
     const firstObserved = item.first_observed_at
       ? formatCompactTime(item.first_observed_at)
-      : "时间未知";
+      : tr("时间未知", "Unknown time");
     const computedAt = item.as_of
       ? formatCompactTime(item.as_of)
-      : "计算时间未知";
+      : tr("计算时间未知", "Calculation time unknown");
     row.innerHTML = `
       <div class="episode-heading">
         <div>
@@ -914,11 +946,11 @@ function renderImpactEpisodes(items, tracking = {}) {
       </div>
       <p class="episode-impact">${escapeHtml(impactSummary(item.current_impact))}</p>
       <div class="pressure-row">
-        <span>当前压力 <strong>${escapeHtml(pressureScore(item.current_pressure))}</strong></span>
-        <span>峰值 ${escapeHtml(pressureScore(item.peak_pressure))}</span>
+        <span>${tr("当前压力", "Current pressure")} <strong>${escapeHtml(pressureScore(item.current_pressure))}</strong></span>
+        <span>${tr("峰值", "Peak")} ${escapeHtml(pressureScore(item.peak_pressure))}</span>
       </div>
       <div class="pressure-track" aria-hidden="true"><i style="width:${relativeWidth.toFixed(1)}%"></i></div>
-      <small>首次观察 ${escapeHtml(firstObserved)} · ${evidenceCount} 条独立证据 · 压力计算于 ${escapeHtml(computedAt)}</small>
+      <small>${tr("首次观察", "First observed")} ${escapeHtml(firstObserved)} · ${evidenceCount} ${tr("条独立证据", evidenceCount === 1 ? "independent evidence item" : "independent evidence items")} · ${tr("压力计算于", "pressure calculated at")} ${escapeHtml(computedAt)}</small>
     `;
     target.append(row);
   }
@@ -953,7 +985,12 @@ async function fetchJson(url, { timeoutMs = null, cache = "no-store" } = {}) {
     try {
       data = await response.json();
     } catch {
-      return { ok: false, status: response.status, data: null, error: "响应不是 JSON" };
+      return {
+        ok: false,
+        status: response.status,
+        data: null,
+        error: tr("响应不是 JSON", "Response was not JSON"),
+      };
     }
     return {
       ok: response.ok,
@@ -996,24 +1033,38 @@ function forecastErrorText(result, readiness = {}) {
     ],
   );
   if (blocker && publicationBlockerLabels[blocker]) {
-    return `${publicationBlockerLabels[blocker]}。`;
+    return tr(
+      `${publicationBlockerLabels[blocker]}。`,
+      `${publicationBlockerLabels[blocker]}.`,
+    );
   }
   const preparation = modelPreparationState(readiness);
   if (preparation === "fitted") {
-    return "模型已完成拟合，正在生成首版 7 天试用预测。";
+    return tr(
+      "模型已完成拟合，正在生成首版 7 天试用预测。",
+      "The model is fitted and is generating the first 7-day trial forecast.",
+    );
   }
   if (preparation === "running") {
-    return "模型正在更新，首版可用结果生成后立即显示。";
+    return tr(
+      "模型正在更新，首版可用结果生成后立即显示。",
+      "The model is updating. The first usable result will appear when ready.",
+    );
   }
   const labels = {
-    forecast_incompatible: "模型版本需要更新。",
-    forecast_not_publishable: "当前数据还不支持发布预测。",
-    forecast_stale: "预测已过期，等待更新。",
-    forecast_not_ready: "预测尚未生成。",
-    forecast_warming: "预测数据正在预热。",
+    forecast_incompatible: tr("模型版本需要更新。", "The model version needs an update."),
+    forecast_not_publishable: tr("当前数据还不支持发布预测。", "Current data does not yet support publishing a forecast."),
+    forecast_stale: tr("预测已过期，等待更新。", "The forecast has expired and is awaiting an update."),
+    forecast_not_ready: tr("预测尚未生成。", "The forecast has not been generated yet."),
+    forecast_warming: tr("预测数据正在预热。", "Forecast data is warming up."),
   };
-  if (result.status === 0) return "暂时无法连接预测服务。";
-  return labels[result.data?.error] ?? "预测暂不可用，请稍后再试。";
+  if (result.status === 0) {
+    return tr("暂时无法连接预测服务。", "The forecast service is temporarily unreachable.");
+  }
+  return labels[result.data?.error] ?? tr(
+    "预测暂不可用，请稍后再试。",
+    "The forecast is temporarily unavailable. Please try again later.",
+  );
 }
 
 function setStatus(kind, text) {
@@ -1021,7 +1072,7 @@ function setStatus(kind, text) {
   status.classList.remove("ok", "warning", "error");
   status.classList.add(kind);
   status.querySelector(".status-text").textContent = text;
-  status.setAttribute("aria-label", `${text}。查看数据状态`);
+  status.setAttribute("aria-label", tr(`${text}。查看数据状态`, `${text}. View data status`));
   document.querySelector("#status-announcement").textContent = text;
 }
 
@@ -1049,7 +1100,7 @@ document.addEventListener("click", (event) => {
 
 function renderForecast(forecast) {
   const slots = Array.isArray(forecast.data.slots) ? forecast.data.slots : [];
-  if (slots.length === 0) throw new Error("预测没有小时数据");
+  if (slots.length === 0) throw new Error(tr("预测没有小时数据", "Forecast contains no hourly data"));
   const provisional = isProvisionalServing(forecast);
   const probability4h = Number.isFinite(slots[0]?.rolling_4h_probability)
     ? slots[0].rolling_4h_probability
@@ -1064,34 +1115,38 @@ function renderForecast(forecast) {
       ? cumulative(slots.slice(0, 168))
       : null;
   document.querySelector("#probability-4h").textContent = probability4h === null
-    ? "窗口不足"
+    ? tr("窗口不足", "Insufficient window")
     : percent(probability4h, 2);
   document.querySelector("#probability-24h").textContent = percent(probability24h, 1);
   document.querySelector("#probability-72h").textContent = probability72h === null
-    ? "窗口不足"
+    ? tr("窗口不足", "Insufficient window")
     : percent(probability72h, 1);
   document.querySelector("#probability-7d").textContent = percent(probability168h, 1);
   document.querySelector("#data-quality-label").textContent =
-    provisional ? "数据状态 · 试用模型" : "数据状态";
+    provisional
+      ? tr("数据状态 · 试用模型", "Data status · Trial model")
+      : tr("数据状态", "Data status");
   document.querySelector("#interval-4h").textContent = probability4h === null
-    ? "滚动 4 小时窗口超出预测范围"
+    ? tr("滚动 4 小时窗口超出预测范围", "The rolling 4-hour window exceeds the forecast range")
     : intervalText(cumulativeInterval(forecast, "four_hours"));
   document.querySelector("#interval-24h").textContent =
     intervalText(cumulativeInterval(forecast, "twenty_four_hours"));
   document.querySelector("#interval-72h").textContent =
-    "未来 72 小时内发生重置的可能性";
+    tr("未来 72 小时内发生重置的可能性", "Probability of a reset within the next 72 hours");
   document.querySelector("#interval-7d").textContent =
     intervalText(cumulativeInterval(forecast, "horizon"));
-  document.querySelector("#data-quality").textContent = "实时来源检查中";
+  document.querySelector("#data-quality").textContent = tr("实时来源检查中", "Checking live sources");
   const outcomeSampleCount = forecast.data.data_quality?.outcome_sample_count;
   const sampleSufficiency = forecast.data.data_quality?.sample_sufficiency;
   document.querySelector("#coverage").textContent =
     [
-      Number.isInteger(outcomeSampleCount) ? `历史事件：${outcomeSampleCount} 个` : null,
-      Number.isFinite(sampleSufficiency)
-        ? `样本充分度：${percent(sampleSufficiency, 0)}`
+      Number.isInteger(outcomeSampleCount)
+        ? tr(`历史事件：${outcomeSampleCount} 个`, `Historical events: ${outcomeSampleCount}`)
         : null,
-      "负标签按审计延迟成熟",
+      Number.isFinite(sampleSufficiency)
+        ? tr(`样本充分度：${percent(sampleSufficiency, 0)}`, `Sample sufficiency: ${percent(sampleSufficiency, 0)}`)
+        : null,
+      tr("负标签按审计延迟成熟", "Negative labels mature after an audit delay"),
     ].filter(Boolean).join(" · ");
   document.querySelector("#forecast-window").textContent =
     `${formatTime(slots[0].start)} → ${formatTime(slots.at(-1).end)}`;
@@ -1099,18 +1154,27 @@ function renderForecast(forecast) {
   document.querySelector("#authority-window").textContent =
     conditioning?.applied
       ? [
-          `权威时间条件：${phaseLabels[conditioning.phase] ?? conditioning.phase}`,
-          `${percent(conditioning.prior_reliability, 0)} 版本化先验`,
+          tr(
+            `权威时间条件：${phaseLabels[conditioning.phase] ?? conditioning.phase}`,
+            `Authority condition: ${phaseLabels[conditioning.phase] ?? conditioning.phase}`,
+          ),
+          tr(
+            `${percent(conditioning.prior_reliability, 0)} 版本化先验`,
+            `${percent(conditioning.prior_reliability, 0)} versioned prior`,
+          ),
           conditioning.asserted_time_range
             ? `${formatCompactTime(conditioning.asserted_time_range.start)} → ${formatCompactTime(conditioning.asserted_time_range.end)}`
             : null,
         ].filter(Boolean).join(" · ")
-      : "权威时间条件：当前未触发";
+      : tr("权威时间条件：当前未触发", "Authority condition: not currently triggered");
   const recurrenceAnchor = forecast.data.recurrence_anchor;
   document.querySelector("#recurrence-anchor").textContent =
     recurrenceAnchor?.occurred_time_range
-      ? `重置周期锚点：${formatCompactTime(recurrenceAnchor.occurred_time_range.start)} 已确认重置`
-      : "重置周期锚点：暂无已确认事件";
+      ? tr(
+        `重置周期锚点：${formatCompactTime(recurrenceAnchor.occurred_time_range.start)} 已确认重置`,
+        `Reset-cycle anchor: confirmed reset at ${formatCompactTime(recurrenceAnchor.occurred_time_range.start)}`,
+      )
+      : tr("重置周期锚点：暂无已确认事件", "Reset-cycle anchor: no confirmed event yet");
   document.querySelector("#heatmap-legend").hidden = false;
   document.querySelector("#heat-detail").hidden = false;
   renderHeatmap(slots);
@@ -1127,46 +1191,61 @@ function renderForecastError(message, readiness = {}) {
     "#probability-7d",
   ]) {
     document.querySelector(selector).textContent = preparing
-      ? fitted ? "生成中" : "训练中"
+      ? fitted ? tr("生成中", "Generating") : tr("训练中", "Training")
       : "—";
   }
   document.querySelector("#interval-4h").textContent =
-    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
+    preparing
+      ? tr("首版试用预测生成后显示", "Shown after the first trial forecast is generated")
+      : tr("当前预测不可用", "Current forecast unavailable");
   document.querySelector("#interval-24h").textContent =
-    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
+    preparing
+      ? tr("首版试用预测生成后显示", "Shown after the first trial forecast is generated")
+      : tr("当前预测不可用", "Current forecast unavailable");
   document.querySelector("#interval-72h").textContent =
-    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
+    preparing
+      ? tr("首版试用预测生成后显示", "Shown after the first trial forecast is generated")
+      : tr("当前预测不可用", "Current forecast unavailable");
   document.querySelector("#interval-7d").textContent =
-    preparing ? "首版试用预测生成后显示" : "当前预测不可用";
+    preparing
+      ? tr("首版试用预测生成后显示", "Shown after the first trial forecast is generated")
+      : tr("当前预测不可用", "Current forecast unavailable");
   document.querySelector("#data-quality-label").textContent =
-    preparing ? "模型状态" : "数据状态";
+    preparing ? tr("模型状态", "Model status") : tr("数据状态", "Data status");
   document.querySelector("#data-quality").textContent =
-    preparing ? fitted ? "已完成拟合" : "更新中" : "—";
+    preparing ? fitted ? tr("已完成拟合", "Fitted") : tr("更新中", "Updating") : "—";
   const coverageDays = Number.isFinite(readiness.outcome_coverage?.hours)
     ? Math.round(readiness.outcome_coverage.hours / 24)
     : null;
   const confirmedOutcomes = readiness.canonical_records?.confirmed_outcomes;
   document.querySelector("#coverage").textContent = preparing
     ? [
-        Number.isInteger(coverageDays) ? `${coverageDays} 天历史覆盖` : null,
-        Number.isInteger(confirmedOutcomes) ? `${confirmedOutcomes} 次确认重置` : null,
-      ].filter(Boolean).join(" · ") || "正在积累真实评估数据"
-    : "数据覆盖暂不可用";
+        Number.isInteger(coverageDays)
+          ? tr(`${coverageDays} 天历史覆盖`, `${coverageDays} days of historical coverage`)
+          : null,
+        Number.isInteger(confirmedOutcomes)
+          ? tr(`${confirmedOutcomes} 次确认重置`, `${confirmedOutcomes} confirmed resets`)
+          : null,
+      ].filter(Boolean).join(" · ") || tr("正在积累真实评估数据", "Accumulating real evaluation data")
+    : tr("数据覆盖暂不可用", "Coverage is not available yet");
   document.querySelector("#forecast-window").textContent = preparing
-    ? "正在生成试用预测"
-    : "当前预测区间不可用";
+    ? tr("正在生成试用预测", "Generating trial forecast")
+    : tr("当前预测区间不可用", "Current forecast window unavailable");
   document.querySelector("#authority-window").textContent =
-    "权威时间条件：等待预测";
+    tr("权威时间条件：等待预测", "Authority condition: waiting for forecast");
   document.querySelector("#recurrence-anchor").textContent =
-    "重置周期锚点：等待预测";
+    tr("重置周期锚点：等待预测", "Reset-cycle anchor: waiting for forecast");
   document.querySelector("#heatmap-legend").hidden = true;
   document.querySelector("#heat-detail").hidden = true;
   document.querySelector("#heatmap").innerHTML =
-    `<div class="empty-state${preparing ? "" : " error-state"}"><strong>${preparing ? "首版试用预测生成后显示每小时概率" : "预测尚未就绪"}</strong><p>${escapeHtml(message)}</p></div>`;
+    `<div class="empty-state${preparing ? "" : " error-state"}"><strong>${preparing ? tr("首版试用预测生成后显示每小时概率", "Hourly probabilities appear after the first trial forecast") : tr("预测尚未就绪", "Forecast is not ready")}</strong><p>${escapeHtml(message)}</p></div>`;
   document.querySelector("#heat-detail").innerHTML =
     preparing
-      ? `<strong>—</strong><div><span>首版试用预测生成后显示每小时概率</span><time>${fitted ? "生成中" : "训练中"}</time></div>`
-      : "<strong>—</strong><div><span>当前预测不可用</span><time>等待新预测</time></div>";
+      ? `<strong>—</strong><div><span>${tr("首版试用预测生成后显示每小时概率", "Hourly probabilities appear after the first trial forecast")}</span><time>${fitted ? tr("生成中", "Generating") : tr("训练中", "Training")}</time></div>`
+      : tr(
+        "<strong>—</strong><div><span>当前预测不可用</span><time>等待新预测</time></div>",
+        "<strong>—</strong><div><span>Current forecast unavailable</span><time>Waiting for a new forecast</time></div>",
+      );
 }
 
 function renderPublicationWarning(forecastResult, readinessResult) {
@@ -1179,7 +1258,10 @@ function renderPublicationWarning(forecastResult, readinessResult) {
   if (provisional) {
     target.hidden = false;
     target.classList.remove("synthetic");
-    target.textContent = "试用模型：当前概率已开放试用，严格验证仍在积累中。";
+    target.textContent = tr(
+      "试用模型：当前概率已开放试用，严格验证仍在积累中。",
+      "Trial model: probabilities are available while strict validation continues to accumulate.",
+    );
     return;
   }
   if (
@@ -1191,12 +1273,12 @@ function renderPublicationWarning(forecastResult, readinessResult) {
     return;
   }
   const primaryBlocker = primaryPublicationBlocker(blockers);
-  const label = publicationBlockerLabels[primaryBlocker] ?? "数据仍在准备中";
+  const label = publicationBlockerLabels[primaryBlocker] ?? tr("数据仍在准备中", "Data is still being prepared");
   target.hidden = false;
   target.classList.toggle("synthetic", syntheticDemo);
   target.textContent = syntheticDemo
-    ? "合成数据演示，仅用于查看页面和模型流程。"
-    : `预测尚未达到发布条件：${label}。`;
+    ? tr("合成数据演示，仅用于查看页面和模型流程。", "Synthetic data demo for viewing the page and model flow only.")
+    : tr(`预测尚未达到发布条件：${label}。`, `The forecast has not met publication requirements: ${label}.`);
 }
 
 function renderDataStatus(forecast, health, readiness) {
@@ -1214,16 +1296,20 @@ function renderDataStatus(forecast, health, readiness) {
     : readiness.canonical_records?.confirmed_outcomes;
   const sampleSufficiency = quality.sample_sufficiency;
   document.querySelector("#data-quality-label").textContent =
-    isProvisionalServing(forecast, readiness) ? "数据状态 · 试用模型" : "数据状态";
+    isProvisionalServing(forecast, readiness)
+      ? tr("数据状态 · 试用模型", "Data status · Trial model")
+      : tr("数据状态", "Data status");
   document.querySelector("#data-quality").textContent = sourcesFresh
-    ? "实时来源正常"
-    : "实时来源待更新";
+    ? tr("实时来源正常", "Live sources are fresh")
+    : tr("实时来源待更新", "Live sources need an update");
   document.querySelector("#coverage").textContent = [
-    Number.isInteger(outcomeSampleCount) ? `历史事件：${outcomeSampleCount} 个` : null,
-    Number.isFinite(sampleSufficiency)
-      ? `样本充分度：${percent(sampleSufficiency, 0)}`
+    Number.isInteger(outcomeSampleCount)
+      ? tr(`历史事件：${outcomeSampleCount} 个`, `Historical events: ${outcomeSampleCount}`)
       : null,
-    "负标签按审计延迟成熟",
+    Number.isFinite(sampleSufficiency)
+      ? tr(`样本充分度：${percent(sampleSufficiency, 0)}`, `Sample sufficiency: ${percent(sampleSufficiency, 0)}`)
+      : null,
+    tr("负标签按审计延迟成熟", "Negative labels mature after an audit delay"),
   ].filter(Boolean).join(" · ");
 }
 
@@ -1253,24 +1339,30 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
     ].includes(blocker)
   );
   if (sourceFreshnessBlocked) {
-    setStatus("error", "核心来源异常 · 预测已暂停");
+    setStatus("error", tr("核心来源异常 · 预测已暂停", "Core source issue · Forecast paused"));
   } else if (provisional) {
-    setStatus("warning", "试用模型 · 严格验证积累中");
+    setStatus("warning", tr("试用模型 · 严格验证积累中", "Trial model · Strict validation accumulating"));
   } else if (coverageWaiting || evaluationWaiting) {
     setStatus(
       "warning",
       coverageWaiting
-        ? `历史覆盖复验中 · 最早 ${formatCompactTime(coverageWaiting.earliest_recheck_at)}`
+        ? tr(
+          `历史覆盖复验中 · 最早 ${formatCompactTime(coverageWaiting.earliest_recheck_at)}`,
+          `Historical coverage is being revalidated · Earliest ${formatCompactTime(coverageWaiting.earliest_recheck_at)}`,
+        )
         : challengerReady(readiness)
-          ? "模型已训练 · 评估中"
-          : "模型评估中",
+          ? tr("模型已训练 · 评估中", "Model trained · Evaluating")
+          : tr("模型评估中", "Evaluating model"),
     );
   } else if (!forecast?.data) {
-    setStatus("error", "预测暂不可用");
+    setStatus("error", tr("预测暂不可用", "Forecast unavailable"));
   } else if (["stale", "invalid"].includes(servingStatus) || health.status === "stale") {
-    setStatus("error", `预测已过期 · 发布于 ${formatCompactTime(forecast.data.issued_at)}`);
+    setStatus("error", tr(
+      `预测已过期 · 发布于 ${formatCompactTime(forecast.data.issued_at)}`,
+      `Forecast expired · Issued ${formatCompactTime(forecast.data.issued_at)}`,
+    ));
   } else if (synthetic) {
-    setStatus("warning", "合成数据演示");
+    setStatus("warning", tr("合成数据演示", "Synthetic data demo"));
   } else if (
     servingStatus === "degraded" ||
     health.status === "degraded" ||
@@ -1280,15 +1372,24 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
     setStatus(
       "warning",
       exactLastSuccess
-        ? `状态降级 · 核心来源更新于 ${formatCompactTime(exactLastSuccess)}`
-        : "状态降级 · 核心来源更新不及时",
+        ? tr(
+          `状态降级 · 核心来源更新于 ${formatCompactTime(exactLastSuccess)}`,
+          `Degraded · Core source updated ${formatCompactTime(exactLastSuccess)}`,
+        )
+        : tr("状态降级 · 核心来源更新不及时", "Degraded · Core source is not fresh"),
     );
   } else {
     setStatus(
       "ok",
       exactLastSuccess
-        ? `核心来源更新于 ${formatCompactTime(exactLastSuccess)}`
-        : `预测生成于 ${formatCompactTime(forecast.data.issued_at)}`,
+        ? tr(
+          `核心来源更新于 ${formatCompactTime(exactLastSuccess)}`,
+          `Core source updated ${formatCompactTime(exactLastSuccess)}`,
+        )
+        : tr(
+          `预测生成于 ${formatCompactTime(forecast.data.issued_at)}`,
+          `Forecast generated ${formatCompactTime(forecast.data.issued_at)}`,
+        ),
     );
   }
   renderDataStatus(forecast, health, readiness);
@@ -1296,12 +1397,12 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
 
 function renderEvidenceResponse(result) {
   if (!result.ok || !result.data) {
-    setListMessage("#core-signal-list", `核心信号加载失败：${result.error}`, "error");
-    setListMessage("#experience-signal-list", `体验问题加载失败：${result.error}`, "error");
-    setListMessage("#competition-signal-list", `竞争动态加载失败：${result.error}`, "error");
-    setListMessage("#pending-signal-list", `待纳入信号加载失败：${result.error}`, "error");
-    setListMessage("#tibo-timeline-list", `Tibo 动态加载失败：${result.error}`, "error");
-    setListMessage("#impact-episode-list", `问题追踪加载失败：${result.error}`, "error");
+    setListMessage("#core-signal-list", tr(`核心信号加载失败：${result.error}`, `Core signals failed to load: ${result.error}`), "error");
+    setListMessage("#experience-signal-list", tr(`体验问题加载失败：${result.error}`, `Experience issues failed to load: ${result.error}`), "error");
+    setListMessage("#competition-signal-list", tr(`竞争动态加载失败：${result.error}`, `Competing releases failed to load: ${result.error}`), "error");
+    setListMessage("#pending-signal-list", tr(`待纳入信号加载失败：${result.error}`, `Pending signals failed to load: ${result.error}`), "error");
+    setListMessage("#tibo-timeline-list", tr(`Tibo 动态加载失败：${result.error}`, `Tibo updates failed to load: ${result.error}`), "error");
+    setListMessage("#impact-episode-list", tr(`问题追踪加载失败：${result.error}`, `Issue tracking failed to load: ${result.error}`), "error");
     return;
   }
   const evidence = result.data;
@@ -1313,11 +1414,14 @@ function renderEvidenceResponse(result) {
     currentItems.filter((item) => item.category === "competition");
   const pending = evidence.pending_next_forecast?.items ?? evidence.post_cutoff?.items ?? [];
   document.querySelector("#evidence-cutoff").textContent =
-    `仅显示信息截止 ${formatCompactTime(evidence.knowledge_cutoff)} 前已知的信号。`;
-  renderEvidence("#core-signal-list", core, "截止时间前暂无新的精确官方核心信号", "core");
-  renderEvidence("#experience-signal-list", experience, "截止时间前暂无新的 Codex 体验问题", "experience");
-  renderEvidence("#competition-signal-list", competition, "截止时间前暂无新的竞争模型发布", "competition");
-  renderEvidence("#pending-signal-list", pending, "当前没有晚于截止时间的新信号", "pending");
+    tr(
+      `仅显示信息截止 ${formatCompactTime(evidence.knowledge_cutoff)} 前已知的信号。`,
+      `Only signals known by the ${formatCompactTime(evidence.knowledge_cutoff)} knowledge cutoff are shown.`,
+    );
+  renderEvidence("#core-signal-list", core, tr("截止时间前暂无新的精确官方核心信号", "No new exact official core signals before the cutoff"), "core");
+  renderEvidence("#experience-signal-list", experience, tr("截止时间前暂无新的 Codex 体验问题", "No new Codex experience issues before the cutoff"), "experience");
+  renderEvidence("#competition-signal-list", competition, tr("截止时间前暂无新的竞争模型发布", "No new competing model releases before the cutoff"), "competition");
+  renderEvidence("#pending-signal-list", pending, tr("当前没有晚于截止时间的新信号", "No new signals after the cutoff"), "pending");
   renderTimeline(evidence.timeline);
   renderImpactEpisodes(evidence.impact_episodes, evidence.impact_tracking);
 }
@@ -1365,7 +1469,12 @@ async function loadForecastSnapshot(reference) {
   const key = predictionRefKey(reference);
   const url = safeSnapshotUrl(reference);
   if (!key || !url) {
-    return { ok: false, status: 0, data: null, error: "当前预测快照地址无效" };
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      error: tr("当前预测快照地址无效", "The current forecast snapshot URL is invalid"),
+    };
   }
   if (cachedForecastKey === key && cachedForecast) {
     return { ok: true, status: 200, data: cachedForecast, error: null };
@@ -1385,7 +1494,7 @@ async function loadForecastSnapshot(reference) {
         ok: false,
         status: result.status,
         data: null,
-        error: "预测快照与当前版本不一致",
+        error: tr("预测快照与当前版本不一致", "The forecast snapshot does not match the current version"),
       };
     }
     cachedForecast = result.data;
@@ -1497,8 +1606,16 @@ async function load() {
   if (loading) return;
   loading = true;
   let retrySoon = false;
-  document.querySelector("#timezone-display").textContent = `时区 · ${displayZone}`;
-  let healthResult = { ok: false, status: 0, data: null, error: "尚未检查状态" };
+  document.querySelector("#timezone-display").textContent = tr(
+    `时区 · ${displayZone}`,
+    `Time zone · ${displayZone}`,
+  );
+  let healthResult = {
+    ok: false,
+    status: 0,
+    data: null,
+    error: tr("尚未检查状态", "Status not checked yet"),
+  };
   try {
     healthResult = await fetchJson("/api/health", { timeoutMs: 15_000 });
     const health = healthResult.data ?? {};
@@ -1523,12 +1640,15 @@ async function load() {
     if (!snapshotResult.ok || !snapshotResult.data) {
       retrySoon = true;
       renderForecastError(
-        `当前预测快照加载失败：${snapshotResult.error}`,
+        tr(
+          `当前预测快照加载失败：${snapshotResult.error}`,
+          `Current forecast snapshot failed to load: ${snapshotResult.error}`,
+        ),
         health,
       );
       renderPublicationWarning(snapshotResult, healthResult);
       renderHealth(snapshotResult, healthResult, healthResult);
-      setStatus("error", "预测快照加载失败");
+      setStatus("error", tr("预测快照加载失败", "Forecast snapshot failed to load"));
       return;
     }
     const forecast = forecastWithServing(snapshotResult.data, health);
@@ -1547,7 +1667,7 @@ async function load() {
     retrySoon = true;
     console.error(error);
     renderForecastError(error.message, healthResult.data ?? {});
-    setStatus("error", "预测渲染失败");
+    setStatus("error", tr("预测渲染失败", "Forecast rendering failed"));
   } finally {
     lastLoadedAt = Date.now();
     loading = false;
@@ -1813,7 +1933,10 @@ function renderNotificationValues() {
   personalizedFeedOpen.removeAttribute("aria-disabled");
   personalizedFeedOpen.setAttribute(
     "aria-label",
-    `打开 ${formatNotificationHorizon(preference.horizon_hours)}、${threshold}% 门槛的个性化 Atom`,
+    tr(
+      `打开 ${formatNotificationHorizon(preference.horizon_hours)}、${threshold}% 门槛的个性化 Atom`,
+      `Open the personalized Atom feed for a ${formatNotificationHorizon(preference.horizon_hours)} window and ${threshold}% threshold`,
+    ),
   );
 }
 
@@ -1824,7 +1947,10 @@ async function refreshPersonalizedFeedBaseline() {
   let timedOut = false;
   notificationFeedBaselineRequest = controller;
   notificationFeedBaselineCursor = null;
-  personalizedFeedStatus.textContent = "正在从当前预测建立订阅基线…";
+  personalizedFeedStatus.textContent = tr(
+    "正在从当前预测建立订阅基线…",
+    "Building a subscription baseline from the current forecast…",
+  );
   renderNotificationValues();
   try {
     const timeout = setTimeout(() => {
@@ -1844,7 +1970,7 @@ async function refreshPersonalizedFeedBaseline() {
       !Number.isSafeInteger(payload.cursor) ||
       payload.cursor < 0
     ) {
-      throw new TypeError("订阅基线响应无效");
+      throw new TypeError(tr("订阅基线响应无效", "The subscription baseline response is invalid"));
     }
     if (
       controller.signal.aborted ||
@@ -1852,8 +1978,10 @@ async function refreshPersonalizedFeedBaseline() {
       !notificationProbabilityTopic.checked
     ) return;
     notificationFeedBaselineCursor = payload.cursor;
-    personalizedFeedStatus.textContent =
-      "链接只会评估建立基线之后的新预测，不会回放过去的提醒。";
+    personalizedFeedStatus.textContent = tr(
+      "链接只会评估建立基线之后的新预测，不会回放过去的提醒。",
+      "The link evaluates only forecasts issued after this baseline and does not replay past alerts.",
+    );
     renderNotificationValues();
   } catch (error) {
     if (
@@ -1864,8 +1992,10 @@ async function refreshPersonalizedFeedBaseline() {
     ) return;
     notificationFeedBaselineCursor = null;
     renderNotificationValues();
-    personalizedFeedStatus.textContent =
-      `暂时无法建立安全基线，个性化 Atom 链接不可用：${timedOut ? "请求超时" : error.message}`;
+    personalizedFeedStatus.textContent = tr(
+      `暂时无法建立安全基线，个性化 Atom 链接不可用：${timedOut ? "请求超时" : error.message}`,
+      `A safe baseline could not be established, so the personalized Atom link is unavailable: ${timedOut ? "request timed out" : error.message}`,
+    );
   } finally {
     if (notificationFeedBaselineRequest === controller) {
       notificationFeedBaselineRequest = null;
@@ -1920,8 +2050,14 @@ function renderCalibrationRange(calibration = null) {
   calibrationAxisUpper.textContent = calibrationAxisPercent(range.upper);
   if (!Number.isFinite(profile?.mean_probability)) {
     calibrationRangeNote.textContent = calibration
-      ? "当前时间窗没有可用的分布档案，图表暂按完整 0%–100% 范围显示。"
-      : "加载分布档案后，图表会保留均值 ±4σ，并从画面中裁掉区间外的离群窗口。";
+      ? tr(
+        "当前时间窗没有可用的分布档案，图表暂按完整 0%–100% 范围显示。",
+        "No distribution profile is available for this window, so the chart temporarily uses the full 0%–100% range.",
+      )
+      : tr(
+        "加载分布档案后，图表会保留均值 ±4σ，并从画面中裁掉区间外的离群窗口。",
+        "After the distribution profile loads, the chart keeps mean ±4σ and clips outlying windows outside that range.",
+      );
     return;
   }
   const clippedBelow = profile.display_range.clipped_below;
@@ -1929,8 +2065,14 @@ function renderCalibrationRange(calibration = null) {
   const clippedTotal = clippedBelow + clippedAbove;
   const rangeText = `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)}`;
   calibrationRangeNote.textContent = clippedTotal > 0
-    ? `显示均值 ±4σ（${rangeText}）；已从图像裁掉 ${clippedTotal} 个区间外离群窗口（低端 ${clippedBelow} / 高端 ${clippedAbove}）。`
-    : `显示均值 ±4σ（${rangeText}）；当前没有区间外离群窗口需要裁掉。`;
+    ? tr(
+      `显示均值 ±4σ（${rangeText}）；已从图像裁掉 ${clippedTotal} 个区间外离群窗口（低端 ${clippedBelow} / 高端 ${clippedAbove}）。`,
+      `Showing mean ±4σ (${rangeText}); ${clippedTotal} outlying windows were clipped from the chart (${clippedBelow} low / ${clippedAbove} high).`,
+    )
+    : tr(
+      `显示均值 ±4σ（${rangeText}）；当前没有区间外离群窗口需要裁掉。`,
+      `Showing mean ±4σ (${rangeText}); no outlying windows currently need clipping.`,
+    );
 }
 
 function clearCalibrationRefreshState() {
@@ -1952,25 +2094,50 @@ function setCalibrationRefreshState(targetHours, phase = "updating", detail = ""
   const displayed = formatNotificationHorizon(displayedHours);
   const target = formatNotificationHorizon(targetHours);
   if (phase === "warming") {
-    calibrationSample.textContent = `仍显示 ${displayed} · ${target} 后台预热中`;
-    calibrationSummary.textContent =
-      "目标时间窗的历史档案仍在后台生成；完成前保留当前图表。";
+    calibrationSample.textContent = tr(
+      `仍显示 ${displayed} · ${target} 后台预热中`,
+      `Still showing ${displayed} · ${target} warming in background`,
+    );
+    calibrationSummary.textContent = tr(
+      "目标时间窗的历史档案仍在后台生成；完成前保留当前图表。",
+      "The target window's historical profile is still being generated; the current chart remains until it is ready.",
+    );
   } else if (phase === "error") {
-    calibrationSample.textContent = `${target} 加载失败 · 仍显示 ${displayed}`;
-    calibrationSummary.textContent =
-      `目标时间窗暂时加载失败${detail ? `：${detail}` : ""}；当前图表未被替换。`;
+    calibrationSample.textContent = tr(
+      `${target} 加载失败 · 仍显示 ${displayed}`,
+      `${target} failed to load · Still showing ${displayed}`,
+    );
+    calibrationSummary.textContent = tr(
+      `目标时间窗暂时加载失败${detail ? `：${detail}` : ""}；当前图表未被替换。`,
+      `The target window temporarily failed to load${detail ? `: ${detail}` : ""}; the current chart was not replaced.`,
+    );
   } else if (displayedHours === targetHours) {
-    calibrationSample.textContent = `仍显示 ${displayed} · 正在刷新`;
-    calibrationSummary.textContent = "正在刷新当前时间窗；旧图会保留到新数据就绪。";
+    calibrationSample.textContent = tr(
+      `仍显示 ${displayed} · 正在刷新`,
+      `Still showing ${displayed} · Refreshing`,
+    );
+    calibrationSummary.textContent = tr(
+      "正在刷新当前时间窗；旧图会保留到新数据就绪。",
+      "Refreshing the current window; the old chart remains until new data is ready.",
+    );
   } else {
-    calibrationSample.textContent = `仍显示 ${displayed} · 正在切换到 ${target}`;
-    calibrationSummary.textContent =
-      "正在读取目标时间窗；旧图仅作暂时参考，新数据就绪后会一次替换。";
+    calibrationSample.textContent = tr(
+      `仍显示 ${displayed} · 正在切换到 ${target}`,
+      `Still showing ${displayed} · Switching to ${target}`,
+    );
+    calibrationSummary.textContent = tr(
+      "正在读取目标时间窗；旧图仅作暂时参考，新数据就绪后会一次替换。",
+      "Loading the target window; the old chart is temporary and will be replaced when new data is ready.",
+    );
   }
   return true;
 }
 
-function setCalibrationState(state, message, sampleText = "等待历史数据") {
+function setCalibrationState(
+  state,
+  message,
+  sampleText = tr("等待历史数据", "Waiting for history"),
+) {
   clearCalibrationRefreshState();
   calibrationPlot.dataset.state = state;
   calibrationState.textContent = message;
@@ -2016,11 +2183,20 @@ function renderCalibrationGraphic(calibration) {
   if (coordinates.length < 2) {
     setCalibrationState(
       "insufficient",
-      "当前时间窗的历史样本不足，无法判断门槛可靠度。",
-      `${calibration.sample_count} 个窗口 · ${calibration.event_count} 次重置`,
+      tr(
+        "当前时间窗的历史样本不足，无法判断门槛可靠度。",
+        "This window has too little history to assess threshold reliability.",
+      ),
+      tr(
+        `${calibration.sample_count} 个窗口 · ${calibration.event_count} 次重置`,
+        `${calibration.sample_count} windows · ${calibration.event_count} resets`,
+      ),
     );
     renderCalibrationRange(calibration);
-    calibrationSummary.textContent = "样本不足，当前不能判断哪个概率门槛更可靠。";
+    calibrationSummary.textContent = tr(
+      "样本不足，当前不能判断哪个概率门槛更可靠。",
+      "There is not enough data to determine which probability threshold is more reliable.",
+    );
     return;
   }
   const line = coordinates
@@ -2036,8 +2212,14 @@ function renderCalibrationGraphic(calibration) {
   calibrationPlot.dataset.state = "ready";
   calibrationState.textContent = "";
   calibrationSample.textContent = calibration.status === "preliminary"
-    ? `初步 · ${calibration.sample_count}/${calibration.min_sample_count} 窗口 · ${calibration.event_count}/${calibration.min_event_count} 次重置`
-    : `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`;
+    ? tr(
+      `初步 · ${calibration.sample_count}/${calibration.min_sample_count} 窗口 · ${calibration.event_count}/${calibration.min_event_count} 次重置`,
+      `Preliminary · ${calibration.sample_count}/${calibration.min_sample_count} windows · ${calibration.event_count}/${calibration.min_event_count} resets`,
+    )
+    : tr(
+      `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`,
+      `${calibration.sample_count} windows / ${calibration.event_count} resets`,
+    );
   showCalibrationPoint((Number(notificationThreshold.value) || 0) / 100);
 }
 
@@ -2057,26 +2239,44 @@ function calibrationCopy(point, threshold) {
       ? pointGate.minimum_windows
       : 20;
     return {
-      detail: `概率 > ${thresholdText} · 样本 ${evaluated}/${minimum}`,
-      summary: "该真实 1% 门槛点尚未通过样本门槛，暂不显示历史命中率。",
+      detail: tr(
+        `概率 > ${thresholdText} · 样本 ${evaluated}/${minimum}`,
+        `Probability > ${thresholdText} · Samples ${evaluated}/${minimum}`,
+      ),
+      summary: tr(
+        "该真实 1% 门槛点尚未通过样本门槛，暂不显示历史命中率。",
+        "This exact 1% threshold point has not passed the sample gate, so historical hit rate is not shown.",
+      ),
     };
   }
   const hitRate = percent(point.confidence_above);
   const samples = Number.isFinite(point.sample_count_above)
-    ? `${point.sample_count_above} 个门槛以上样本`
-    : "样本量未提供";
+    ? tr(
+      `${point.sample_count_above} 个门槛以上样本`,
+      `${point.sample_count_above} samples above threshold`,
+    )
+    : tr("样本量未提供", "Sample count unavailable");
   const prefix = notificationCalibration?.status === "preliminary"
-    ? "初步历史命中率"
-    : "历史命中率";
+    ? tr("初步历史命中率", "Preliminary historical hit rate")
+    : tr("历史命中率", "Historical hit rate");
   const interval = point.confidence_interval;
   const intervalText = interval &&
       Number.isFinite(interval.lower) &&
       Number.isFinite(interval.upper)
-    ? ` · 95% Wilson 区间 ${percent(interval.lower)}–${percent(interval.upper)}`
+    ? tr(
+      ` · 95% Wilson 区间 ${percent(interval.lower)}–${percent(interval.upper)}`,
+      ` · 95% Wilson interval ${percent(interval.lower)}–${percent(interval.upper)}`,
+    )
     : "";
   return {
-    detail: `概率 > ${thresholdText} · ${prefix} ${hitRate}${intervalText}`,
-    summary: `${prefix} ${hitRate}${intervalText}，基于${samples}；仅用于辅助选择门槛。`,
+    detail: tr(
+      `概率 > ${thresholdText} · ${prefix} ${hitRate}${intervalText}`,
+      `Probability > ${thresholdText} · ${prefix} ${hitRate}${intervalText}`,
+    ),
+    summary: tr(
+      `${prefix} ${hitRate}${intervalText}，基于${samples}；仅用于辅助选择门槛。`,
+      `${prefix} ${hitRate}${intervalText}, based on ${samples}; use only as an aid when choosing a threshold.`,
+    ),
   };
 }
 
@@ -2089,8 +2289,14 @@ function showCalibrationThresholdPin(threshold, range, x = null) {
     : x ?? 20 + ((threshold - range.lower) / (range.upper - range.lower)) * 560;
   calibrationThresholdPin.style.left = `${(pinX / 600) * 100}%`;
   calibrationThresholdPin.textContent = outside
-    ? `触发阈值 · ${calibrationAxisPercent(threshold)} · 图外`
-    : `触发阈值 · ${calibrationAxisPercent(threshold)}`;
+    ? tr(
+      `触发阈值 · ${calibrationAxisPercent(threshold)} · 图外`,
+      `Trigger · ${calibrationAxisPercent(threshold)} · Outside chart`,
+    )
+    : tr(
+      `触发阈值 · ${calibrationAxisPercent(threshold)}`,
+      `Trigger · ${calibrationAxisPercent(threshold)}`,
+    );
   calibrationThresholdPin.hidden = false;
   if (outside) {
     calibrationThresholdPin.dataset.outside = "true";
@@ -2132,10 +2338,14 @@ function showCalibrationPoint(threshold) {
     calibrationTooltip.hidden = true;
     showCalibrationThresholdRange(boundaryX, { outside: true });
     showCalibrationThresholdPin(selectedThreshold, range);
-    calibrationSummary.textContent =
+    calibrationSummary.textContent = tr(
       `当前门槛 ${calibrationAxisPercent(selectedThreshold)} 位于图表显示区间 ` +
-      `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)} 之外；` +
-      `通知仍按 ${calibrationAxisPercent(selectedThreshold)} 触发。`;
+        `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)} 之外；` +
+        `通知仍按 ${calibrationAxisPercent(selectedThreshold)} 触发。`,
+      `The current ${calibrationAxisPercent(selectedThreshold)} threshold is outside the chart's ` +
+        `${calibrationAxisPercent(range.lower)}–${calibrationAxisPercent(range.upper)} display range; ` +
+        `notifications still trigger at ${calibrationAxisPercent(selectedThreshold)}.`,
+    );
     return;
   }
   const coordinates = calibrationCoordinates(notificationCalibration);
@@ -2158,8 +2368,11 @@ function showCalibrationPoint(threshold) {
   title.textContent = copy.detail;
   const sample = document.createElement("span");
   sample.textContent = Number.isFinite(point.sample_count_above)
-    ? `${point.sample_count_above} 个门槛以上样本`
-    : "样本量暂不可用";
+    ? tr(
+      `${point.sample_count_above} 个门槛以上样本`,
+      `${point.sample_count_above} samples above threshold`,
+    )
+    : tr("样本量暂不可用", "Sample count temporarily unavailable");
   calibrationTooltip.append(title, sample);
   calibrationTooltip.style.left = `${(x / 600) * 100}%`;
   calibrationTooltip.style.top = `${Math.max(34, (y / 190) * 174)}px`;
@@ -2221,11 +2434,20 @@ function renderNotificationCalibration(calibration) {
   if (calibration.status === "insufficient") {
     setCalibrationState(
       "insufficient",
-      "当前时间窗的历史样本不足，无法判断哪个概率门槛更可靠。",
-      `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`,
+      tr(
+        "当前时间窗的历史样本不足，无法判断哪个概率门槛更可靠。",
+        "This window has too little history to determine which probability threshold is more reliable.",
+      ),
+      tr(
+        `${calibration.sample_count} 窗口 / ${calibration.event_count} 次重置`,
+        `${calibration.sample_count} windows / ${calibration.event_count} resets`,
+      ),
     );
     renderCalibrationRange(calibration);
-    calibrationSummary.textContent = "样本不足，当前不可判断历史命中率。";
+    calibrationSummary.textContent = tr(
+      "样本不足，当前不可判断历史命中率。",
+      "There is not enough data to assess historical hit rate.",
+    );
     return;
   }
   renderCalibrationGraphic(calibration);
@@ -2286,7 +2508,7 @@ function requestNotificationCalibration(hours) {
       notificationCalibrationCache.set(hours, calibration);
       return calibration;
     } catch (error) {
-      if (timedOut) throw new Error("请求超时");
+      if (timedOut) throw new Error(tr("请求超时", "Request timed out"));
       throw error;
     } finally {
       if (notificationCalibrationRequests.get(hours) === request) {
@@ -2310,8 +2532,14 @@ async function loadNotificationCalibration(
   }
   if (!setCalibrationRefreshState(hours)) {
     notificationCalibration = null;
-    setCalibrationState("loading", "正在读取该时间窗的历史预测与重置记录…");
-    calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+    setCalibrationState(
+      "loading",
+      tr("正在读取该时间窗的历史预测与重置记录…", "Loading historical forecasts and reset records for this window…"),
+    );
+    calibrationSummary.textContent = tr(
+      "历史可靠度仅用于辅助选择门槛，不是模型置信度。",
+      "Historical reliability helps choose a threshold; it is not model confidence.",
+    );
   }
   try {
     const calibration = await requestNotificationCalibration(hours);
@@ -2329,10 +2557,13 @@ async function loadNotificationCalibration(
       if (!setCalibrationRefreshState(hours, "warming")) {
         setCalibrationState(
           "loading",
-          "历史可靠度正在后台预热，完成后会自动显示…",
-          "后台预热中",
+          tr("历史可靠度正在后台预热，完成后会自动显示…", "Historical reliability is warming in the background and will appear automatically…"),
+          tr("后台预热中", "Warming in background"),
         );
-        calibrationSummary.textContent = "首次冷启动不会阻塞页面；正在等待后台历史档案。";
+        calibrationSummary.textContent = tr(
+          "首次冷启动不会阻塞页面；正在等待后台历史档案。",
+          "The initial cold start does not block the page; waiting for the background history profile.",
+        );
       }
       notificationCalibrationTimer = setTimeout(() => {
         notificationCalibrationTimer = null;
@@ -2346,10 +2577,16 @@ async function loadNotificationCalibration(
     if (!setCalibrationRefreshState(hours, "error", error.message)) {
       setCalibrationState(
         "error",
-        `历史可靠度暂时加载失败：${error.message}`,
-        "加载失败",
+        tr(
+          `历史可靠度暂时加载失败：${error.message}`,
+          `Historical reliability temporarily failed to load: ${error.message}`,
+        ),
+        tr("加载失败", "Load failed"),
       );
-      calibrationSummary.textContent = "无法读取历史记录，仍可手动设置通知门槛。";
+      calibrationSummary.textContent = tr(
+        "无法读取历史记录，仍可手动设置通知门槛。",
+        "History could not be read, but you can still set a notification threshold manually.",
+      );
     }
     return null;
   }
@@ -2371,10 +2608,13 @@ function scheduleNotificationCalibration({ immediate = false } = {}) {
     setCalibrationState(
       "loading",
       immediate
-        ? "正在读取该时间窗的历史预测与重置记录…"
-        : "选择停稳后加载该时间窗的历史记录…",
+        ? tr("正在读取该时间窗的历史预测与重置记录…", "Loading historical forecasts and reset records for this window…")
+        : tr("选择停稳后加载该时间窗的历史记录…", "History for this window loads after the selection settles…"),
     );
-    calibrationSummary.textContent = "历史可靠度仅用于辅助选择门槛，不是模型置信度。";
+    calibrationSummary.textContent = tr(
+      "历史可靠度仅用于辅助选择门槛，不是模型置信度。",
+      "Historical reliability helps choose a threshold; it is not model confidence.",
+    );
   }
   if (immediate) {
     void loadNotificationCalibration(hours, generation);
@@ -2461,24 +2701,30 @@ function setNotificationBusy(busy) {
 
 async function refreshNotificationControls(message = null) {
   const subscription = await notificationRegistration.pushManager.getSubscription();
-  notificationEnable.textContent = subscription ? "保存通知设置" : "启用通知";
+  notificationEnable.textContent = subscription
+    ? tr("保存通知设置", "Save notification settings")
+    : tr("启用通知", "Enable notifications");
   notificationDisable.hidden = !subscription;
   notificationStatus.textContent = message ?? (subscription
-    ? "此浏览器已订阅通知。"
+    ? tr("此浏览器已订阅通知。", "This browser is subscribed to notifications.")
     : Notification.permission === "denied"
-      ? "浏览器已阻止通知，请在站点设置中重新允许。"
-      : "通知权限只会在点击保存后询问。");
+      ? tr("浏览器已阻止通知，请在站点设置中重新允许。", "The browser blocked notifications. Allow them again in site settings.")
+      : tr("通知权限只会在点击保存后询问。", "Notification permission is requested only after you click save."));
 }
 
 async function enableWebPush() {
   setNotificationBusy(true);
   try {
     const topics = selectedNotificationTopics();
-    if (topics.length === 0) throw new Error("请至少选择一种通知主题。");
+    if (topics.length === 0) {
+      throw new Error(tr("请至少选择一种通知主题。", "Choose at least one notification topic."));
+    }
     const permission = Notification.permission === "granted"
       ? "granted"
       : await Notification.requestPermission();
-    if (permission !== "granted") throw new Error("未获得浏览器通知权限。");
+    if (permission !== "granted") {
+      throw new Error(tr("未获得浏览器通知权限。", "Browser notification permission was not granted."));
+    }
     let subscription = await notificationRegistration.pushManager.getSubscription();
     let created = false;
     if (!subscription) {
@@ -2507,10 +2753,16 @@ async function enableWebPush() {
     }
     saveLocalNotificationPreferences({ topics, preferences });
     await refreshNotificationControls(
-      "通知设置已保存；个性化规则会从现在开始应用。",
+      tr(
+        "通知设置已保存；个性化规则会从现在开始应用。",
+        "Notification settings were saved; the personalized rule applies from now on.",
+      ),
     );
   } catch (error) {
-    notificationStatus.textContent = `通知未启用：${error.message}`;
+    notificationStatus.textContent = tr(
+      `通知未启用：${error.message}`,
+      `Notifications were not enabled: ${error.message}`,
+    );
   } finally {
     setNotificationBusy(false);
   }
@@ -2527,10 +2779,13 @@ async function disableWebPush() {
       });
       await subscription.unsubscribe();
     }
-    notificationStatus.textContent = "此浏览器的通知已关闭。";
+    notificationStatus.textContent = tr("此浏览器的通知已关闭。", "Notifications are off in this browser.");
     await refreshNotificationControls();
   } catch (error) {
-    notificationStatus.textContent = `关闭通知失败：${error.message}`;
+    notificationStatus.textContent = tr(
+      `关闭通知失败：${error.message}`,
+      `Failed to turn off notifications: ${error.message}`,
+    );
   } finally {
     setNotificationBusy(false);
   }
@@ -2544,7 +2799,10 @@ async function initializeWebPushControls() {
   updateProbabilityRule();
   if (!supportsWebPush()) {
     notificationEnable.disabled = true;
-    notificationStatus.textContent = "此浏览器不支持 Web Push；仍可使用下方 Atom 订阅。";
+    notificationStatus.textContent = tr(
+      "此浏览器不支持 Web Push；仍可使用下方 Atom 订阅。",
+      "This browser does not support Web Push; you can still use the Atom feeds below.",
+    );
     return;
   }
   try {
@@ -2553,7 +2811,10 @@ async function initializeWebPushControls() {
     renderNotificationValues();
     if (!config?.enabled || !config.application_server_key) {
       notificationEnable.disabled = true;
-      notificationStatus.textContent = "浏览器通知暂未开放；仍可查看规则或使用 Atom 订阅。";
+      notificationStatus.textContent = tr(
+        "浏览器通知暂未开放；仍可查看规则或使用 Atom 订阅。",
+        "Browser notifications are not available yet; you can still review the rule or use Atom.",
+      );
       return;
     }
     notificationPublicConfig = config;
@@ -2564,7 +2825,10 @@ async function initializeWebPushControls() {
     await refreshNotificationControls();
   } catch (error) {
     notificationEnable.disabled = true;
-    notificationStatus.textContent = "浏览器通知配置暂时不可用；请稍后重试。";
+    notificationStatus.textContent = tr(
+      "浏览器通知配置暂时不可用；请稍后重试。",
+      "Browser notification configuration is temporarily unavailable. Please try again later.",
+    );
     console.warn("Web push is unavailable", error);
   }
 }
@@ -2654,16 +2918,22 @@ calibrationHitArea?.addEventListener("pointercancel", () => {
 });
 personalizedFeedCopy?.addEventListener("click", async () => {
   if (!Number.isSafeInteger(notificationFeedBaselineCursor)) {
-    personalizedFeedStatus.textContent = "尚未建立安全基线，当前没有可复制的链接。";
+    personalizedFeedStatus.textContent = tr(
+      "尚未建立安全基线，当前没有可复制的链接。",
+      "A safe baseline has not been established, so there is no link to copy yet.",
+    );
     return;
   }
   try {
     await navigator.clipboard.writeText(personalizedFeedUrl.value);
-    personalizedFeedStatus.textContent = "个性化订阅链接已复制。";
+    personalizedFeedStatus.textContent = tr("个性化订阅链接已复制。", "Personalized subscription link copied.");
   } catch {
     personalizedFeedUrl.focus();
     personalizedFeedUrl.select();
-    personalizedFeedStatus.textContent = "无法自动复制，链接已选中，请手动复制。";
+    personalizedFeedStatus.textContent = tr(
+      "无法自动复制，链接已选中，请手动复制。",
+      "Automatic copy failed. The link is selected; copy it manually.",
+    );
   }
 });
 notificationEnable?.addEventListener("click", () => void enableWebPush());

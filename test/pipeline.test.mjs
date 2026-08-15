@@ -405,6 +405,13 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     accuracyPageResponse,
     accuracyScriptResponse,
     stylesResponse,
+    englishPageResponse,
+    englishAccuracyPageResponse,
+    localeChoiceResponse,
+    sitemapResponse,
+    robotsResponse,
+    englishManifestResponse,
+    englishAliasResponse,
   ] = await Promise.all([
     fetch(`${base}/api/health`),
     fetch(`${base}/api/forecast/current`),
@@ -416,6 +423,13 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     fetch(`${base}/accuracy`),
     fetch(`${base}/accuracy.js`),
     fetch(`${base}/styles.css`),
+    fetch(`${base}/en`),
+    fetch(`${base}/en/accuracy`),
+    fetch(`${base}/locale-choice.js`),
+    fetch(`${base}/sitemap.xml`),
+    fetch(`${base}/robots.txt`),
+    fetch(`${base}/manifest-en.webmanifest`),
+    fetch(`${base}/en/index.html?source=alias`, { redirect: "manual" }),
   ]);
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json();
@@ -431,6 +445,20 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.equal(accuracyPageResponse.status, 200);
   assert.equal(accuracyScriptResponse.status, 200);
   assert.equal(stylesResponse.status, 200);
+  assert.equal(englishPageResponse.status, 200);
+  assert.equal(englishAccuracyPageResponse.status, 200);
+  assert.equal(localeChoiceResponse.status, 200);
+  assert.equal(sitemapResponse.status, 200);
+  assert.equal(robotsResponse.status, 200);
+  assert.equal(englishManifestResponse.status, 200);
+  assert.equal(englishAliasResponse.status, 308);
+  assert.equal(englishAliasResponse.headers.get("location"), "/en?source=alias");
+  assert.equal(pageResponse.headers.get("content-language"), "zh-CN");
+  assert.equal(accuracyPageResponse.headers.get("content-language"), "zh-CN");
+  assert.equal(englishPageResponse.headers.get("content-language"), "en");
+  assert.equal(englishAccuracyPageResponse.headers.get("content-language"), "en");
+  assert.match(sitemapResponse.headers.get("content-type"), /application\/xml/);
+  assert.match(robotsResponse.headers.get("content-type"), /text\/plain/);
   assert.equal(accuracyScriptResponse.headers.get("cache-control"), "no-cache");
   assert.equal(stylesResponse.headers.get("cache-control"), "no-cache");
   const servedForecast = await forecastResponse.json();
@@ -464,6 +492,37 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   const accuracyPage = await accuracyPageResponse.text();
   const accuracyScript = await accuracyScriptResponse.text();
   const styles = await stylesResponse.text();
+  const englishPage = await englishPageResponse.text();
+  const englishAccuracyPage = await englishAccuracyPageResponse.text();
+  const localeChoiceScript = await localeChoiceResponse.text();
+  const sitemap = await sitemapResponse.text();
+  const robots = await robotsResponse.text();
+  const englishManifest = await englishManifestResponse.json();
+
+  assert.match(page, /<html lang="zh-CN">/);
+  assert.match(page, /<link rel="canonical" href="https:\/\/codexreset\.dreaife\.tokyo\/">/);
+  assert.match(page, /hreflang="en" href="https:\/\/codexreset\.dreaife\.tokyo\/en"/);
+  assert.match(page, /hreflang="x-default" href="https:\/\/codexreset\.dreaife\.tokyo\/en"/);
+  assert.match(accuracyPage, /<link rel="canonical" href="https:\/\/codexreset\.dreaife\.tokyo\/accuracy">/);
+  assert.match(accuracyPage, /hreflang="en" href="https:\/\/codexreset\.dreaife\.tokyo\/en\/accuracy"/);
+  assert.match(englishPage, /<html lang="en">/);
+  assert.match(englishPage, /<link rel="canonical" href="https:\/\/codexreset\.dreaife\.tokyo\/en">/);
+  assert.match(englishPage, /hreflang="zh-Hans" href="https:\/\/codexreset\.dreaife\.tokyo\/"/);
+  assert.match(englishPage, /<h1>7-Day Reset Forecast<\/h1>/);
+  assert.match(englishAccuracyPage, /<link rel="canonical" href="https:\/\/codexreset\.dreaife\.tokyo\/en\/accuracy">/);
+  assert.match(englishAccuracyPage, /<h1>Reset History<\/h1>/);
+  assert.match(englishPage, /data-locale-choice="zh">中文<\/a>/);
+  assert.match(page, /data-locale-choice="en">EN<\/a>/);
+  assert.match(localeChoiceScript, /navigator\.languages/);
+  assert.match(localeChoiceScript, /language\.toLowerCase\(\)\.startsWith\("zh"\)/);
+  assert.doesNotMatch(localeChoiceScript, /(?:window\.)?location\s*=/);
+  assert.deepEqual(englishManifest.lang, "en");
+  assert.equal(englishManifest.start_url, "/en");
+  for (const path of ["/", "/accuracy", "/en", "/en/accuracy"]) {
+    assert.match(sitemap, new RegExp(`<loc>https://codexreset\\.dreaife\\.tokyo${path === "/" ? "/" : path}<\\/loc>`));
+  }
+  assert.match(robots, /Disallow: \/api\//);
+  assert.match(robots, /Sitemap: https:\/\/codexreset\.dreaife\.tokyo\/sitemap\.xml/);
   assert.match(page, /每小时重置概率/);
   assert.match(page, /未来 7 天重置概率/);
   assert.match(page, /未来 168 小时内发生重置的可能性/);
@@ -527,23 +586,23 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(appScript, /实时来源正常/);
   assert.match(appScript, /负标签按审计延迟成熟/);
   assert.doesNotMatch(appScript, /data_quality\?\.score/);
-  assert.match(page, /app\.js\?v=subscription-preferences-6/);
-  assert.match(page, /styles\.css\?v=subscription-preferences-6/);
+  assert.match(page, /app\.js\?v=seo-i18n-1/);
+  assert.match(page, /styles\.css\?v=seo-i18n-1/);
   assert.match(
     page,
     /href="https:\/\/t\.me\/codex_reset_7day_bot"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?>Telegram Bot<\/a>/,
   );
   assert.match(
     appScript,
-    /notification-preferences\.js\?v=subscription-preferences-6/,
+    /notification-preferences\.js\?v=seo-i18n-1/,
   );
   assert.match(
     page,
-    /<header class="site-header">[\s\S]*?<div class="header-brand-group">[\s\S]*?class="brand"[\s\S]*?class="repository-link"[\s\S]*?href="https:\/\/github\.com\/dreaifekks\/codex-reset-forecaster"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?<img class="repository-mark"[\s\S]*?<\/div>\s*<nav aria-label="主导航">[\s\S]*?<\/header>\s*<main class="page-shell">/,
+    /<header class="site-header">[\s\S]*?<div class="header-brand-group">[\s\S]*?class="brand"[\s\S]*?class="repository-link"[\s\S]*?href="https:\/\/github\.com\/dreaifekks\/codex-reset-forecaster"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?<img class="repository-mark"[\s\S]*?<\/div>[\s\S]*?<nav aria-label="主导航">[\s\S]*?<\/header>[\s\S]*?<main class="page-shell">/,
   );
   assert.match(
     accuracyPage,
-    /<header class="site-header">[\s\S]*?<div class="header-brand-group">[\s\S]*?class="brand"[\s\S]*?class="repository-link"[\s\S]*?href="https:\/\/github\.com\/dreaifekks\/codex-reset-forecaster"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?<img class="repository-mark"[\s\S]*?<\/div>\s*<nav aria-label="主导航">[\s\S]*?<\/header>\s*<main class="page-shell">/,
+    /<header class="site-header">[\s\S]*?<div class="header-brand-group">[\s\S]*?class="brand"[\s\S]*?class="repository-link"[\s\S]*?href="https:\/\/github\.com\/dreaifekks\/codex-reset-forecaster"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"[\s\S]*?<img class="repository-mark"[\s\S]*?<\/div>[\s\S]*?<nav aria-label="主导航">[\s\S]*?<\/header>[\s\S]*?<main class="page-shell">/,
   );
   const mainNavigation = page.match(/<nav aria-label="主导航">[\s\S]*?<\/nav>/)?.[0] ?? "";
   const historyNavigation = accuracyPage.match(/<nav aria-label="主导航">[\s\S]*?<\/nav>/)?.[0] ?? "";
@@ -555,7 +614,7 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.doesNotMatch(`${mainHeading}\n${historyHeading}`, /repository-link/);
   assert.doesNotMatch(`${page}\n${accuracyPage}`, /repository-link-label|repository-url/);
   assert.doesNotMatch(`${page}\n${accuracyPage}\n${styles}`, /repository-strip/);
-  assert.match(accuracyPage, /styles\.css\?v=forecast-lazy-2/);
+  assert.match(accuracyPage, /styles\.css\?v=seo-i18n-1/);
   assert.match(styles, /\.header-brand-group\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;/);
   assert.match(styles, /\.repository-link\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
   assert.match(styles, /\.page-shell\s*\{[\s\S]*?padding:\s*44px 24px 40px;/);
@@ -626,9 +685,10 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(accuracyPage, /<h1>历史结果<\/h1>/);
   assert.match(accuracyPage, /只列出已经确认发生的 Codex 重置结果/);
   assert.match(accuracyPage, /id="result-table"/);
-  assert.match(accuracyPage, /accuracy\.js\?v=history-results-2/);
+  assert.match(accuracyPage, /accuracy\.js\?v=seo-i18n-1/);
   assert.match(accuracyPage, /确认发生时间/);
-  assert.match(accuracyPage, /官方确认时间/);
+  assert.match(accuracyPage, /确认时间/);
+  assert.match(accuracyPage, /状态与等级/);
   assert.match(accuracyScript, /\/api\/history\/results/);
   assert.match(accuracyScript, /rel="noopener noreferrer"/);
   assert.match(accuracyScript, /source\?\.published_at/);
@@ -638,7 +698,17 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     `${accuracyPage}\n${accuracyScript}`,
     /历史精度|历史预测精度|历史事件召回率|概率误差|相对基线|校准曲线|高概率误报|策略非事件|提前量中位数|发布评估|评估已失效/,
   );
-  assert.match(pageResponse.headers.get("content-security-policy"), /default-src 'self'/);
+  const contentSecurityPolicy = pageResponse.headers.get("content-security-policy");
+  assert.match(contentSecurityPolicy, /default-src 'self'/);
+  assert.match(
+    contentSecurityPolicy,
+    /script-src[^;]*https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js/,
+  );
+  assert.match(
+    contentSecurityPolicy,
+    /script-src[^;]*https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js\//,
+  );
+  assert.match(contentSecurityPolicy, /connect-src[^;]*'self'/);
 
   const issuedArtifact = await store.readBlob(
     twoWindowEvaluation.provenance.row_sample_ref,

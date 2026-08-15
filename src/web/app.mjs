@@ -56,8 +56,25 @@ const MIME_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
   [".svg", "image/svg+xml"],
+  [".xml", "application/xml; charset=utf-8"],
+  [".txt", "text/plain; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
   [".webmanifest", "application/manifest+json; charset=utf-8"],
+]);
+const STATIC_ROUTE_FILES = new Map([
+  ["/", "index.html"],
+  ["/accuracy", "accuracy.html"],
+  ["/en", "en/index.html"],
+  ["/en/accuracy", "en/accuracy.html"],
+]);
+const CANONICAL_STATIC_REDIRECTS = new Map([
+  ["/index.html", "/"],
+  ["/accuracy/", "/accuracy"],
+  ["/accuracy.html", "/accuracy"],
+  ["/en/", "/en"],
+  ["/en/index.html", "/en"],
+  ["/en/accuracy/", "/en/accuracy"],
+  ["/en/accuracy.html", "/en/accuracy"],
 ]);
 const MAX_WEB_PUSH_REQUEST_BYTES = 16 * 1024;
 const API_COMPUTATION_CACHE_MS = 10_000;
@@ -293,7 +310,7 @@ function ifNoneMatch(header, etag) {
 }
 
 function securityHeaders(response) {
-  response.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' https://vibecafe.ai; connect-src 'self' https://vibecafe.ai; base-uri 'none'; frame-ancestors 'none'");
+  response.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' https://vibecafe.ai https://static.cloudflareinsights.com/beacon.min.js https://static.cloudflareinsights.com/beacon.min.js/; connect-src 'self' https://vibecafe.ai; base-uri 'none'; frame-ancestors 'none'");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
   response.setHeader("x-frame-options", "DENY");
@@ -1018,21 +1035,28 @@ function latestImpactEpisodes(episodes, policy, expectedContractHash) {
 }
 
 async function serveStatic(response, pathname) {
-  const relative = pathname === "/"
-    ? "index.html"
-    : pathname === "/accuracy"
-      ? "accuracy.html"
-      : pathname.replace(/^\//, "");
+  const relative = STATIC_ROUTE_FILES.get(pathname) ?? pathname.replace(/^\//, "");
   const target = path.resolve(PUBLIC_DIR, relative);
   if (!target.startsWith(`${PUBLIC_DIR}${path.sep}`)) return false;
   try {
     const content = await fs.readFile(target);
     const extension = path.extname(target);
-    const mustRevalidate = [".html", ".js", ".css"].includes(extension);
-    response.writeHead(200, {
+    const mustRevalidate = [
+      ".html",
+      ".js",
+      ".css",
+      ".xml",
+      ".txt",
+      ".webmanifest",
+    ].includes(extension);
+    const headers = {
       "content-type": MIME_TYPES.get(extension) ?? "application/octet-stream",
       "cache-control": mustRevalidate ? "no-cache" : "public, max-age=300",
-    });
+    };
+    if (extension === ".html") {
+      headers["content-language"] = relative.startsWith("en/") ? "en" : "zh-CN";
+    }
+    response.writeHead(200, headers);
     response.end(content);
     return true;
   } catch (error) {
@@ -2112,6 +2136,15 @@ export function createRequestHandler({
           post_cutoff: pendingEvidence,
           pending_next_forecast: pendingEvidence,
         });
+        return;
+      }
+      const canonicalStaticPath = CANONICAL_STATIC_REDIRECTS.get(url.pathname);
+      if (canonicalStaticPath) {
+        response.writeHead(308, {
+          location: `${canonicalStaticPath}${url.search}`,
+          "cache-control": "public, max-age=3600",
+        });
+        response.end();
         return;
       }
       if (await serveStatic(response, url.pathname)) return;
