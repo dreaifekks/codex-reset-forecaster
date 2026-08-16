@@ -411,6 +411,8 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     sitemapResponse,
     robotsResponse,
     englishManifestResponse,
+    socialPreviewZhResponse,
+    socialPreviewEnResponse,
     englishAliasResponse,
   ] = await Promise.all([
     fetch(`${base}/api/health`),
@@ -429,6 +431,8 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
     fetch(`${base}/sitemap.xml`),
     fetch(`${base}/robots.txt`),
     fetch(`${base}/manifest-en.webmanifest`),
+    fetch(`${base}/social-preview-zh.png`),
+    fetch(`${base}/social-preview-en.png`),
     fetch(`${base}/en/index.html?source=alias`, { redirect: "manual" }),
   ]);
   assert.equal(healthResponse.status, 200);
@@ -451,6 +455,8 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.equal(sitemapResponse.status, 200);
   assert.equal(robotsResponse.status, 200);
   assert.equal(englishManifestResponse.status, 200);
+  assert.equal(socialPreviewZhResponse.status, 200);
+  assert.equal(socialPreviewEnResponse.status, 200);
   assert.equal(englishAliasResponse.status, 308);
   assert.equal(englishAliasResponse.headers.get("location"), "/en?source=alias");
   assert.equal(pageResponse.headers.get("content-language"), "zh-CN");
@@ -459,6 +465,8 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.equal(englishAccuracyPageResponse.headers.get("content-language"), "en");
   assert.match(sitemapResponse.headers.get("content-type"), /application\/xml/);
   assert.match(robotsResponse.headers.get("content-type"), /text\/plain/);
+  assert.equal(socialPreviewZhResponse.headers.get("content-type"), "image/png");
+  assert.equal(socialPreviewEnResponse.headers.get("content-type"), "image/png");
   assert.equal(accuracyScriptResponse.headers.get("cache-control"), "no-cache");
   assert.equal(stylesResponse.headers.get("cache-control"), "no-cache");
   const servedForecast = await forecastResponse.json();
@@ -498,6 +506,22 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   const sitemap = await sitemapResponse.text();
   const robots = await robotsResponse.text();
   const englishManifest = await englishManifestResponse.json();
+  const socialPreviewZh = Buffer.from(await socialPreviewZhResponse.arrayBuffer());
+  const socialPreviewEn = Buffer.from(await socialPreviewEnResponse.arrayBuffer());
+
+  for (const preview of [socialPreviewZh, socialPreviewEn]) {
+    assert.ok(preview.length > 100_000);
+    assert.deepEqual(
+      [...preview.subarray(0, 8)],
+      [137, 80, 78, 71, 13, 10, 26, 10],
+    );
+    assert.equal(preview.readUInt32BE(16), 1200);
+    assert.equal(preview.readUInt32BE(20), 630);
+    assert.deepEqual(
+      [...preview.subarray(-12)],
+      [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130],
+    );
+  }
 
   assert.match(page, /<html lang="zh-CN">/);
   assert.match(page, /<link rel="canonical" href="https:\/\/codexreset\.dreaife\.tokyo\/">/);
@@ -513,6 +537,94 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(englishAccuracyPage, /<h1>Reset History<\/h1>/);
   assert.match(englishPage, /data-locale-choice="zh">中文<\/a>/);
   assert.match(page, /data-locale-choice="en">EN<\/a>/);
+
+  const publicOrigin = "https://codexreset.dreaife.tokyo";
+  const websiteNodes = [];
+  for (const expected of [
+    {
+      html: page,
+      url: `${publicOrigin}/`,
+      type: "WebPage",
+      language: "zh-CN",
+      name: "Codex 重置预测：未来 7 天额度重置概率",
+      description: "查看未来 168 小时 Codex 付费计划全平台额度重置概率、每小时风险、最新信号与已确认重置记录。",
+      image: `${publicOrigin}/social-preview-zh.png`,
+      imageAlt: "Codex 重置预测的未来 168 小时每小时概率可视化",
+    },
+    {
+      html: accuracyPage,
+      url: `${publicOrigin}/accuracy`,
+      type: "CollectionPage",
+      language: "zh-CN",
+      name: "Codex 已确认重置历史 · Codex 重置预测",
+      description: "查看 Codex 付费计划已经确认发生的额度重置结果、发生时间、确认等级与来源。",
+      image: `${publicOrigin}/social-preview-zh.png`,
+      imageAlt: "Codex 重置预测的未来 168 小时每小时概率可视化",
+    },
+    {
+      html: englishPage,
+      url: `${publicOrigin}/en`,
+      type: "WebPage",
+      language: "en",
+      name: "Codex Reset Forecast: 7-Day Quota Reset Probability",
+      description: "See the probability of a Codex platform-wide quota reset over the next 168 hours, hourly risk, current signals, and confirmed reset history.",
+      image: `${publicOrigin}/social-preview-en.png`,
+      imageAlt: "Codex Reset Forecast 168-hour hourly probability visualization",
+    },
+    {
+      html: englishAccuracyPage,
+      url: `${publicOrigin}/en/accuracy`,
+      type: "CollectionPage",
+      language: "en",
+      name: "Confirmed Codex Reset History · Codex Reset Forecast",
+      description: "See confirmed Codex quota reset outcomes, occurrence times, official confirmation times, and sources.",
+      image: `${publicOrigin}/social-preview-en.png`,
+      imageAlt: "Codex Reset Forecast 168-hour hourly probability visualization",
+    },
+  ]) {
+    const structuredData = [...expected.html.matchAll(
+      /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g,
+    )].map((match) => JSON.parse(match[1]));
+    assert.equal(structuredData.length, 1);
+    assert.equal(structuredData[0]["@context"], "https://schema.org");
+    const nodes = structuredData[0]["@graph"] ?? [structuredData[0]];
+    const pageNode = nodes.find((node) => node["@id"] === `${expected.url}#webpage`);
+    assert.ok(pageNode, `missing structured page node for ${expected.url}`);
+    assert.equal(pageNode["@type"], expected.type);
+    assert.equal(pageNode.url, expected.url);
+    assert.equal(pageNode.name, expected.name);
+    assert.equal(pageNode.description, expected.description);
+    assert.equal(pageNode.inLanguage, expected.language);
+    assert.deepEqual(pageNode.isPartOf, { "@id": `${publicOrigin}/#website` });
+    assert.equal(pageNode.image, expected.image);
+    websiteNodes.push(...nodes.filter((node) => node["@type"] === "WebSite"));
+
+    for (const metadata of [
+      `<meta property="og:image" content="${expected.image}">`,
+      '<meta property="og:image:type" content="image/png">',
+      '<meta property="og:image:width" content="1200">',
+      '<meta property="og:image:height" content="630">',
+      `<meta property="og:image:alt" content="${expected.imageAlt}">`,
+      '<meta name="twitter:card" content="summary_large_image">',
+      `<meta name="twitter:image" content="${expected.image}">`,
+      `<meta name="twitter:image:alt" content="${expected.imageAlt}">`,
+    ]) assert.ok(expected.html.includes(metadata), `missing metadata: ${metadata}`);
+  }
+  assert.equal(websiteNodes.length, 1);
+  assert.deepEqual(websiteNodes[0], {
+    "@type": "WebSite",
+    "@id": `${publicOrigin}/#website`,
+    url: `${publicOrigin}/`,
+    name: "Codex 重置预测",
+    alternateName: [
+      "Codex Reset Forecast",
+      "Codex Reset",
+      "codexreset.dreaife.tokyo",
+    ],
+    description: "查看未来 168 小时 Codex 付费计划全平台额度重置概率、每小时风险、最新信号与已确认重置记录。",
+    inLanguage: ["zh-CN", "en"],
+  });
+
   assert.match(localeChoiceScript, /navigator\.languages/);
   assert.match(localeChoiceScript, /language\.toLowerCase\(\)\.startsWith\("zh"\)/);
   assert.doesNotMatch(localeChoiceScript, /(?:window\.)?location\s*=/);

@@ -943,6 +943,12 @@ and the explicit language switch stores the visitor's choice locally. This keeps
 both language variants crawlable even when a crawler does not send an
 `Accept-Language` header.
 
+The root page declares the single subdomain-level `WebSite` identity. Every
+language route also has static, parseable `WebPage` or `CollectionPage` JSON-LD
+whose URL, language, name, and description match that page's canonical metadata.
+Chinese and English routes use separate 1200-by-630 PNG social previews and
+advertise them through Open Graph plus `summary_large_image` Twitter cards.
+
 For Google Search Console, create a Domain property for `dreaife.tokyo` (or a
 URL-prefix property for `https://codexreset.dreaife.tokyo/`), complete the supplied
 DNS TXT or HTML verification, then submit:
