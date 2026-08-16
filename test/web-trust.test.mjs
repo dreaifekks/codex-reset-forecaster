@@ -501,6 +501,91 @@ async function serverFor(t, store, appConfig, now) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
+function requestThroughProxy(base, {
+  path = "/api/live",
+  method = "GET",
+  headers = {},
+} = {}) {
+  const target = new URL(base);
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path,
+      method,
+      headers,
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+test("public HTTP requests redirect to the configured HTTPS origin", async (t) => {
+  const publicHost = "codexreset.dreaife.tokyo";
+  const base = await serverFor(
+    t,
+    new MemoryStore(),
+    config({
+      runtime: {
+        public_base_url: `https://${publicHost}`,
+        forecast_fresh_age_hours: 1.5,
+        forecast_stale_age_hours: 3,
+      },
+    }),
+    "2026-07-25T10:10:00.000Z",
+  );
+
+  const redirected = await requestThroughProxy(base, {
+    path: "/en/accuracy?ref=gsc%2Fmanual",
+    headers: {
+      host: publicHost,
+      "x-forwarded-proto": "http",
+    },
+  });
+  assert.equal(redirected.statusCode, 308);
+  assert.equal(
+    redirected.headers.location,
+    `https://${publicHost}/en/accuracy?ref=gsc%2Fmanual`,
+  );
+  assert.equal(redirected.headers["cache-control"], "public, max-age=3600");
+
+  const secure = await requestThroughProxy(base, {
+    headers: { host: publicHost, "x-forwarded-proto": "https" },
+  });
+  assert.equal(secure.statusCode, 200);
+
+  const local = await requestThroughProxy(base, {
+    headers: { "x-forwarded-proto": "http" },
+  });
+  assert.equal(local.statusCode, 200);
+
+  const spoofedForwardedHost = await requestThroughProxy(base, {
+    headers: {
+      host: "attacker.example",
+      "x-forwarded-host": publicHost,
+      "x-forwarded-proto": "http",
+    },
+  });
+  assert.equal(spoofedForwardedHost.statusCode, 200);
+
+  const ambiguousProto = await requestThroughProxy(base, {
+    headers: {
+      host: publicHost,
+      "x-forwarded-proto": "http, https",
+    },
+  });
+  assert.equal(ambiguousProto.statusCode, 200);
+
+  const post = await requestThroughProxy(base, {
+    method: "POST",
+    headers: { host: publicHost, "x-forwarded-proto": "http" },
+  });
+  assert.equal(post.statusCode, 308);
+});
+
 test("exact forecast snapshots are immutable while current forecasts remain no-store", async (t) => {
   const appConfig = config();
   const savedPrediction = prediction();

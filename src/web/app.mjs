@@ -320,6 +320,30 @@ function securityHeaders(response) {
   response.setHeader("x-frame-options", "DENY");
 }
 
+function configuredPublicHttpsUrl(config) {
+  const publicBaseUrl = config?.runtime?.public_base_url;
+  if (typeof publicBaseUrl !== "string") return null;
+  try {
+    const url = new URL(publicBaseUrl);
+    return url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function publicHttpsRedirectLocation(request, url, publicHttpsUrl) {
+  if (!publicHttpsUrl) return null;
+  const host = request.headers.host;
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  if (
+    typeof host !== "string" ||
+    host.trim().toLowerCase() !== publicHttpsUrl.host.toLowerCase() ||
+    typeof forwardedProto !== "string" ||
+    forwardedProto.trim().toLowerCase() !== "http"
+  ) return null;
+  return `${publicHttpsUrl.origin}${url.pathname}${url.search}`;
+}
+
 async function latestPrediction(store) {
   return (await store.all("prediction"))
     .sort((left, right) => left.data.issued_at.localeCompare(right.data.issued_at))
@@ -1088,6 +1112,7 @@ export function createRequestHandler({
   ) {
     throw new TypeError("probabilityProfileProvider must expose get(horizonHours)");
   }
+  const publicHttpsUrl = configuredPublicHttpsUrl(config);
   const notifications = publicationLedger ?? (
     typeof store?.allAudit === "function" &&
       typeof store?.appendAudit === "function"
@@ -1279,6 +1304,19 @@ export function createRequestHandler({
     securityHeaders(response);
     try {
       const url = new URL(request.url, "http://localhost");
+      const httpsRedirect = publicHttpsRedirectLocation(
+        request,
+        url,
+        publicHttpsUrl,
+      );
+      if (httpsRedirect) {
+        response.writeHead(308, {
+          location: httpsRedirect,
+          "cache-control": "public, max-age=3600",
+        });
+        response.end();
+        return;
+      }
       if (url.pathname === "/api/live") {
         if (!["GET", "HEAD"].includes(request.method)) {
           sendJson(response, 405, { error: "method_not_allowed" });

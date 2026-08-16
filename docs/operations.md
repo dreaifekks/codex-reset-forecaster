@@ -961,6 +961,22 @@ curl https://codexreset.dreaife.tokyo/robots.txt
 curl https://codexreset.dreaife.tokyo/sitemap.xml
 ```
 
+The canonical public host permanently redirects HTTP to the same HTTPS path and
+query. The origin applies this only when the request `Host` exactly matches the
+configured HTTPS `runtime.public_base_url` and the trusted proxy reports the
+single protocol value `X-Forwarded-Proto: http`; loopback and container health
+checks therefore remain plain HTTP. Verify both sides after deployment:
+
+```bash
+curl -sS -D - -o /dev/null \
+  'http://codexreset.dreaife.tokyo/en/accuracy?ref=gsc%2Fmanual'
+# HTTP/1.1 308 Permanent Redirect
+# location: https://codexreset.dreaife.tokyo/en/accuracy?ref=gsc%2Fmanual
+
+curl -fsS http://127.0.0.1:8799/api/live
+# {"status":"ok"}
+```
+
 ## Docker
 
 ```bash
