@@ -521,16 +521,20 @@ record, uses a strong ETag, and is safe for long-lived immutable HTTP caching.
 Unknown or older refs return `404` without scanning prediction history. The
 `/api/forecast/current` alias and `/api/health` remain `no-store` because serving
 eligibility, source freshness, and runtime status can change while a prediction
-record stays unchanged. A cached snapshot is never enough to override a current
-fail-closed health result.
+record stays unchanged. `display_available`, `display_snapshot_status`, and
+`display_snapshot_materialized_at` separately report whether an exact last-good
+display record remains readable. A fail-closed health result never becomes a
+fresh/publication-ready claim, but the browser may still load that immutable
+record and visibly label it stale, blocked, or updating.
 
-On process start, the service rebuilds or verifies the serving projection before
-starting the configured run-on-start pipeline. While that one-time warmup is in
-flight and no prior valid projection exists, `/api/health` returns a fast
-`503` with `status: "warming"` instead of holding the request open behind a large
-JSONL scan. The page retries this state after 30 seconds. Once the projection is
-ready, the ordinary 10-minute scheduler begins and refreshes it after every final
-success or failure state.
+On process start, the HTTP thread immediately seeds its in-memory pointer from the
+persisted last-good projection. The configured run-on-start pipeline and all
+canonical traversal execute in a dedicated worker isolate. While a first-ever
+projection is being built and no prior valid projection exists, `/api/health`
+returns a fast `503` with `status: "warming"` instead of holding the request open
+behind the worker. The page retries this state after 30 seconds. A successful
+pipeline atomically publishes a complete replacement; a failed run leaves the old
+projection readable and exposes the failure only through dynamic runtime health.
 
 `GET /api/readiness` makes the split machine-readable. An eligible bootstrap reports
 `serving_ready: true` and `serving_stage: "provisional"` while
@@ -591,11 +595,13 @@ rebuildable current view. Provider cursors, evaluations, runtime status, source
 payload blobs, and champion/challenger artifacts live under the same configured
 data root. Back up the whole root together.
 
-One configured data root has exactly one writer process. Do not run a manual
-pipeline command against the live server's data directory, and do not overlap two
-containers during a rollout; request concurrency inside one process is serialized,
-but the JSONL store intentionally has no cross-process writer lock. Read-only
-backup and inspection remain safe.
+One configured data root has exactly one writer process. Within that process,
+canonical/provider/model writes are confined to the serialized pipeline worker;
+the HTTP isolate consumes its published projection and writes only disjoint
+delivery/operations state. Do not run a manual pipeline command against the live
+server's data directory, and do not overlap two containers during a rollout; the
+JSONL store intentionally has no cross-process writer lock. Read-only backup and
+inspection remain safe.
 
 `feature_snapshot.jsonl` remains canonical. A rebuildable exact-reference sidecar
 under `data/indexes` records byte offsets for deterministic existence checks and
@@ -606,11 +612,14 @@ recovers only the unindexed canonical tail, and a missing or invalid sidecar is
 rebuilt from the JSONL source of truth.
 
 `data/state/serving-snapshot.json` is likewise a rebuildable serving projection.
-It atomically binds one exact prediction to the structural readiness/evaluation
-result completed for the same runtime watermark. Request-time code rechecks the
-dynamic clock, provider freshness, and runtime status instead of rerunning the
-full structural audit for every browser request. A completed scheduler run
-refreshes the projection after final runtime state is written.
+Version 3 atomically binds one exact prediction to the structural
+readiness/evaluation result, confirmed-history rows, evaluation event views, and
+forecast-aligned evidence completed for the same runtime watermark. The worker
+builds and persists it only after final runtime state is written, then hands the
+complete object to the HTTP thread. Request-time code rechecks only the dynamic
+clock, small provider freshness states, and runtime status. If the watermark has
+advanced but replacement is unfinished, the HTTP thread serves the prior object as
+`last_good`; it never materializes or scans canonical data itself.
 
 `/accuracy` is intentionally a confirmed-history page despite its retained legacy
 path. It calls `/api/history/results`, lists the latest eligible confirmed outcome
@@ -621,13 +630,14 @@ continue to govern promotion and validated publication. Those scores use only th
 immutable hourly forecasts that users could actually have seen; evidence modes are
 never labeled as one another.
 
-The history projection remains on the append-only JSONL store; it does not require
-a separate SQL database. The endpoint loads outcome and signal types only when
-requested, resolves raw observations by exact verification refs, and shares one
-30-second derived result across concurrent requests. HTML, JavaScript, and CSS are
-served with revalidation so a deployment cannot combine new markup with an older
-cached script. The history browser request also fails visibly after 15 seconds
-instead of leaving the initial loading row indefinitely.
+The history projection remains derived from the append-only JSONL store; it does
+not require a separate SQL database. The pipeline worker resolves outcomes and raw
+observations while building the last-good read model. `/api/history/results`
+returns that bounded in-memory projection and never starts a canonical scan on
+behalf of a browser. HTML, JavaScript, and CSS are served with revalidation so a
+deployment cannot combine new markup with an older cached script. A first-ever
+read model still fails visibly after 15 seconds instead of leaving the initial
+loading row indefinitely.
 
 ## Publication and notification operation
 

@@ -4,8 +4,16 @@ import http from "node:http";
 import { loadConfig } from "./core/config.mjs";
 import { DEMO_CONFIG_OVERRIDES } from "./demo/config.mjs";
 import { JsonlStore } from "./store/jsonl-store.mjs";
-import { createRequestHandler } from "./web/app.mjs";
+import {
+  SERVING_SNAPSHOT_SCHEMA_VERSION,
+  SERVING_SNAPSHOT_STATE_KEY,
+  createRequestHandler,
+} from "./web/app.mjs";
 import { startScheduler } from "./runtime/scheduler.mjs";
+import { createPipelineWorker } from "./runtime/pipeline-worker.mjs";
+import {
+  createServingSnapshotProvider,
+} from "./runtime/serving-snapshot-provider.mjs";
 import {
   completedRunOwnsServingSnapshot,
 } from "./runtime/startup-projection.mjs";
@@ -28,6 +36,7 @@ const config = await loadConfig({
 });
 const store = await new JsonlStore(config.runtime.data_dir).init();
 let probabilityProfileSeed = null;
+let servingSnapshotSeed = null;
 try {
   probabilityProfileSeed = await store.readState(
     PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
@@ -38,6 +47,23 @@ try {
     `Probability profile snapshot seed failed: ${error.stack ?? error.message}\n`,
   );
 }
+try {
+  servingSnapshotSeed = await store.readState(
+    SERVING_SNAPSHOT_STATE_KEY,
+    null,
+  );
+} catch (error) {
+  process.stderr.write(
+    `Serving snapshot seed failed: ${error.stack ?? error.message}\n`,
+  );
+}
+const servingSnapshotProvider = createServingSnapshotProvider(
+  servingSnapshotSeed,
+);
+const pipelineWorker = createPipelineWorker({
+  dataDir: config.runtime.data_dir,
+  config,
+});
 const operationsRuntime = await createOperationsRuntime({ store });
 const publicationLedger = createPublicationLedger(store);
 const publicationProjector = createPublicationProjector({
@@ -79,6 +105,7 @@ const requestHandler = createRequestHandler({
   trafficMonitor: operationsRuntime.monitor,
   operationsService: operationsRuntime,
   probabilityProfileProvider,
+  servingSnapshotProvider,
 });
 const server = http.createServer(requestHandler);
 let scheduler = null;
@@ -95,13 +122,17 @@ function refreshProbabilityProfiles({ force = false, reason }) {
 
 async function initializeRuntime() {
   refreshProbabilityProfiles({ reason: "startup warmup" });
-  let snapshot = null;
-  try {
-    snapshot = await requestHandler.refreshServingSnapshot(new Date());
-  } catch (error) {
-    process.stderr.write(
-      `Serving snapshot warmup failed: ${error.stack ?? error.message}\n`,
-    );
+  let snapshot = servingSnapshotProvider.get();
+  if (snapshot?.schema_version !== SERVING_SNAPSHOT_SCHEMA_VERSION) {
+    try {
+      snapshot = servingSnapshotProvider.publish(
+        await pipelineWorker.materializeServingSnapshot(new Date()),
+      );
+    } catch (error) {
+      process.stderr.write(
+        `Serving snapshot warmup failed: ${error.stack ?? error.message}\n`,
+      );
+    }
   }
   try {
     const runtimeState = await store.readState("runtime", {});
@@ -126,32 +157,45 @@ async function initializeRuntime() {
   if (shuttingDown) return;
   operationsRuntime.start();
   webPushRuntime.start();
-  if (!config.runtime.scheduler_enabled) return;
+  if (!config.runtime.scheduler_enabled) {
+    try {
+      servingSnapshotProvider.publish(
+        await pipelineWorker.materializeServingSnapshot(new Date()),
+      );
+    } catch (error) {
+      process.stderr.write(
+        `Serving snapshot warmup failed: ${error.stack ?? error.message}\n`,
+      );
+    }
+    return;
+  }
   scheduler = startScheduler({
     store,
     config,
+    run: (_store, _config, options) => pipelineWorker.run({
+      collect: options.collect,
+      retrain: options.retrain,
+    }),
     afterState: async ({ finished_at: finishedAt, status }) => {
       const finished = new Date(finishedAt);
-      if (status === "success") {
-        refreshProbabilityProfiles({
-          force: true,
-          reason: "post-pipeline refresh",
-        });
-      }
-      const currentSnapshot = await requestHandler.refreshServingSnapshot(finished);
-      const publication = status === "success"
-        ? await publicationProjector.project({
-            snapshot: currentSnapshot,
-            emittedAt: finished,
-            allowInitialize: true,
-          })
-        : { events: [], reason: "pipeline_not_successful" };
-      const forecastInput = status === "success"
-        ? await forecastInputProjector.project({
-            snapshot: currentSnapshot,
-            emittedAt: finished,
-          })
-        : { inserted: false, reason: "pipeline_not_successful" };
+      if (status !== "success") return;
+      const currentSnapshot = await pipelineWorker.materializeServingSnapshot(
+        finished,
+      );
+      servingSnapshotProvider.publish(currentSnapshot);
+      refreshProbabilityProfiles({
+        force: true,
+        reason: "post-pipeline refresh",
+      });
+      const publication = await publicationProjector.project({
+        snapshot: currentSnapshot,
+        emittedAt: finished,
+        allowInitialize: true,
+      });
+      const forecastInput = await forecastInputProjector.project({
+        snapshot: currentSnapshot,
+        emittedAt: finished,
+      });
       if (publication.events.length > 0 || forecastInput.inserted) {
         void webPushRuntime.dispatchNow();
       }
@@ -181,10 +225,12 @@ function shutdown(signal) {
     serverClosed,
     initializationPromise,
   ]).then(() => operationsRuntime.stop());
+  const pipelineWorkerStop = Promise.resolve(scheduler?.waitForIdle?.())
+    .then(() => pipelineWorker.stop());
   shutdownPromise = Promise.allSettled([
     serverClosed,
     initializationPromise,
-    scheduler?.waitForIdle?.(),
+    pipelineWorkerStop,
     webPushRuntime.waitForIdle?.(),
     probabilityProfileStop,
     operationsStop,

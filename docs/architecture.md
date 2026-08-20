@@ -412,6 +412,23 @@ exact selected horizon is ready, avoiding a blank loading transition. Historical
 two-standard-deviation UI suggestion are derived read-model metadata only; they do
 not alter forecasts, labels, or subscriber state.
 
+The public website is also isolated from canonical traversal. The HTTP event loop
+keeps one in-memory last-good `serving-snapshot/3` read model containing the exact
+prediction, structural readiness/evaluation result, confirmed-history rows,
+evaluation event views, and forecast-aligned evidence view. The ten-minute
+pipeline runs in a dedicated Node worker isolate and is the only execution context
+that collects, scans canonical JSONL, fits/evaluates models, settles forecasts, and
+materializes the next read model. Only after a successful run and complete read
+model build does the main thread atomically replace its in-memory pointer.
+
+Pipeline start, failure, a slow scan, or an unfinished replacement never removes
+the previous read model. Request-time work is limited to static files, the
+in-memory projection, and small mutable provider/runtime state used to recompute
+freshness. Health distinguishes `current` from `last_good`; a stale or otherwise
+non-publishable forecast may still be displayed with its exact warning and
+immutable snapshot reference. No public display route falls back to scanning
+canonical records when the worker or a new read model is unavailable.
+
 Telegram collects the distinct horizons used by current dynamic rules and repeats
 the `horizon_hours` query parameter once per requested point. The HTTP response is
 a sparse `notification-forecast-input-view/1`; it omits the full `probabilities`

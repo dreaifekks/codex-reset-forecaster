@@ -1656,3 +1656,75 @@ test("health and exact-snapshot failures use a bounded retry instead of waiting 
     assert.deepEqual(delays, [30_000], `${scenario} should retry after 30 seconds`);
   }
 });
+
+test("a degraded health response still renders its last-good immutable snapshot", async () => {
+  const calls = [];
+  const slotStart = Date.parse("2026-08-09T11:00:00.000Z");
+  const snapshot = {
+    record_type: "prediction",
+    record_id: "prediction-last-good",
+    revision: 1,
+    data: {
+      issued_at: "2026-08-09T10:10:00.000Z",
+      knowledge_cutoff: "2026-08-09T10:09:00.000Z",
+      slots: Array.from({ length: 168 }, (_, index) => ({
+        start: new Date(slotStart + index * 3_600_000).toISOString(),
+        end: new Date(slotStart + (index + 1) * 3_600_000).toISOString(),
+        hazard: 0.001,
+        first_reset_probability: 0.001,
+        reset_by_end_probability: 1 - 0.999 ** (index + 1),
+        rolling_4h_probability: index < 165 ? 1 - 0.999 ** 4 : null,
+        epistemic_interval_80: null,
+      })),
+      no_reset_probability: 0.999 ** 168,
+      data_quality: {
+        outcome_sample_count: 12,
+        sample_sufficiency: 0.6,
+      },
+    },
+  };
+  const harness = await createHarness(async (url) => {
+    calls.push(url);
+    if (url === "/api/health") {
+      return jsonResponse({
+        status: "stale",
+        display_available: true,
+        display_snapshot_status: "last_good",
+        serving_ready: false,
+        synthetic_only: false,
+        current_prediction_ref: {
+          record_id: snapshot.record_id,
+          revision: snapshot.revision,
+          knowledge_cutoff: snapshot.data.knowledge_cutoff,
+          snapshot_url:
+            `/api/forecast/snapshots/${snapshot.record_id}/${snapshot.revision}`,
+        },
+        forecast: { status: "stale" },
+        provider_freshness: {
+          required_outcome: { status: "fresh" },
+          exact: { status: "fresh" },
+        },
+        publication_ready: false,
+        publication_blockers: ["forecast_stale"],
+      }, { ok: false, status: 503 });
+    }
+    return jsonResponse(snapshot);
+  }, {
+    setTimeoutImpl() {
+      return 1;
+    },
+    clearTimeoutImpl() {},
+  });
+
+  await harness.app.load();
+  assert.deepEqual(calls, [
+    "/api/health",
+    `/api/forecast/snapshots/${snapshot.record_id}/${snapshot.revision}`,
+  ]);
+  assert.equal(harness.app.state().cachedForecastKey, `${snapshot.record_id}@1`);
+  assert.equal(harness.elements.get("#probability-4h").textContent, "0.40%");
+  assert.match(
+    harness.elements.get("#status-announcement").textContent,
+    /预测已过期/,
+  );
+});

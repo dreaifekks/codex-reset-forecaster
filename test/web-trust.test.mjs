@@ -12,6 +12,9 @@ import {
   servingSnapshotConfig,
 } from "../src/web/app.mjs";
 import {
+  createServingSnapshotProvider,
+} from "../src/runtime/serving-snapshot-provider.mjs";
+import {
   OUTCOME_ADJUDICATOR_VERSION,
   OUTCOME_LABEL_POLICY_VERSION,
 } from "../src/core/outcome-contract.mjs";
@@ -642,7 +645,7 @@ test("exact forecast snapshots are immutable while current forecasts remain no-s
   assert.equal(health.synthetic_only, false);
   assert.equal(
     store.states["serving-snapshot"].schema_version,
-    "serving-snapshot/2",
+    "serving-snapshot/3",
   );
   assert.equal(
     store.states["serving-snapshot"].prediction_hash,
@@ -655,6 +658,9 @@ test("exact forecast snapshots are immutable while current forecasts remain no-s
   assert.ok(store.states["serving-snapshot"].runtime_watermark.state_hash);
   assert.ok(store.states["serving-snapshot"].readiness);
   assert.ok(store.states["serving-snapshot"].evaluation_result);
+  assert.ok(Array.isArray(store.states["serving-snapshot"].history_results));
+  assert.ok(store.states["serving-snapshot"].evidence_projection);
+  assert.ok(store.states["serving-snapshot"].evaluation_event_views);
   store.allByRefs = async () => {
     throw new Error("exact lookup should use the serving snapshot for current ref");
   };
@@ -874,6 +880,102 @@ test("health returns warming without waiting for cold snapshot materialization",
   );
   assert.equal(exactResponse.status, 200);
   assert.deepEqual(await exactResponse.json(), savedPrediction);
+});
+
+test("external last-good read model serves every public display route without canonical scans", async (t) => {
+  const savedPrediction = prediction();
+  const appConfig = config({
+    runtime: {
+      forecast_fresh_age_hours: 1.5,
+      forecast_stale_age_hours: 3,
+      scheduler_interval_minutes: 10,
+    },
+  });
+  const store = new MemoryStore({
+    records: { prediction: [savedPrediction] },
+    states: {
+      "x-provider": {
+        last_success_at: "2026-07-25T10:05:00.000Z",
+        last_error: null,
+      },
+      runtime: {
+        last_success_at: "2026-07-25T10:06:00.000Z",
+        last_status: "completed",
+        last_prediction_id: savedPrediction.record_id,
+        last_error: null,
+      },
+    },
+  });
+  const requestNow = new Date("2026-07-25T10:10:00.000Z");
+  const materializer = createRequestHandler({
+    store,
+    config: appConfig,
+    now: () => new Date(requestNow),
+  });
+  const seed = await materializer.refreshServingSnapshot(requestNow);
+  const provider = createServingSnapshotProvider(seed);
+
+  store.states.runtime = {
+    ...store.states.runtime,
+    last_success_at: "2026-07-25T10:11:00.000Z",
+    last_status: "waiting_for_evaluation",
+  };
+  store.all = async () => {
+    throw new Error("public read-model routes must not scan canonical records");
+  };
+  store.allByRefs = async () => {
+    throw new Error("public read-model routes must not resolve canonical refs");
+  };
+
+  const server = http.createServer(createRequestHandler({
+    store,
+    config: appConfig,
+    now: () => new Date(requestNow),
+    servingSnapshotProvider: provider,
+  }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const healthResponse = await fetch(`${base}/api/health`);
+  const health = await healthResponse.json();
+  assert.equal(healthResponse.status, 503);
+  assert.equal(health.display_available, true);
+  assert.equal(health.display_snapshot_status, "last_good");
+  assert.equal(health.current_prediction_ref.record_id, savedPrediction.record_id);
+
+  const [
+    snapshotResponse,
+    currentResponse,
+    readinessResponse,
+    historyResponse,
+    evaluationResponse,
+    evaluationEventsResponse,
+    evidenceResponse,
+  ] =
+    await Promise.all([
+      fetch(`${base}${health.current_prediction_ref.snapshot_url}`),
+      fetch(`${base}/api/forecast/current`),
+      fetch(`${base}/api/readiness`),
+      fetch(`${base}/api/history/results`),
+      fetch(`${base}/api/evaluation/summary`),
+      fetch(`${base}/api/evaluation/events`),
+      fetch(`${base}/api/evidence/recent`),
+    ]);
+  assert.equal(snapshotResponse.status, 200);
+  assert.deepEqual(await snapshotResponse.json(), savedPrediction);
+  assert.ok([200, 503].includes(currentResponse.status));
+  assert.equal(readinessResponse.status, 200);
+  assert.equal(historyResponse.status, 200);
+  assert.ok(Array.isArray((await historyResponse.json()).results));
+  assert.ok([200, 503].includes(evaluationResponse.status));
+  assert.equal(evaluationEventsResponse.status, 200);
+  assert.ok(Array.isArray((await evaluationEventsResponse.json()).events));
+  assert.equal(evidenceResponse.status, 200);
+  assert.equal(
+    (await evidenceResponse.json()).knowledge_cutoff,
+    savedPrediction.data.knowledge_cutoff,
+  );
 });
 
 test("recent evidence is aligned to the forecast cutoff and aggregator summaries never become core", async (t) => {

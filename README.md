@@ -47,6 +47,9 @@ been validated.
   The website and Telegram bot are result UI/read models: they may lazily fetch
   and cache only the needed forecast projections, but cannot write canonical
   records or contribute to training, labels, calibration, or publication triggers.
+  The HTTP event loop serves an in-memory last-good projection only; collection,
+  JSONL traversal, settlement, evaluation, and fitting run in a dedicated worker
+  isolate and atomically replace that projection only after it is complete.
 - Provider adapters only collect and normalize observations. Watchdogs, X feeds,
   official status pages, user-report sources, and other vendors are
   interchangeable providers rather than the core model.
@@ -253,6 +256,13 @@ atomically; only the first chart uses the full loading state. Telegram requests
 sparse forecast-input views for only the distinct horizons used by active dynamic
 rules; without such a rule it reads only the tail cursor and outcome gate. The core
 projection continues to retain the complete 168-point curve.
+
+The same last-good boundary covers the main forecast, health/readiness base,
+confirmed history, evaluation event views, and recent evidence. Pipeline progress
+or failure changes dynamic status but cannot blank those display records or make a
+browser request own a canonical scan. If the last-good forecast is no longer
+eligible for fresh serving, the page still renders its exact immutable snapshot
+with a stale/blocked warning instead of remaining on the loading shell.
 
 Origin request monitoring is a separate operations plane, not a model input. It
 keeps privacy-preserving minute and UTC-day aggregates, shows daily growth to the

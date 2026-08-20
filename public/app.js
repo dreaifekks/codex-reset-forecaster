@@ -1622,10 +1622,12 @@ async function load() {
     const reference = health.current_prediction_ref;
     const forecastCutoff = reference?.knowledge_cutoff ?? health.knowledge_cutoff;
     if (Number.isFinite(Date.parse(forecastCutoff))) latestForecastCutoff = forecastCutoff;
-    const canServe = healthResult.ok &&
-      (health.serving_ready === true || health.synthetic_only === true) &&
-      predictionRefKey(reference);
-    if (!canServe) {
+    const canDisplay = predictionRefKey(reference) && (
+      health.display_available === true ||
+      health.serving_ready === true ||
+      health.synthetic_only === true
+    );
+    if (!canDisplay) {
       retrySoon = true;
       renderForecastError(
         forecastErrorText(healthResult, health),
