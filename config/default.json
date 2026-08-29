@@ -76,6 +76,7 @@
       "enabled": false,
       "freshness_max_age_hours": 2.5,
       "refresh_interval_minutes": 30,
+      "quota_exhaustion_cooldown_minutes": 360,
       "base_url": "http://127.0.0.1:8788",
       "upstream_provider": "grokbuild",
       "token_file": null,

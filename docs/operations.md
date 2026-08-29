@@ -406,6 +406,12 @@ Independent configured queries are requested concurrently and then merged in
 configuration order. One failed query is reported without discarding successful
 query results and is retried at the next scheduler boundary without advancing the
 full-success gate, while an all-query failure still fails the provider run.
+Grok Build HTTP `402` / `grokbuild_usage_balance_exhausted` responses are treated
+as an optional-context skip rather than a provider error. The adapter persists a
+`quota_retry_at` circuit-breaker timestamp and makes no gateway requests during
+the configured `quota_exhaustion_cooldown_minutes` window (six hours by default).
+The last successful collection timestamp is not advanced, so readiness still
+reports truthful source age while the pipeline continues without community search.
 If the Grokbuild path is unavailable, set `X_SEARCH_GATEWAY_PROVIDER=hermes` as a
 rollback; Hermes receives the same summary/context-only treatment. The SocialData
 upstream can return exact text but may bill a full upstream page even for a small

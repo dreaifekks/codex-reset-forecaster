@@ -88,6 +88,9 @@ been validated.
   gate; the exact RSSHub Tibo timeline has a five-minute provider gate. The
   current shared scheduler checks both on 10-minute boundaries, so these gates do
   not imply independent five-minute polling.
+- An exhausted Grok Build usage balance opens a persisted six-hour circuit
+  breaker: optional community searches are skipped without failing the pipeline,
+  while the last successful source timestamp remains unchanged and can age stale.
 - Context collection targets Codex experience issues and recoveries, classified by
   impact and severity, including security/privacy, data-integrity, and
   compatibility failures, plus non-rumor competitor model or coding-agent releases.

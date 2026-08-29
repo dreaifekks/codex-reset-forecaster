@@ -32,6 +32,19 @@ function gatewayResponse(provider) {
   });
 }
 
+function exhaustedGrokbuildResponse() {
+  return new Response(JSON.stringify({
+    ok: false,
+    provider: "grokbuild",
+    error: "grokbuild_usage_balance_exhausted",
+    detail: "Grok Build usage balance exhausted",
+    events: [],
+  }), {
+    status: 402,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -261,6 +274,68 @@ test("gateway preserves configured error order while collecting partial successe
     (await store.readState("x-search-gateway-provider", {})).last_success_at,
     collectedAt.toISOString(),
   );
+});
+
+test("exhausted Grokbuild quota opens a persistent optional-query cooldown", async (t) => {
+  const queries = [
+    { name: "tibo", query: "from:thsottiaux Codex reset" },
+    { name: "community", query: "Codex broken" },
+    { name: "competition", query: "Claude released" },
+  ];
+  const { config, store } = await setup(t, "grokbuild", queries);
+  let collectedAt = new Date("2026-08-29T06:20:00.000Z");
+  let requestCount = 0;
+  let exhausted = true;
+  const provider = new XSearchGatewayProvider({
+    config: config.providers.x_search_gateway,
+    token: "test-gateway-token",
+    fetchFn: async () => {
+      requestCount += 1;
+      return exhausted
+        ? exhaustedGrokbuildResponse()
+        : gatewayResponse("grokbuild");
+    },
+    now: () => collectedAt,
+  });
+
+  const first = await provider.collect(store);
+  assert.equal(requestCount, queries.length);
+  assert.equal(first.fetched, true);
+  assert.equal(first.collected, 0);
+  assert.equal(first.skipped, "upstream_quota_exhausted");
+  assert.deepEqual(first.skipped_queries, queries.map((query) => query.name));
+  assert.equal(first.next_fetch_at, "2026-08-29T12:20:00.000Z");
+  assert.deepEqual(first.health, {
+    ok: true,
+    delay_seconds: 0,
+    error: null,
+    skipped: "upstream_quota_exhausted",
+  });
+  const exhaustedState = await store.readState("x-search-gateway-provider", {});
+  assert.equal(exhaustedState.last_error, null);
+  assert.equal(exhaustedState.last_success_at, null);
+  assert.equal(exhaustedState.last_partial_at, null);
+  assert.equal(exhaustedState.last_failure_at, null);
+  assert.equal(exhaustedState.quota_retry_at, first.next_fetch_at);
+
+  collectedAt = new Date("2026-08-29T06:30:00.000Z");
+  const skipped = await provider.collect(store);
+  assert.equal(requestCount, queries.length, "cooldown must make no gateway requests");
+  assert.equal(skipped.fetched, false);
+  assert.equal(skipped.skipped, "upstream_quota_exhausted");
+  assert.equal(skipped.next_fetch_at, first.next_fetch_at);
+
+  exhausted = false;
+  collectedAt = new Date("2026-08-29T12:20:00.000Z");
+  const recovered = await provider.collect(store);
+  assert.equal(requestCount, queries.length * 2);
+  assert.equal(recovered.skipped, undefined);
+  assert.equal(recovered.health.ok, true);
+  const recoveredState = await store.readState("x-search-gateway-provider", {});
+  assert.equal(recoveredState.last_success_at, collectedAt.toISOString());
+  assert.equal(recoveredState.quota_exhausted_at, null);
+  assert.equal(recoveredState.quota_retry_at, null);
+  assert.deepEqual(recoveredState.skipped_queries, []);
 });
 
 test("gateway topic screening preserves raw false positives but excludes them from current signals", async (t) => {

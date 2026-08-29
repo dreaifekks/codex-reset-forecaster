@@ -241,6 +241,9 @@ function validateXSearchGatewayProvider(config) {
     !Number.isFinite(provider.refresh_interval_minutes) ||
     provider.refresh_interval_minutes <= 0 ||
     provider.refresh_interval_minutes > 1_440 ||
+    !Number.isInteger(provider.quota_exhaustion_cooldown_minutes) ||
+    provider.quota_exhaustion_cooldown_minutes < 1 ||
+    provider.quota_exhaustion_cooldown_minutes > 1_440 ||
     typeof provider.base_url !== "string" ||
     !/^https?:\/\//i.test(provider.base_url) ||
     typeof provider.upstream_provider !== "string" ||

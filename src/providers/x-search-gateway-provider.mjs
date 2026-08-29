@@ -13,11 +13,43 @@ import {
   normalizeXSearchGatewayUpstream,
 } from "./x-search-gateway-semantics.mjs";
 
-const PROVIDER_VERSION = "0.3.1";
+const PROVIDER_VERSION = "0.3.2";
+const MINUTE_MS = 60_000;
+const GROKBUILD_QUOTA_ERROR = "grokbuild_usage_balance_exhausted";
+const QUOTA_EXHAUSTED_ERROR_CODE = "X_SEARCH_GATEWAY_QUOTA_EXHAUSTED";
 
 function validTimestamp(value) {
   if (!value || Number.isNaN(Date.parse(value))) return null;
   return new Date(value).toISOString();
+}
+
+function grokbuildQuotaExhausted(response, payload, upstreamProvider) {
+  if (upstreamProvider !== "grokbuild") return false;
+  if (response.status === 402 || payload?.error === GROKBUILD_QUOTA_ERROR) {
+    return true;
+  }
+  const diagnostic = [
+    payload?.error,
+    payload?.message,
+    payload?.detail,
+    payload?.stderr,
+    payload?.stdout_excerpt,
+    payload?.structuredOutputError,
+  ].filter((value) => typeof value === "string").join(" ").toLowerCase();
+  return diagnostic.includes("grok build usage balance exhausted") ||
+    diagnostic.includes("grokbuild usage balance exhausted") ||
+    (
+      diagnostic.includes("usage balance exhausted") &&
+      (
+        diagnostic.includes("status 402") ||
+        diagnostic.includes("payment required")
+      )
+    );
+}
+
+function quotaCooldownUntil(at, config) {
+  const minutes = Number(config.quota_exhaustion_cooldown_minutes ?? 360);
+  return new Date(at.getTime() + minutes * MINUTE_MS).toISOString();
 }
 
 function sourcePublishedTimestamp(event, sourceStatusId) {
@@ -98,9 +130,13 @@ export class XSearchGatewayProvider {
       throw new Error(`X Search Gateway returned non-JSON status ${response.status}`);
     }
     if (!response.ok || payload.ok !== true) {
-      throw new Error(
+      const error = new Error(
         `X Search Gateway ${response.status}: ${String(payload.error ?? payload.message ?? "search failed").slice(0, 300)}`,
       );
+      if (grokbuildQuotaExhausted(response, payload, this.upstreamProvider)) {
+        error.code = QUOTA_EXHAUSTED_ERROR_CODE;
+      }
+      throw error;
     }
     if (
       normalizeXSearchGatewayUpstream(payload.provider) !==
@@ -204,7 +240,40 @@ export class XSearchGatewayProvider {
       this.config.refresh_interval_minutes ?? 30,
     ) * 60_000;
     const lastSuccessMs = Date.parse(previousState.last_success_at);
+    const quotaRetryAt = validTimestamp(previousState.quota_retry_at);
+    const quotaRetryMs = Date.parse(quotaRetryAt);
     let currentQueryErrors = [];
+    if (
+      this.upstreamProvider === "grokbuild" &&
+      Number.isFinite(quotaRetryMs) &&
+      startedAt.getTime() < quotaRetryMs
+    ) {
+      if (
+        previousState.last_error == null &&
+        previousState.last_partial_at === previousState.quota_exhausted_at &&
+        (previousState.query_errors?.length ?? 0) === 0
+      ) {
+        await store.writeState(stateKey, {
+          ...previousState,
+          last_partial_at: null,
+          last_failure_at: null,
+        });
+      }
+      return {
+        fetched: false,
+        collected: 0,
+        skipped: "upstream_quota_exhausted",
+        upstream_provider: this.upstreamProvider,
+        bootstrap_replay: false,
+        next_fetch_at: quotaRetryAt,
+        health: {
+          ok: true,
+          delay_seconds: 0,
+          error: null,
+          skipped: "upstream_quota_exhausted",
+        },
+      };
+    }
     if (
       !bootstrapReplay &&
       !previousState.last_error &&
@@ -230,9 +299,12 @@ export class XSearchGatewayProvider {
       );
       const payloads = [];
       const queryErrors = [];
+      const skippedQueries = [];
       for (const [index, result] of queryResults.entries()) {
         if (result.status === "fulfilled") {
           payloads.push(result.value);
+        } else if (result.reason?.code === QUOTA_EXHAUSTED_ERROR_CODE) {
+          skippedQueries.push(queries[index].name);
         } else {
           queryErrors.push({
             query: queries[index].name,
@@ -259,6 +331,9 @@ export class XSearchGatewayProvider {
         return [item.provider_item_id, item];
       })).values()];
       const fetchedAt = this.now();
+      const exhaustedRetryAt = skippedQueries.length > 0
+        ? quotaCooldownUntil(fetchedAt, this.config)
+        : null;
       let inserted = 0;
       for (const item of items) {
         const result = await appendRawObservationRevision(store, item, {
@@ -285,24 +360,46 @@ export class XSearchGatewayProvider {
         ...previousState,
         upstream_provider: this.upstreamProvider,
         provider_config_hash: providerConfigHash,
-        last_success_at: queryErrors.length === 0
+        last_success_at:
+          queryErrors.length === 0 && skippedQueries.length === 0
           ? fetchedAt.toISOString()
           : previousState.last_success_at ?? null,
-        last_partial_at: queryErrors.length > 0 ? fetchedAt.toISOString() : null,
+        last_partial_at:
+          payloads.length > 0 &&
+            (queryErrors.length > 0 || skippedQueries.length > 0)
+            ? fetchedAt.toISOString()
+            : null,
         last_failure_at: queryErrors.length > 0 ? fetchedAt.toISOString() : null,
         last_error: partialError,
         query_errors: queryErrors,
+        quota_exhausted_at:
+          skippedQueries.length > 0 ? fetchedAt.toISOString() : null,
+        quota_retry_at: exhaustedRetryAt,
+        last_skip_reason:
+          skippedQueries.length > 0 ? "upstream_quota_exhausted" : null,
+        skipped_queries: skippedQueries,
       });
       return {
+        fetched: true,
         collected: inserted,
         upstream_provider: this.upstreamProvider,
         bootstrap_replay: bootstrapReplay,
         queries: payloads.length,
         query_errors: queryErrors,
+        skipped_queries: skippedQueries,
+        ...(skippedQueries.length > 0
+          ? {
+              skipped: "upstream_quota_exhausted",
+              next_fetch_at: exhaustedRetryAt,
+            }
+          : {}),
         health: {
           ok: queryErrors.length === 0,
           delay_seconds: delaySeconds,
           error: partialError,
+          ...(skippedQueries.length > 0
+            ? { skipped: "upstream_quota_exhausted" }
+            : {}),
         },
       };
     } catch (error) {
@@ -324,6 +421,10 @@ export class XSearchGatewayProvider {
         last_failure_at: failedAt.toISOString(),
         last_error: error.message,
         query_errors: currentQueryErrors,
+        quota_exhausted_at: null,
+        quota_retry_at: null,
+        last_skip_reason: null,
+        skipped_queries: [],
       });
       throw error;
     }
