@@ -211,14 +211,26 @@ test("historical monitor preserves source evidence without treating its date gri
   assert.equal((await provider.collect(store, { force: true })).collected, 0);
 });
 
-test("historical monitor parser rejects gaps and timestamps that do not match X snowflakes", () => {
+test("historical monitor parser quarantines same-day clock drift and rejects cross-day drift", () => {
   assert.throws(
     () => parseHistoricalMonitorHtml(archiveHtml().replace("2026-07-10\"", "2026-07-12\"")),
     /coverage gap|Conflicting archive coverage/,
   );
+  const sameDay = parseHistoricalMonitorHtml(
+    archiveHtml().replace(ITEMS[0].at, "2026-07-09T20:24:11.000Z"),
+  );
+  assert.deepEqual(sameDay.coverageIneligibleDates, ["2026-07-09"]);
+  assert.deepEqual(sameDay.timestampMismatches, [{
+    provider_item_id: ITEMS[0].id,
+    archive_published_at: "2026-07-09T20:24:11.000Z",
+    snowflake_published_at: ITEMS[0].at,
+    utc_date: "2026-07-09",
+  }]);
   assert.throws(
-    () => parseHistoricalMonitorHtml(archiveHtml().replace(ITEMS[0].at, "2026-07-09T20:24:11.000Z")),
-    /does not match X snowflake/,
+    () => parseHistoricalMonitorHtml(
+      archiveHtml().replace(ITEMS[0].at, "2026-07-08T20:24:11.000Z"),
+    ),
+    /UTC day does not match X snowflake/,
   );
   assert.throws(
     () => parseHistoricalMonitorHtml(
@@ -232,6 +244,88 @@ test("historical monitor parser rejects gaps and timestamps that do not match X 
     ),
     /item count mismatch/,
   );
+});
+
+test("same-day clock correction requires matching X oEmbed identity and text", async () => {
+  const runConfig = await loadConfig();
+  const correctedHtml = archiveHtml()
+    .replace(ITEMS[1].at, "2026-07-10T12:00:00.000Z")
+    .replace(ITEMS[1].text, `@dtzy_88 ${ITEMS[1].text}`);
+  const item = parseHistoricalMonitorHtml(correctedHtml).items[1];
+  const provider = new HistoricalMonitorProvider({
+    config: {
+      ...runConfig.providers.historical_monitor,
+      x_oembed_url: "https://oembed.example/",
+    },
+    fetchFn: async () => new Response(JSON.stringify(oembed(ITEMS[1])), {
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const verified = await provider.verifyWithOEmbed(item);
+  assert.equal(verified.published_at, ITEMS[1].at);
+  assert.equal(
+    verified.timestamp_verification,
+    "same_utc_day_snowflake_correction",
+  );
+
+  await assert.rejects(
+    provider.verifyWithOEmbed({
+      ...item,
+      archive_text: "A different archived post body.",
+    }),
+    /Archive text does not match X oEmbed/,
+  );
+});
+
+test("same-day clock drift never matures into negative-label coverage", async (t) => {
+  const { clock, provider, store } = await authoritativeHarness(t);
+  clock.html = archiveHtml().replace(
+    ITEMS[0].at,
+    "2026-07-09T20:24:11.000Z",
+  );
+  clock.now = new Date("2026-07-12T12:00:00.000Z");
+  const first = await provider.collect(store, { force: true });
+  assert.deepEqual(first.coverage_ineligible_dates, ["2026-07-09"]);
+  assert.equal(first.timestamp_mismatches.length, 1);
+
+  clock.now = new Date("2026-07-12T18:00:00.000Z");
+  await provider.collect(store, { force: true });
+  const assertions = await coverageAssertions(store, ["historical_monitor"]);
+  assert.ok(assertions.some((assertion) =>
+    assertion.start === "2026-07-10T00:00:00.000Z" &&
+    assertion.adequacy === "negative_label_eligible"
+  ));
+  assert.ok(!assertions.some((assertion) =>
+    assertion.start === "2026-07-09T00:00:00.000Z" &&
+    assertion.adequacy === "negative_label_eligible"
+  ));
+});
+
+test("new same-day clock drift revokes an already eligible UTC day", async (t) => {
+  const { clock, provider, store } = await authoritativeHarness(t);
+  clock.now = new Date("2026-07-12T12:00:00.000Z");
+  await provider.collect(store, { force: true });
+  clock.now = new Date("2026-07-12T18:00:00.000Z");
+  await provider.collect(store, { force: true });
+  assert.ok((await coverageAssertions(store, ["historical_monitor"]))
+    .some((assertion) =>
+      assertion.start === "2026-07-09T00:00:00.000Z" &&
+      assertion.adequacy === "negative_label_eligible"
+    ));
+
+  clock.html = archiveHtml().replace(
+    ITEMS[0].at,
+    "2026-07-09T20:24:11.000Z",
+  );
+  clock.now = new Date("2026-07-12T19:00:00.000Z");
+  await provider.collect(store, { force: true });
+  const revised = (await coverageAssertions(store, ["historical_monitor"]))
+    .find((assertion) =>
+      assertion.start === "2026-07-09T00:00:00.000Z"
+    );
+  assert.equal(revised.adequacy, "outcome_only");
+  assert.equal(revised.revision, 2);
+  assert.match(revised.rationale, /same-day archive clock drift/);
 });
 
 test("historical monitor parser accepts preserved pre-grid items but rejects post-grid future items", () => {

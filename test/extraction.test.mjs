@@ -433,6 +433,71 @@ test("resolved reply context is bound by exact reference and cannot be backdated
   assert.equal(childSignal.data.available_at, "2026-07-18T03:32:00.000Z");
 });
 
+test("resolving an unused quote context reuses an unchanged immutable signal", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reset-unused-quote-context-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = await new JsonlStore(directory).init();
+  const parentId = "2080956723297198218";
+  const child = observationForConfig(
+    "We have reset usage limits for all Codex and ChatGPT Work users.",
+    "2081096447718723984",
+    authorityConfig,
+    {
+      publishedAt: "2026-07-25T19:17:12.695Z",
+      firstSeenAt: "2026-08-13T04:41:16.000Z",
+      nativeRelations: [{
+        type: "quotes",
+        provider_item_id: parentId,
+        url: `https://x.com/community/status/${parentId}`,
+      }],
+    },
+  );
+  await store.append(child);
+  const first = await normalizeNewObservations(store, authorityConfig, {
+    now: new Date("2026-08-13T04:41:16.055Z"),
+  });
+  assert.equal(first.normalized, 1);
+  assert.equal(first.records[0].data.extraction.relevance.basis, "self");
+  assert.deepEqual(first.records[0].data.extraction.relevance.context_refs, []);
+
+  const parent = observationForConfig(
+    "Hey, does this mean a reset?",
+    parentId,
+    authorityConfig,
+    {
+      identityId: "community_member",
+      handle: "community",
+      mediaType: "application/vnd.x-search-summary+text",
+      publishedAt: "2026-07-25T10:01:59.797Z",
+      firstSeenAt: "2026-08-23T16:42:11.645Z",
+    },
+  );
+  await store.append(parent);
+  const resolved = await normalizeNewObservations(store, authorityConfig, {
+    now: new Date("2026-08-23T16:42:12.000Z"),
+  });
+  assert.equal(resolved.normalized, 0);
+  const childRecords = (await store.all("normalized_signal", { latestOnly: false }))
+    .filter((signal) =>
+      signal.data.observation_refs[0].record_id === child.record_id
+    );
+  assert.equal(childRecords.length, 1);
+  assert.equal(childRecords[0].revision, 1);
+  assert.equal(childRecords[0].created_at, first.records[0].created_at);
+  assert.equal(childRecords[0].data.available_at, first.records[0].data.available_at);
+
+  const state = await store.readState("normalization", { versions: {} });
+  const version = Object.values(state.versions).find((entry) =>
+    entry.processed?.[`${child.record_id}@1`] === true
+  );
+  assert.equal(
+    version.context_signatures[`${child.record_id}@1`],
+    `resolved|quotes:${parent.record_id}:1`,
+  );
+});
+
 test("context-only authority replies cannot inherit a reset outcome", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "reset-inherited-reply-"),

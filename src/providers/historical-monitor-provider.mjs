@@ -58,13 +58,23 @@ export function parseHistoricalMonitorHtml(html) {
     const [, publishedAt, encodedText, id] = match;
     const pageTimestamp = new Date(publishedAt).toISOString();
     const snowflakeTimestamp = timestampFromXSnowflake(id);
-    if (Math.abs(Date.parse(pageTimestamp) - Date.parse(snowflakeTimestamp)) > 1_000) {
-      throw new Error(`Archive timestamp does not match X snowflake ${id}`);
+    const timestampMatches =
+      Math.abs(Date.parse(pageTimestamp) - Date.parse(snowflakeTimestamp)) <=
+        1_000;
+    if (
+      !timestampMatches &&
+      pageTimestamp.slice(0, 10) !== snowflakeTimestamp.slice(0, 10)
+    ) {
+      throw new Error(`Archive timestamp UTC day does not match X snowflake ${id}`);
     }
     items.push({
       id,
       url: `https://x.com/thsottiaux/status/${id}`,
       published_at: snowflakeTimestamp,
+      archive_published_at: pageTimestamp,
+      timestamp_verification: timestampMatches
+        ? "exact_snowflake_match"
+        : "same_utc_day_snowflake_correction",
       archive_text: plainText(encodedText),
     });
   }
@@ -110,7 +120,25 @@ export function parseHistoricalMonitorHtml(html) {
       );
     }
   }
-  return { items, coverageDates, coverageByDate };
+  const timestampMismatches = items
+    .filter((item) =>
+      item.timestamp_verification === "same_utc_day_snowflake_correction"
+    )
+    .map((item) => ({
+      provider_item_id: item.id,
+      archive_published_at: item.archive_published_at,
+      snowflake_published_at: item.published_at,
+      utc_date: item.published_at.slice(0, 10),
+    }));
+  return {
+    items,
+    coverageDates,
+    coverageByDate,
+    timestampMismatches,
+    coverageIneligibleDates: [
+      ...new Set(timestampMismatches.map((item) => item.utc_date)),
+    ].sort(),
+  };
 }
 
 function tweetTextFromOEmbed(payload) {
@@ -121,6 +149,13 @@ function tweetTextFromOEmbed(payload) {
 function shortLinksFromOEmbed(payload) {
   return [...String(payload.html ?? "").matchAll(/href="(https:\/\/t\.co\/[^"]+)"/g)]
     .map((match) => decodeHtml(match[1]));
+}
+
+function comparableTweetText(value) {
+  return plainText(value)
+    .replace(/^(?:@[A-Za-z0-9_]+\s+)+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export class HistoricalMonitorProvider {
@@ -169,6 +204,9 @@ export class HistoricalMonitorProvider {
     const candidateLeadMs = closeLagMs - stabilityMs;
     const policyHash = hashLabel(attestation);
     const mode = "authoritative_daily_tibo_ledger";
+    const coverageIneligibleDates = new Set(
+      parsed.coverageIneligibleDates ?? [],
+    );
     const previousAssertions = await coverageAssertions(store, [this.providerName]);
     const candidateState = await store.readState(
       "historical-monitor-coverage-candidates",
@@ -212,12 +250,13 @@ export class HistoricalMonitorProvider {
     )) {
       const date = previous.start.slice(0, 10);
       const ledger = ledgersByDate.get(date);
-      const stillMatches = ledger && previous.evidence_refs?.some((evidence) =>
-        evidence.kind === "independent_completeness_attestation" &&
-        evidence.coverage_contract_hash === coverageContractHash &&
-        evidence.authority_policy_hash === policyHash &&
-        evidence.day_ledger_hash === ledger.hash
-      );
+      const stillMatches = !coverageIneligibleDates.has(date) &&
+        ledger && previous.evidence_refs?.some((evidence) =>
+          evidence.kind === "independent_completeness_attestation" &&
+          evidence.coverage_contract_hash === coverageContractHash &&
+          evidence.authority_policy_hash === policyHash &&
+          evidence.day_ledger_hash === ledger.hash
+        );
       if (stillMatches) continue;
       await addCoverageAssertion(store, {
         provider: this.providerName,
@@ -231,9 +270,11 @@ export class HistoricalMonitorProvider {
           html_sha256: htmlHash,
           coverage_grid_sha256: coverageGridHash,
         }],
-        rationale: ledger
-          ? "The authority-ledger policy or day contents changed and are pending a new stability window."
-          : "The previously attested UTC day is absent from the current authority ledger.",
+        rationale: coverageIneligibleDates.has(date)
+          ? "A listed status has same-day archive clock drift; this UTC day remains outcome-only."
+          : ledger
+            ? "The authority-ledger policy or day contents changed and are pending a new stability window."
+            : "The previously attested UTC day is absent from the current authority ledger.",
         assertedAt: fetchedAt,
         replayAvailableAt: null,
         assertionId: previous.assertion_id,
@@ -252,6 +293,10 @@ export class HistoricalMonitorProvider {
         assertion.start === start &&
         assertion.end === end
       );
+      if (coverageIneligibleDates.has(date)) {
+        delete candidateState.days[date];
+        continue;
+      }
       const previousEvidence = previous?.evidence_refs?.find((evidence) =>
         evidence.kind === "independent_completeness_attestation" &&
         evidence.coverage_contract_hash === coverageContractHash &&
@@ -500,6 +545,12 @@ export class HistoricalMonitorProvider {
     if (responseId !== item.id || author !== "thsottiaux" || !text) {
       throw new Error(`X oEmbed verification failed for ${item.id}`);
     }
+    if (
+      item.timestamp_verification === "same_utc_day_snowflake_correction" &&
+      comparableTweetText(item.archive_text) !== comparableTweetText(text)
+    ) {
+      throw new Error(`Archive text does not match X oEmbed for ${item.id}`);
+    }
     return { ...item, text, oembed: payload, short_links: shortLinksFromOEmbed(payload) };
   }
 
@@ -709,6 +760,8 @@ export class HistoricalMonitorProvider {
           html_sha256: htmlHash,
           coverage_grid_sha256: coverageGridHash,
           coverage_grid: coverageGrid,
+          timestamp_mismatches: parsed.timestampMismatches,
+          coverage_ineligible_dates: parsed.coverageIneligibleDates,
           html,
         },
       );
@@ -745,6 +798,8 @@ export class HistoricalMonitorProvider {
           fetchedAt,
           rawPayload: {
             archive_text: item.archive_text,
+            archive_published_at: item.archive_published_at,
+            timestamp_verification: item.timestamp_verification,
             archive_url: this.config.base_url,
             archive_snapshot_ref: archiveSnapshotRef,
             x_oembed: item.oembed,
@@ -868,6 +923,11 @@ export class HistoricalMonitorProvider {
         archive_coverage_grid_sha256: coverageGridHash,
         coverage_contract_hash: coverageContractHash,
         coverage_waiting: coverageWaiting,
+        timestamp_mismatches: parsed.timestampMismatches,
+        coverage_ineligible_dates: parsed.coverageIneligibleDates,
+        last_warning: parsed.timestampMismatches.length > 0
+          ? `${parsed.timestampMismatches.length} archive timestamp mismatch(es) excluded from negative coverage`
+          : null,
         last_success_at: fetchedAt.toISOString(),
         last_error: null,
       });
@@ -882,6 +942,8 @@ export class HistoricalMonitorProvider {
         coverage_assertions: runCoverageAssertions,
         coverage_pending: negativeLabelEligible && runCoverageAssertions.length === 0,
         coverage_waiting: coverageWaiting,
+        timestamp_mismatches: parsed.timestampMismatches,
+        coverage_ineligible_dates: parsed.coverageIneligibleDates,
         invalidated_coverage_assertions: invalidatedCoverageAssertions,
         archive_snapshot_ref: archiveSnapshotRef,
         health: { ok: true, delay_seconds: delaySeconds },

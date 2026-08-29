@@ -1,5 +1,5 @@
 import { createRecord, producer, recordRef, targetScope } from "../core/records.mjs";
-import { makeRecordId } from "../core/hash.mjs";
+import { makeRecordId, stableStringify } from "../core/hash.mjs";
 import { addHours, floorHour, halfOpenRange } from "../core/time.mjs";
 import { confirmationIdentityIds, sourceRoleForIdentity } from "../core/sources.mjs";
 import {
@@ -1251,6 +1251,33 @@ export function extractSignal(observation, config, {
   });
 }
 
+function normalizedSignalSemanticPayload(signal) {
+  const data = structuredClone(signal.data);
+  delete data.available_at;
+  return stableStringify({
+    schema_version: signal.schema_version,
+    record_type: signal.record_type,
+    record_id: signal.record_id,
+    producer: signal.producer,
+    data,
+  });
+}
+
+function reconcileNormalizedSignal(candidate, previous) {
+  if (!previous) return candidate;
+  if (
+    normalizedSignalSemanticPayload(candidate) ===
+      normalizedSignalSemanticPayload(previous)
+  ) {
+    return previous;
+  }
+  return {
+    ...candidate,
+    revision: previous.revision + 1,
+    supersedes: recordRef(previous),
+  };
+}
+
 export async function normalizeNewObservations(store, config, {
   now = new Date(),
   semanticAssessor = createConfiguredSemanticTimingAssessor(config),
@@ -1263,6 +1290,13 @@ export async function normalizeNewObservations(store, config, {
       left.revision - right.revision
     );
   const normalized = await store.all("normalized_signal", { latestOnly: false });
+  const latestNormalizedById = new Map();
+  for (const signal of normalized) {
+    const previous = latestNormalizedById.get(signal.record_id);
+    if (!previous || signal.revision > previous.revision) {
+      latestNormalizedById.set(signal.record_id, signal);
+    }
+  }
   const exactRef = (ref) => `${ref.record_id}@${ref.revision}`;
   const currentNormalizedRefs = new Set(
     normalized
@@ -1423,7 +1457,14 @@ export async function normalizeNewObservations(store, config, {
         }
       }
     }
-    if (record) records.push(record);
+    if (record) {
+      record = reconcileNormalizedSignal(
+        record,
+        latestNormalizedById.get(record.record_id),
+      );
+      records.push(record);
+      latestNormalizedById.set(record.record_id, record);
+    }
   }
   const results = await store.appendMany(records);
   normalizationState.versions[versionKey] = {

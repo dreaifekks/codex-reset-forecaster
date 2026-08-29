@@ -193,7 +193,11 @@ processed records should be considered by a new challenger.
 grid from [`codex-resets.com`](https://codex-resets.com/), verifies listed posts
 using X oEmbed plus their snowflake timestamps, and saves the complete source HTML,
 parsed grid, hashes, and verification payloads. A source or timestamp mismatch
-fails the import rather than weakening the evidence silently. The import also
+fails the import rather than weakening the evidence silently. A page clock that
+differs from its X snowflake but stays within the same UTC date is the sole
+exception: the adapter requires matching X oEmbed identity and normalized text,
+uses the snowflake as canonical `published_at`, records the discrepancy, and
+keeps that UTC date outcome-only so it cannot mature into a negative label. The import also
 reconciles parsed posts by snowflake UTC date against every daily `data-count`, so
 an HTML parser drift that silently drops an item fails closed.
 

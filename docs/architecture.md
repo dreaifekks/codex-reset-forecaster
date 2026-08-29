@@ -89,6 +89,12 @@ outcome-discovery-only. The promotion time is the actual later fetch time, so an
 initial deployment cannot backfill those days as information that was known at
 day-end.
 
+An archive clock that differs from the linked X snowflake within the same UTC date
+may still supply positive evidence only after X oEmbed confirms the exact status,
+author identity, and normalized text. The snowflake remains the canonical clock,
+the mismatch is retained in the source snapshot, and the affected UTC date is
+excluded from negative-label coverage. Cross-date drift remains a hard failure.
+
 Direct X timeline pagination also defaults to `outcome_only`: exhausting every
 page proves what an account posted, not that every platform reset must have been
 posted. It may produce negative-label coverage only under the supported,
