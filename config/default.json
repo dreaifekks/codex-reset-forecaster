@@ -1,5 +1,5 @@
 {
-  "config_version": "provider-config/0.3.6",
+  "config_version": "provider-config/0.3.7",
   "taxonomy_version": "reset-taxonomy/0.3.1",
   "feature_schema_version": "reset-features/0.3.1",
   "deduplication_version": "reset-dedup/0.2.3",
@@ -74,8 +74,8 @@
     },
     "x_search_gateway": {
       "enabled": false,
-      "freshness_max_age_hours": 2.5,
-      "refresh_interval_minutes": 30,
+      "freshness_max_age_hours": 7,
+      "refresh_interval_minutes": 360,
       "quota_exhaustion_cooldown_minutes": 360,
       "base_url": "http://127.0.0.1:8788",
       "upstream_provider": "grokbuild",

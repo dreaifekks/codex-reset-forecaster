@@ -17,8 +17,8 @@
     "historical_monitor": {
       "enabled": true,
       "discover_linked_posts": false,
-      "freshness_max_age_hours": 1,
-      "refresh_interval_hours": 0.25,
+      "freshness_max_age_hours": 7,
+      "refresh_interval_hours": 6,
       "coverage_adequacy": "negative_label_eligible",
       "coverage_completeness_attestation": {
         "version": "historical-daily-authority-ledger/1",

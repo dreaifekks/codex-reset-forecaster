@@ -689,6 +689,22 @@ export class HistoricalMonitorProvider {
         assertedAt: startedAt,
       });
     const refreshMs = (this.config.refresh_interval_hours ?? 24) * 3_600_000;
+    // A failed fetch also consumes the interval; do not retry a broken archive
+    // on every forecast run or mistake a deferred attempt for source recovery.
+    const lastFailureMs = Date.parse(previousState.last_failure_at);
+    if (!force && previousState.last_error &&
+        Number.isFinite(lastFailureMs) &&
+        startedAt.getTime() - lastFailureMs < refreshMs) {
+      return {
+        fetched: false,
+        collected: 0,
+        skipped: "refresh_interval",
+        next_fetch_at: new Date(lastFailureMs + refreshMs).toISOString(),
+        coverage_waiting: previousState.coverage_waiting ?? null,
+        invalidated_coverage_assertions: invalidatedCoverageAssertions,
+        health: { ok: false, delay_seconds: 0, error: previousState.last_error },
+      };
+    }
     const currentContractAlreadyObserved =
       Object.hasOwn(previousState, "coverage_contract_hash") &&
       previousState.coverage_contract_hash === coverageContractHash;
@@ -711,6 +727,7 @@ export class HistoricalMonitorProvider {
         coverage_waiting: pendingCoverageWaiting,
       });
       return {
+        fetched: false,
         collected: 0,
         skipped: "refresh_interval",
         coverage_waiting: pendingCoverageWaiting,

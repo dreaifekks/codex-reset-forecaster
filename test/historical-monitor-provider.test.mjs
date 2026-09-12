@@ -144,6 +144,37 @@ async function authoritativeHarness(t) {
   return { clock, config, directory, provider, store };
 }
 
+test("archive failures wait for the refresh interval without claiming recovery", async (t) => {
+  const { clock, config, store } = await authoritativeHarness(t);
+  let requests = 0;
+  let failing = true;
+  const provider = new HistoricalMonitorProvider({
+    config: { ...config.providers.historical_monitor, refresh_interval_hours: 6 },
+    target: config.target,
+    outcomeDefinition: config.outcome_definition,
+    now: () => new Date(clock.now),
+    fetchFn: async () => {
+      requests += 1;
+      if (failing) throw new Error("archive unavailable");
+      return new Response(clock.html);
+    },
+  });
+  await assert.rejects(provider.collect(store), /archive unavailable/);
+  clock.now = new Date("2026-07-11T11:59:59.999Z");
+  const skipped = await provider.collect(store);
+  assert.equal(skipped.fetched, false);
+  assert.equal(skipped.next_fetch_at, "2026-07-11T12:00:00.000Z");
+  assert.equal(skipped.health.ok, false);
+  assert.equal(skipped.health.error, "archive unavailable");
+  assert.equal(requests, 1);
+  assert.equal((await store.readState("historical-monitor-provider")).last_success_at, undefined);
+  failing = false;
+  clock.now = new Date("2026-07-11T12:00:00.000Z");
+  assert.equal((await provider.collect(store)).health.ok, true);
+  assert.equal(requests, 2);
+  assert.equal((await store.readState("historical-monitor-provider")).last_error, null);
+});
+
 test("historical monitor preserves source evidence without treating its date grid as negative coverage", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-historical-monitor-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

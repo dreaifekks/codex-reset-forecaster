@@ -250,7 +250,10 @@ The profile enables a versioned UTC daily authority ledger:
 - `asserted_at` and `replay_available_at` use that real promoting fetch, never
   day-end or the first deployment time.
 
-The configured refresh interval is 15 minutes, but elapsed stability is measured
+The maintenance profile refresh interval is six hours, with a seven-hour source
+freshness budget. Failed fetches also wait six hours before retrying (unless a
+manual ingest forces a fetch); skipping a failed source preserves its error and
+last successful fetch time. Elapsed stability is measured
 from real fetch timestamps. A first run cannot immediately create eligible
 negative history. Run the profile locally with a dedicated data root:
 
@@ -404,12 +407,15 @@ provider state; later polls consume the gateway's incremental `events` result so
 wording changes in already-seen summaries do not masquerade as newly discovered
 posts. For X status URLs, `published_at` is derived deterministically from the
 status snowflake when the search response omits or varies `created_at`.
-The default context provider gate is 30 minutes. The shared scheduler checks that
-gate on its 10-minute boundaries; it is not a separate 30-minute timer.
+The default context provider gate is six hours, with a seven-hour freshness
+budget. The shared scheduler checks that gate on its 10-minute boundaries; it is
+not a separate six-hour timer. The RSSHub exact timeline retains its five-minute
+provider gate, still subject to the shared pipeline cadence and run duration.
 Independent configured queries are requested concurrently and then merged in
 configuration order. One failed query is reported without discarding successful
-query results and is retried at the next scheduler boundary without advancing the
-full-success gate, while an all-query failure still fails the provider run.
+query results. Both partial and all-query failures consume the refresh interval,
+without advancing the last full-success timestamp or clearing the source error;
+an all-query failure still fails the provider run.
 Grok Build HTTP `402` / `grokbuild_usage_balance_exhausted` responses are treated
 as an optional-context skip rather than a provider error. The adapter persists a
 `quota_retry_at` circuit-breaker timestamp and makes no gateway requests during

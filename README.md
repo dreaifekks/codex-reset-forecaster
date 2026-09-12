@@ -84,7 +84,7 @@ been validated.
 - The optional X Search Gateway currently defaults to `grokbuild`. Both Grokbuild
   and the `hermes` rollback path are summary/context-only inputs: they may adjust
   features but cannot confirm an outcome or establish negative-label coverage.
-  Its independent context queries run concurrently behind a 30-minute provider
+  Its independent context queries run concurrently behind a six-hour provider
   gate; the exact RSSHub Tibo timeline has a five-minute provider gate. The
   current shared scheduler checks both on 10-minute boundaries, so these gates do
   not imply independent five-minute polling.
@@ -385,7 +385,7 @@ follows from that fit. The `validated` status still requires at least 1,008
 evaluated hourly windows, 20 eligible events, and a compatible challenger that
 passes the fixed-policy walk-forward and calibration gates.
 
-The current checked-in configuration contract is `provider-config/0.3.6`, with
+The current checked-in configuration contract is `provider-config/0.3.7`, with
 `reset-taxonomy/0.3.1`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
 rules `0.3.4` (`reset-extract/rules-0.3.4`). The model contract also binds the
 `winsorized-zscore/1` transform:

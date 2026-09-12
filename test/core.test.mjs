@@ -66,7 +66,7 @@ test("demo seed and demo server share one explicit model contract", async () => 
   assert.equal(modelContractHash(seed), modelContractHash(server));
   assert.notEqual(modelContractHash(seed), modelContractHash(live));
   assert.deepEqual(live.model.outcome_coverage_providers, ["x"]);
-  assert.equal(live.config_version, "provider-config/0.3.6");
+  assert.equal(live.config_version, "provider-config/0.3.7");
   assert.equal(live.taxonomy_version, "reset-taxonomy/0.3.1");
   assert.equal(live.feature_schema_version, "reset-features/0.3.1");
   assert.equal(live.deduplication_version, "reset-dedup/0.2.3");
@@ -1810,7 +1810,7 @@ test("gateway impact discovery mirrors high-impact and recovery vocabulary", asy
   ]) {
     assert.ok(query.includes(term), `gateway impact query should include ${term}`);
   }
-  assert.equal(config.providers.x_search_gateway.refresh_interval_minutes, 30);
+  assert.equal(config.providers.x_search_gateway.refresh_interval_minutes, 360);
   await assert.rejects(
     loadConfig({ overrides: {
       providers: {

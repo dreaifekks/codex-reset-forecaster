@@ -239,7 +239,11 @@ export class XSearchGatewayProvider {
     const refreshIntervalMs = Number(
       this.config.refresh_interval_minutes ?? 30,
     ) * 60_000;
-    const lastSuccessMs = Date.parse(previousState.last_success_at);
+    const lastAttemptMs = Math.max(...[
+      previousState.last_success_at,
+      previousState.last_failure_at,
+      previousState.last_partial_at,
+    ].map((value) => Date.parse(value)).filter(Number.isFinite));
     const quotaRetryAt = validTimestamp(previousState.quota_retry_at);
     const quotaRetryMs = Date.parse(quotaRetryAt);
     let currentQueryErrors = [];
@@ -275,12 +279,12 @@ export class XSearchGatewayProvider {
       };
     }
     if (
-      !bootstrapReplay &&
-      !previousState.last_error &&
-      Number.isFinite(lastSuccessMs) &&
+      previousState.upstream_provider === this.upstreamProvider &&
+      previousState.provider_config_hash === providerConfigHash &&
+      Number.isFinite(lastAttemptMs) &&
       Number.isFinite(refreshIntervalMs) &&
       refreshIntervalMs > 0 &&
-      startedAt.getTime() - lastSuccessMs < refreshIntervalMs
+      startedAt.getTime() - lastAttemptMs < refreshIntervalMs
     ) {
       return {
         fetched: false,
@@ -288,8 +292,12 @@ export class XSearchGatewayProvider {
         skipped: "refresh_interval",
         upstream_provider: this.upstreamProvider,
         bootstrap_replay: false,
-        next_fetch_at: new Date(lastSuccessMs + refreshIntervalMs).toISOString(),
-        health: { ok: true, delay_seconds: 0, error: null },
+        next_fetch_at: new Date(lastAttemptMs + refreshIntervalMs).toISOString(),
+        health: {
+          ok: !previousState.last_error,
+          delay_seconds: 0,
+          error: previousState.last_error ?? null,
+        },
       };
     }
     try {

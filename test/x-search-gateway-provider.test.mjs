@@ -267,6 +267,13 @@ test("gateway preserves configured error order while collecting partial successe
       }],
     };
   };
+  const deferredRetry = await provider.collect(store);
+  assert.equal(deferredRetry.skipped, "refresh_interval");
+  assert.equal(deferredRetry.health.ok, false);
+  assert.equal(deferredRetry.next_fetch_at, "2026-07-29T16:00:00.000Z");
+  assert.equal(retryCount, 0);
+  assert.equal((await store.readState("x-search-gateway-provider")).last_success_at, null);
+  collectedAt = new Date("2026-07-29T16:00:00.000Z");
   const retry = await provider.collect(store);
   assert.equal(retryCount, queries.length);
   assert.equal(retry.health.ok, true);
@@ -427,7 +434,7 @@ test("gateway summaries derive a stable publication timestamp from the X status 
   assert.equal(first.data.published_at, "2026-07-10T19:03:50.601Z");
   assert.equal(first.data.first_seen_at, "2026-07-22T20:00:00.000Z");
 
-  collectedAt = new Date("2026-07-22T21:00:00Z");
+  collectedAt = new Date("2026-07-23T02:00:00Z");
   assert.equal((await provider.collect(store)).collected, 0);
   const current = (await store.all("raw_observation"))
     .find((record) => record.data.provider_item_id === "2075657265508647008");
@@ -458,7 +465,7 @@ test("gateway replays seen results only while bootstrapping local provider state
   assert.equal(bootstrap.collected, 1);
 
   summaryText = "The same seen status with a newly worded search summary.";
-  collectedAt = new Date("2026-07-22T21:00:00Z");
+  collectedAt = new Date("2026-07-23T02:00:00Z");
   const incremental = await provider.collect(store);
   assert.equal(incremental.bootstrap_replay, false);
   assert.equal(incremental.collected, 0);
