@@ -9,6 +9,7 @@ import {
 } from "../src/runtime/readiness.mjs";
 import {
   createRequestHandler,
+  isServingSnapshotUsable,
   servingSnapshotConfig,
 } from "../src/web/app.mjs";
 import {
@@ -48,6 +49,27 @@ test("serving snapshot reuse is bound to the current outcome contract", () => {
     OUTCOME_ADJUDICATOR_VERSION,
   );
   assert.match(snapshotConfig.serving_config_hash, /^sha256:[a-f0-9]{64}$/);
+});
+
+test("startup snapshot validation rejects changed provider and serving configuration", () => {
+  const appConfig = config();
+  const snapshotConfig = servingSnapshotConfig(appConfig);
+  const snapshot = {
+    schema_version: "serving-snapshot/3",
+    config_hash: snapshotConfig.config_hash,
+    serving_config_hash: snapshotConfig.serving_config_hash,
+    materialized_at: "2026-09-13T00:00:00.000Z",
+    prediction_ref: null,
+    prediction: null,
+    prediction_hash: null,
+  };
+  assert.equal(isServingSnapshotUsable(snapshot, { config: appConfig }), true);
+  assert.equal(isServingSnapshotUsable(snapshot, {
+    config: { ...appConfig, config_hash: "maintenance-provider-config" },
+  }), false);
+  assert.equal(isServingSnapshotUsable(snapshot, {
+    config: { ...appConfig, runtime: { ...appConfig.runtime, forecast_fresh_age_hours: 7 } },
+  }), false);
 });
 
 class MemoryStore {

@@ -8,6 +8,7 @@ import {
   SERVING_SNAPSHOT_SCHEMA_VERSION,
   SERVING_SNAPSHOT_STATE_KEY,
   createRequestHandler,
+  isServingSnapshotUsable,
 } from "./web/app.mjs";
 import { startScheduler } from "./runtime/scheduler.mjs";
 import { createPipelineWorker } from "./runtime/pipeline-worker.mjs";
@@ -123,7 +124,8 @@ function refreshProbabilityProfiles({ force = false, reason }) {
 async function initializeRuntime() {
   refreshProbabilityProfiles({ reason: "startup warmup" });
   let snapshot = servingSnapshotProvider.get();
-  if (snapshot?.schema_version !== SERVING_SNAPSHOT_SCHEMA_VERSION) {
+  if (snapshot?.schema_version !== SERVING_SNAPSHOT_SCHEMA_VERSION ||
+      !isServingSnapshotUsable(snapshot, { config })) {
     try {
       snapshot = servingSnapshotProvider.publish(
         await pipelineWorker.materializeServingSnapshot(new Date()),

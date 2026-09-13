@@ -610,7 +610,7 @@ function samePredictionReference(left, right) {
     left?.revision === right?.revision;
 }
 
-function isServingSnapshotUsable(snapshot, { config }) {
+export function isServingSnapshotUsable(snapshot, { config }) {
   const expectedConfig = servingSnapshotConfig(config);
   if (
     !snapshot ||
