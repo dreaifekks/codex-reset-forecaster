@@ -737,11 +737,7 @@ async function exactPredictionsForArtifact(store, artifact, modelRelease) {
     exactRefKey(row.prediction_ref),
     row.prediction_ref,
   ])).values()];
-  const predictions = typeof store.allByRefs === "function"
-    ? await store.allByRefs("prediction", refs)
-    : (await store.all("prediction", { latestOnly: false })).filter(
-      (prediction) => refs.some((ref) => exactRefKey(ref) === exactRefKey(prediction)),
-    );
+  const predictions = await store.allByRefs("prediction", refs);
   return { refs, predictions };
 }
 

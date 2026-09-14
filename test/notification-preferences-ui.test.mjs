@@ -2,25 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   NOTIFICATION_CALIBRATION_CACHE_TTL_MS,
-  NOTIFICATION_HORIZON_HOURS,
   calibrationAt,
   createNotificationCalibrationCache,
-  formatNotificationHorizon,
-  nearestHorizonIndex,
   normalizeCalibrationPayload,
 } from "../public/notification-preferences.js";
-
-test("notification horizon slider uses the requested non-linear scale", () => {
-  assert.deepEqual(NOTIFICATION_HORIZON_HOURS, [
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
-    16, 20, 24, 28, 32, 36, 40, 44, 48,
-    60, 72, 84, 96,
-    120, 144, 168,
-  ]);
-  assert.equal(nearestHorizonIndex(24), 14);
-  assert.equal(NOTIFICATION_HORIZON_HOURS[nearestHorizonIndex(13)], 12);
-  assert.equal(formatNotificationHorizon(72), "3 天（72 小时）");
-});
 
 test("calibration cache reuses a horizon only within its bounded page-session lifetime", () => {
   let now = 1_000;

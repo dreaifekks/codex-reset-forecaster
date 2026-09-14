@@ -4,12 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import {
-  OUTCOME_ADJUDICATOR_VERSION,
-  OUTCOME_LABEL_POLICY_VERSION,
-} from "../src/core/outcome-contract.mjs";
 import { extractorContract } from "../src/core/extractor-contract.mjs";
-import { FEATURE_NAMES } from "../src/model/features.mjs";
+import { FEATURE_NAMES, FEATURE_SNAPSHOT_PRODUCER_VERSION } from "../src/model/features.mjs";
 import {
   MODEL_VERSION_PREFIX,
 } from "../src/model/model-version.mjs";
@@ -34,16 +30,6 @@ const publicationExamplePath = path.join(
   "publication-event.json",
 );
 const examplesDir = path.join(root, "examples");
-const allowedTypes = new Set([
-  "raw_observation",
-  "normalized_signal",
-  "event_candidate",
-  "impact_episode",
-  "reset_outcome",
-  "feature_snapshot",
-  "prediction",
-  "prediction_settlement",
-]);
 
 function fail(message) {
   throw new Error(message);
@@ -65,26 +51,6 @@ function assertProbability(value, label) {
   if (typeof value !== "number" || value < 0 || value > 1) {
     fail(`${label} must be a probability, got ${JSON.stringify(value)}`);
   }
-}
-
-function validateEnvelope(record, fileName) {
-  if (record.schema_version !== "reset-intel/0.2") fail(`${fileName}: wrong schema_version`);
-  if (!allowedTypes.has(record.record_type)) fail(`${fileName}: unsupported record_type`);
-  if (!record.record_id || !Number.isInteger(record.revision) || record.revision < 1) {
-    fail(`${fileName}: invalid record identity`);
-  }
-  if (!isUtc(record.created_at)) fail(`${fileName}: created_at must be RFC 3339 UTC`);
-  if (!record.producer?.name || !record.producer?.version) fail(`${fileName}: producer is incomplete`);
-  if (!record.data || typeof record.data !== "object" || Array.isArray(record.data)) {
-    fail(`${fileName}: data must be an object`);
-  }
-}
-
-function validateRange(range, label) {
-  if (!range) return;
-  if (!isUtc(range.start) || !isUtc(range.end)) fail(`${label}: range timestamps must be UTC`);
-  if (Date.parse(range.start) >= Date.parse(range.end)) fail(`${label}: range start must precede end`);
-  if (range.boundary !== "[start,end)") fail(`${label}: boundary must be [start,end)`);
 }
 
 function validateRecordRef(reference, label) {
@@ -202,115 +168,6 @@ function validatePublicationEvent(event, fileName) {
     event.url !== event.notification.url
   ) {
     fail(`${fileName}: notification projection is incomplete or inconsistent`);
-  }
-}
-
-function closeEnough(left, right, tolerance = 1e-9) {
-  return Math.abs(left - right) <= tolerance;
-}
-
-function validatePrediction(record, fileName) {
-  const data = record.data;
-  if (
-    record.producer.name !== FORECAST_PRODUCER_NAME ||
-    record.producer.version !== FORECAST_PRODUCER_VERSION ||
-    data.model?.family !== "ridge_logistic_discrete_time_hazard" ||
-    typeof data.model?.version !== "string" ||
-    !data.model.version.startsWith(`${MODEL_VERSION_PREFIX}-`)
-  ) {
-    fail(`${fileName}: prediction model or producer version is stale`);
-  }
-  if (!isUtc(data.issued_at) || !isUtc(data.knowledge_cutoff)) {
-    fail(`${fileName}: prediction timestamps must be UTC`);
-  }
-  validateRange(data.horizon, `${fileName}: horizon`);
-  if (Date.parse(data.knowledge_cutoff) > Date.parse(data.issued_at)) {
-    fail(`${fileName}: prediction cannot be issued before its knowledge cutoff`);
-  }
-  if (Date.parse(data.issued_at) > Date.parse(data.horizon.start)) {
-    fail(`${fileName}: prediction horizon cannot start before publication`);
-  }
-  if (data.base_slot !== "PT1H" || data.display_horizon !== "PT4H") {
-    fail(`${fileName}: expected PT1H base slot and PT4H display horizon`);
-  }
-  if (
-    !/^[a-f0-9]{64}$/.test(data.model?.artifact_hash ?? "") ||
-    !/^sha256:[a-f0-9]{64}$/.test(data.model?.model_contract_hash ?? "")
-  ) {
-    fail(`${fileName}: prediction must bind an exact model artifact and contract hash`);
-  }
-  if (!Array.isArray(data.slots) || data.slots.length === 0 || data.slots.length > 168) {
-    fail(`${fileName}: slots must contain 1..168 entries`);
-  }
-  if (
-    data.slots[0].start !== data.horizon.start ||
-    data.slots.at(-1).end !== data.horizon.end
-  ) {
-    fail(`${fileName}: slots must exactly cover the declared horizon`);
-  }
-  if (
-    !Array.isArray(data.feature_snapshot_refs) ||
-    data.feature_snapshot_refs.length !== data.slots.length
-  ) {
-    fail(`${fileName}: one feature snapshot ref is required per slot`);
-  }
-  if (
-    new Set(data.feature_snapshot_refs.map((ref) => `${ref.record_id}@${ref.revision}`)).size !==
-    data.feature_snapshot_refs.length
-  ) {
-    fail(`${fileName}: feature snapshot refs must be unique`);
-  }
-  if (Date.parse(data.model.training_cutoff) > Date.parse(data.knowledge_cutoff)) {
-    fail(`${fileName}: model training cutoff cannot be after forecast knowledge cutoff`);
-  }
-
-  let survival = 1;
-  let previousEnd = null;
-  for (const [index, slot] of data.slots.entries()) {
-    validateRange({ start: slot.start, end: slot.end, boundary: "[start,end)" }, `${fileName}: slot ${index}`);
-    if (Date.parse(slot.end) - Date.parse(slot.start) !== 60 * 60 * 1000) {
-      fail(`${fileName}: slot ${index} is not one hour`);
-    }
-    if (previousEnd && slot.start !== previousEnd) fail(`${fileName}: slots are not contiguous`);
-    previousEnd = slot.end;
-    for (const key of ["hazard", "first_reset_probability", "reset_by_end_probability"]) {
-      assertProbability(slot[key], `${fileName}: slot ${index}.${key}`);
-    }
-    if (slot.rolling_4h_probability !== null) {
-      assertProbability(
-        slot.rolling_4h_probability,
-        `${fileName}: slot ${index}.rolling_4h_probability`,
-      );
-    }
-    const expectedFirst = survival * slot.hazard;
-    if (!closeEnough(slot.first_reset_probability, expectedFirst, 1e-8)) {
-      fail(`${fileName}: slot ${index} first-reset probability is inconsistent with hazard`);
-    }
-    survival *= 1 - slot.hazard;
-    if (!closeEnough(slot.reset_by_end_probability, 1 - survival, 1e-8)) {
-      fail(`${fileName}: slot ${index} cumulative probability is inconsistent with hazard`);
-    }
-  }
-  for (let index = 0; index < data.slots.length; index += 1) {
-    const slot = data.slots[index];
-    if (index + 4 > data.slots.length) {
-      if (slot.rolling_4h_probability !== null) {
-        fail(`${fileName}: slot ${index} rolling four-hour value must be null without four saved hazards`);
-      }
-      continue;
-    }
-    const expectedRolling = 1 - data.slots
-      .slice(index, index + 4)
-      .reduce((value, item) => value * (1 - item.hazard), 1);
-    if (!closeEnough(slot.rolling_4h_probability, expectedRolling, 1e-8)) {
-      fail(`${fileName}: slot ${index} rolling four-hour probability is inconsistent with hazards`);
-    }
-  }
-  if (data.event_process === "first_reset") {
-    assertProbability(data.no_reset_probability, `${fileName}: no_reset_probability`);
-    if (!closeEnough(data.no_reset_probability, survival, 1e-8)) {
-      fail(`${fileName}: no_reset_probability is inconsistent with hourly hazards`);
-    }
   }
 }
 
@@ -502,37 +359,14 @@ if (exampleFiles.length === 0) fail("No JSON examples found");
 
 for (const fileName of exampleFiles) {
   const record = readJson(path.join(examplesDir, fileName));
-  validateEnvelope(record, fileName);
   try {
     assertCanonicalRecord(record);
   } catch (error) {
     fail(`${fileName}: ${error.message}`);
   }
-  if (record.record_type === "raw_observation") {
-    if (record.data.published_at !== null && !isUtc(record.data.published_at)) {
-      fail(`${fileName}: published_at must be UTC or null`);
-    }
-    if (!isUtc(record.data.first_seen_at) || !isUtc(record.data.fetched_at)) {
-      fail(`${fileName}: collection timestamps must be UTC`);
-    }
-    const attestation = record.data.availability_attestation;
-    if (attestation !== null) {
-      if (!isUtc(attestation.available_at) || !isUtc(attestation.verified_at)) {
-        fail(`${fileName}: availability attestation timestamps must be UTC`);
-      }
-      if (Date.parse(attestation.available_at) > Date.parse(record.data.fetched_at)) {
-        fail(`${fileName}: attested availability cannot be after fetch time`);
-      }
-      if (!["direct_source_publication", "archive_snapshot", "provider_first_seen"].includes(attestation.basis)) {
-        fail(`${fileName}: availability attestation basis invalid`);
-      }
-      if (!attestation.attestor_url || !attestation.verification) {
-        fail(`${fileName}: availability attestation is incomplete`);
-      }
-    }
-  }
+  // Runtime validation owns record invariants; examples also bind the current
+  // producer/configuration and demonstrate the fields required by the contract.
   if (record.record_type === "normalized_signal") {
-    if (!isUtc(record.data.available_at)) fail(`${fileName}: available_at must be UTC`);
     if (
       record.producer.name !== "rule-claim-extractor" ||
       record.producer.version !== defaultExtractor.model_version ||
@@ -540,10 +374,8 @@ for (const fileName of exampleFiles) {
       record.data.extraction?.model !== defaultExtractor.model ||
       record.data.extraction?.model_version !== defaultExtractor.model_version ||
       record.data.extraction?.prompt_version !== defaultExtractor.prompt_version ||
-      record.data.extraction?.semantic_policy_hash !==
-        defaultExtractor.semantic_policy_hash ||
-      record.data.extraction?.relevance?.policy_version !==
-        defaultExtractor.topic_relevance_policy_version
+      record.data.extraction?.semantic_policy_hash !== defaultExtractor.semantic_policy_hash ||
+      record.data.extraction?.relevance?.policy_version !== defaultExtractor.topic_relevance_policy_version
     ) {
       fail(`${fileName}: normalized signal extractor contract is stale`);
     }
@@ -553,132 +385,40 @@ for (const fileName of exampleFiles) {
     ) {
       fail(`${fileName}: normalized signal must demonstrate semantic context fields`);
     }
-    if (!/^sha256:[a-f0-9]{64}$/.test(record.data.extraction?.semantic_policy_hash ?? "")) {
-      fail(`${fileName}: signal extraction semantic policy hash invalid`);
-    }
-    validateRange(record.data.claim?.asserted_time_range, `${fileName}: asserted_time_range`);
-    assertProbability(record.data.extraction?.confidence, `${fileName}: extraction confidence`);
-  }
-  if (record.record_type === "reset_outcome") {
-    if (!isUtc(record.data.known_at)) fail(`${fileName}: known_at must be UTC`);
-    if (
-      record.data.replay_available_at !== undefined &&
-      record.data.replay_available_at !== null &&
-      !isUtc(record.data.replay_available_at)
-    ) {
-      fail(`${fileName}: replay_available_at must be UTC or null`);
-    }
-    validateRange(record.data.occurred_time_range, `${fileName}: occurred_time_range`);
-    if (
-      record.data.status === "confirmed" &&
-      (
-        record.data.label_policy_version !== OUTCOME_LABEL_POLICY_VERSION ||
-        typeof record.data.event_identity !== "string" ||
-        record.data.event_identity.length === 0 ||
-        !record.data.occurred_time_range ||
-        !Array.isArray(record.data.candidate_refs) ||
-        record.data.candidate_refs.length === 0 ||
-        record.producer.name !== "outcome-adjudicator" ||
-        record.producer.version !== OUTCOME_ADJUDICATOR_VERSION
-      )
-    ) {
-      fail(`${fileName}: confirmed outcome contract incomplete`);
-    }
   }
   if (record.record_type === "event_candidate") {
-    if (!isUtc(record.data.as_of)) fail(`${fileName}: candidate as_of must be UTC`);
-    validateRange(record.data.hypothesized_time_range, `${fileName}: hypothesized_time_range`);
-    for (const [index, evidence] of (record.data.evidence ?? []).entries()) {
+    for (const [index, evidence] of record.data.evidence.entries()) {
       assertProbability(evidence.link_confidence, `${fileName}: evidence ${index} link confidence`);
     }
   }
-  if (record.record_type === "impact_episode") {
-    if (
-      record.producer.name !== "impact-episode-builder" ||
-      record.producer.version !== "0.1.0" ||
-      record.data.policy_version !== "impact-episode-policy/1" ||
-      record.data.policy_config_hash !== record.producer.config_hash
-    ) {
-      fail(`${fileName}: impact episode policy binding is stale`);
-    }
-    assertProbability(
-      record.data.current_pressure,
-      `${fileName}: current pressure`,
-    );
-    assertProbability(
-      record.data.peak_pressure,
-      `${fileName}: peak pressure`,
-    );
-  }
   if (record.record_type === "feature_snapshot") {
-    if (!isUtc(record.data.knowledge_cutoff)) fail(`${fileName}: feature cutoff must be UTC`);
     if (
       record.producer.name !== "as-of-feature-builder" ||
-      record.producer.version !== "0.3.2" ||
+      record.producer.version !== FEATURE_SNAPSHOT_PRODUCER_VERSION ||
       record.data.feature_schema_version !== defaultConfig.feature_schema_version ||
       record.data.taxonomy_version !== defaultConfig.taxonomy_version ||
       record.data.deduplication_version !== defaultConfig.deduplication_version ||
       record.data.extractor_model !== defaultExtractor.model ||
       record.data.extractor_model_version !== defaultExtractor.model_version ||
       record.data.extractor_prompt_version !== defaultExtractor.prompt_version ||
-      record.data.extractor_semantic_policy_hash !==
-        defaultExtractor.semantic_policy_hash
+      record.data.extractor_semantic_policy_hash !== defaultExtractor.semantic_policy_hash
     ) {
       fail(`${fileName}: feature snapshot provenance contract is stale`);
     }
-    if (
-      !/^sha256:[a-f0-9]{64}$/.test(record.data.config_hash ?? "") ||
-      !record.data.feature_schema_version ||
-      !record.data.taxonomy_version ||
-      !record.data.deduplication_version ||
-      !record.data.timezone_database_version ||
-      !record.data.extractor_model ||
-      !record.data.extractor_model_version ||
-      !record.data.extractor_prompt_version ||
-      !/^sha256:[a-f0-9]{64}$/.test(record.data.extractor_semantic_policy_hash ?? "")
-    ) {
-      fail(`${fileName}: feature provenance versions incomplete`);
-    }
-    if (!isUtc(record.data.target?.start) || !isUtc(record.data.target?.end)) {
-      fail(`${fileName}: feature target timestamps must be UTC`);
-    }
-    assertProbability(record.data.data_quality?.provider_coverage, `${fileName}: provider coverage`);
-    if (!Array.isArray(record.data.coverage_assertion_refs)) {
-      fail(`${fileName}: feature coverage assertion refs missing`);
-    }
-    const missingFeatures = FEATURE_NAMES.filter(
-      (name) => !Object.hasOwn(record.data.features ?? {}, name),
-    );
-    if (missingFeatures.length > 0) {
-      fail(
-        `${fileName}: feature vector is missing ${missingFeatures.join(", ")}`,
-      );
-    }
-    for (const removed of ["community_momentum", "community_disagreement"]) {
-      if (Object.hasOwn(record.data.features ?? {}, removed)) {
-        fail(`${fileName}: removed community feature ${removed} is still present`);
-      }
-    }
-    if (!Array.isArray(record.data.coverage_assertion_refs)) {
-      fail(`${fileName}: feature coverage assertion refs missing`);
-    }
-    for (const [index, ref] of record.data.coverage_assertion_refs.entries()) {
-      if (
-        typeof ref.assertion_id !== "string" ||
-        ref.assertion_id.length === 0 ||
-        !Number.isInteger(ref.revision) ||
-        ref.revision < 1
-      ) {
-        fail(`${fileName}: feature coverage assertion ref ${index} invalid`);
-      }
+    const names = Object.keys(record.data.features ?? {});
+    if (names.length !== FEATURE_NAMES.length || FEATURE_NAMES.some((name) => !names.includes(name))) {
+      fail(`${fileName}: feature vector must contain exactly the model inputs`);
     }
   }
-  if (record.record_type === "prediction") validatePrediction(record, fileName);
-  if (record.record_type === "prediction_settlement") {
-    if (!isUtc(record.data.settled_at)) fail(`${fileName}: settlement time must be UTC`);
-    validateRange(record.data.window, `${fileName}: settlement window`);
-    if (!["positive", "negative", "pending", "censored"].includes(record.data.status)) {
-      fail(`${fileName}: settlement status invalid`);
+  if (record.record_type === "prediction") {
+    if (
+      record.producer.name !== FORECAST_PRODUCER_NAME ||
+      record.producer.version !== FORECAST_PRODUCER_VERSION ||
+      record.data.model.family !== "ridge_logistic_discrete_time_hazard" ||
+      !record.data.model.version.startsWith(`${MODEL_VERSION_PREFIX}-`) ||
+      !/^sha256:[a-f0-9]{64}$/.test(record.data.model.model_contract_hash)
+    ) {
+      fail(`${fileName}: prediction model or producer version is stale`);
     }
   }
 }

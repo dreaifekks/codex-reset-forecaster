@@ -2030,22 +2030,6 @@ test("copied posts collapse within one wave without granting authority or erasin
   assert.equal(signals[1].data.provenance.derivation, "summarizes");
   assert.notEqual(signals[0].data.provenance.independence_group_id, signals[2].data.provenance.independence_group_id);
 
-  const vector = featureVectorAt({
-    targetTime: "2026-07-01T02:00:00Z",
-    knowledgeCutoff: "2026-07-01T02:00:00Z",
-    signals,
-    outcomes: [],
-    observations: [first, copied],
-    coverageIntervals: [{ start: "2026-07-01T00:00:00Z", end: "2026-07-01T03:00:00Z" }],
-    confirmationIdentityIds: confirmationIdentityIds(config),
-    outcomeCoverageProviders: new Set(["x"]),
-  });
-  assert.equal(
-    vector.features.official_reset_activity_decay,
-    0,
-    "a derivative copy must not inherit the configured authority's weight",
-  );
-
   assert.equal((await normalizeNewObservations(store, config)).normalized, 0);
   const replacement = makeObservation({
     id: "root",

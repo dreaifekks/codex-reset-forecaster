@@ -4,8 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/core/config.mjs";
-import { confirmationIdentityIds } from "../src/core/sources.mjs";
-import { featureVectorAt } from "../src/model/features.mjs";
 import { processRecords } from "../src/pipeline/run.mjs";
 import { selectCurrentSignals } from "../src/pipeline/signal-selection.mjs";
 import { XSearchGatewayProvider } from "../src/providers/x-search-gateway-provider.mjs";
@@ -100,20 +98,6 @@ for (const upstreamProvider of ["grokbuild", "hermes"]) {
     assert.equal(processing.normalized.normalized, 1);
     assert.equal(processing.normalized.records[0].data.provenance.source_role, "aggregator");
     assert.equal(processing.outcomes.adjudicated, 0);
-    const vector = featureVectorAt({
-      targetTime: new Date("2026-07-22T21:00:00Z"),
-      knowledgeCutoff: now,
-      signals: await store.all("normalized_signal"),
-      outcomes: await store.all("reset_outcome"),
-      observations: await store.all("raw_observation"),
-      confirmationIdentityIds: confirmationIdentityIds(config),
-    });
-    assert.equal(
-      vector.features.official_reset_activity_decay,
-      0,
-      "summary must not receive original-author authority",
-    );
-    assert.ok(vector.features.independent_support_decay > 0, "summary may remain a context feature");
     const raw = await store.all("raw_observation");
     const summary = raw.find((record) => record.data.provider_item_id.includes("2075657265508647008"));
     assert.equal(summary.data.content.media_type, "application/vnd.x-search-summary+text");

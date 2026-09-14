@@ -7,7 +7,7 @@
   "created_at": "2026-07-23T07:00:00Z",
   "producer": {
     "name": "as-of-feature-builder",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "data": {
@@ -34,22 +34,14 @@
       "weekly_cos_2": 0.65,
       "weekly_sin_3": 0.2,
       "weekly_cos_3": 0.98,
-      "renewal_periodic_kernel": 1.46,
       "daily_sin_1": 0.97,
       "daily_cos_1": -0.26,
       "daily_sin_2": -0.5,
       "daily_cos_2": -0.87,
-      "log_hours_since_reset": 3.21,
-      "since_reset_0_6h": 0,
-      "since_reset_18_36h": 1,
-      "recent_reset_density_7d": 1.18,
-      "official_reset_intent_decay": 0.62,
-      "official_reset_activity_decay": 0.7,
-      "official_incident_decay": 0.2,
+      "renewal_periodic_kernel": 1.46,
       "asserted_time_overlap": 0,
-      "competitor_model_release_decay": 0.08,
-      "provider_coverage": 1,
-      "provider_health": 1
+      "official_incident_decay": 0.2,
+      "competitor_model_release_decay": 0.08
     },
     "data_quality": {
       "provider_coverage": 1,

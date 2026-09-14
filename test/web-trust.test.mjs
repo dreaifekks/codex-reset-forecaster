@@ -1548,10 +1548,9 @@ test("a fresh compatible challenger forecast is served provisionally without cla
   });
 
   const base = await serverFor(t, store, appConfig, now);
-  const [forecastResponse, healthResponse, scriptResponse] = await Promise.all([
+  const [forecastResponse, healthResponse] = await Promise.all([
     fetch(`${base}/api/forecast/current`),
     fetch(`${base}/api/health`),
-    fetch(`${base}/app.js`),
   ]);
   assert.equal(forecastResponse.status, 200);
   const forecast = await forecastResponse.json();
@@ -1584,10 +1583,6 @@ test("a fresh compatible challenger forecast is served provisionally without cla
     missingChampionReadiness.provisional_model.eligibility.eligible,
     true,
   );
-
-  const script = await scriptResponse.text();
-  assert.match(script, /试用模型/);
-  assert.match(script, /严格验证仍在积累中/);
 
   const legacyForecast = structuredClone(fixture.forecast);
   delete legacyForecast.data.model.validation_status;

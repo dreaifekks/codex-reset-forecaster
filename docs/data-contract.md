@@ -126,6 +126,11 @@ event.
 
 An immutable feature vector with its forecast target, knowledge cutoff, feature
 schema version, provider coverage, and exact source record references.
+Writer `as-of-feature-builder/0.3.3` stores only the 14 active model inputs in
+`features`; quality remains in `data_quality`. The writer version is part of the
+snapshot identity so replaying an old cutoff cannot overwrite or collide with an
+older payload. Existing snapshots retain their original fields and remain
+readable. The model feature schema and numerical inputs are unchanged.
 
 ### `prediction`
 

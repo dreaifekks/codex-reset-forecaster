@@ -476,10 +476,9 @@ test("real Tibo mode aliases activate a three-hour scheduled authority window", 
   assert.equal(conditioned.metadata.applied, true);
   assert.equal(conditioned.metadata.phase, "scheduled");
   assert.equal(conditioned.metadata.signal_ref.record_id, signal.record_id);
-  assert.ok(vector.features.official_reset_intent_decay > 0);
   assert.equal(vector.features.asserted_time_overlap, 0);
   assert.equal(FEATURE_NAMES.includes("official_reset_intent_decay"), false);
-  assert.equal(featuresToArray(vector).length, FEATURE_NAMES.length);
+  assert.equal(featuresToArray(vector.features).length, FEATURE_NAMES.length);
   assert.equal(
     isResetTimingSignalActiveAt(signal, {
       targetTime: new Date("2026-07-28T03:27:37.869Z"),
@@ -692,7 +691,6 @@ test("asserted reset intent expires when its timing window ends", async () => {
     authorityTimingPolicy: config.model.authority_timing,
   });
 
-  assert.equal(vector.features.official_reset_intent_decay, 0);
   assert.equal(vector.features.asserted_time_overlap, 0);
 });
 
@@ -783,7 +781,6 @@ test("a confirmed reset consumes its announcement and anchors the next cycle", a
     true,
     "a held-out completion cannot consume the scheduled signal during walk-forward",
   );
-  assert.equal(vector.features.official_reset_intent_decay, 0);
   assert.equal(vector.features.asserted_time_overlap, 0);
   assert.ok(anchor);
   assert.equal(
@@ -866,7 +863,6 @@ test("account-scoped timing evidence cannot affect a platform target", async () 
   });
 
   assert.equal(conditioned.metadata.applied, false);
-  assert.equal(vector.features.official_reset_intent_decay, 0);
   assert.equal(vector.features.asserted_time_overlap, 0);
 });
 

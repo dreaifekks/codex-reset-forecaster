@@ -122,16 +122,7 @@ async function referencedFeatureSnapshots(store, predictions) {
   const prediction = latestPredictionFromRevisions(predictions);
   const refs = prediction?.data?.feature_snapshot_refs;
   if (!Array.isArray(refs)) return [];
-  if (typeof store.allByRefs === "function") {
-    return store.allByRefs("feature_snapshot", refs);
-  }
-  const snapshots = await store.all("feature_snapshot", { latestOnly: false });
-  const snapshotsByRef = new Map(
-    snapshots.map((snapshot) => [exactRevisionKey(snapshot), snapshot]),
-  );
-  return refs
-    .map((ref) => snapshotsByRef.get(exactRevisionKey(ref)))
-    .filter(Boolean);
+  return store.allByRefs("feature_snapshot", refs);
 }
 
 function normalizedSnapshotEntries(entries) {

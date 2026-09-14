@@ -38,6 +38,8 @@ import {
   postOutcomeEvidenceWeight,
 } from "./evidence-epoch.mjs";
 
+export const FEATURE_SNAPSHOT_PRODUCER_VERSION = "0.3.3";
+
 export const FEATURE_NAMES = [
   "weekly_sin_1",
   "weekly_cos_1",
@@ -285,16 +287,10 @@ export function featureVectorAt({
   const latestOutcome = knownOutcomes
     .filter((outcome) => rangeMidpoint(outcome.data.occurred_time_range) < target)
     .at(-1);
-  const hoursSinceReset = latestOutcome
-    ? Math.max(0, differenceInHours(target, rangeMidpoint(latestOutcome.data.occurred_time_range)))
-    : 24 * 30;
   const position = hourOfWeek(target);
   const angle = (2 * Math.PI * position) / 168;
   const dailyAngle = (2 * Math.PI * target.getUTCHours()) / 24;
   const resetKernel = historicalResetKernel(target, knownOutcomes);
-  const recentResetAges = knownOutcomes
-    .map((outcome) => differenceInHours(target, rangeMidpoint(outcome.data.occurred_time_range)))
-    .filter((age) => age >= 0 && age <= 24 * 7);
   const recent = knownSignals.flatMap((signal) => {
     const eventTime = signalEventTime(signal, observationsByExactRef, observationsById);
     if (!eventTime) return [];
@@ -339,19 +335,6 @@ export function featureVectorAt({
   const health = providerHealth(latestHealthRecord, coverage);
 
   const supports = recent.filter(({ signal }) => signal.data.claim.stance === "supports");
-  const contradicts = recent.filter(({ signal }) => signal.data.claim.stance === "contradicts");
-  const developmentAges = recent
-    .filter(({ signal }) => signal.data.claim.event_type === "development_activity")
-    .map(({ age, weight }) => ({ age, weight }));
-  const development4h = developmentAges
-    .filter(({ age }) => age <= 4)
-    .reduce((sum, { weight }) => sum + weight, 0);
-  const developmentPrior68h = developmentAges
-    .filter(({ age }) => age > 4 && age <= 72)
-    .reduce((sum, { weight }) => sum + weight, 0);
-  const inResetAgeRange = (minimum, maximum = Infinity) =>
-    hoursSinceReset >= minimum && hoursSinceReset < maximum ? 1 : 0;
-
   const features = {
     weekly_sin_1: Math.sin(angle),
     weekly_cos_1: Math.cos(angle),
@@ -364,35 +347,6 @@ export function featureVectorAt({
     daily_cos_1: Math.cos(dailyAngle),
     daily_sin_2: Math.sin(2 * dailyAngle),
     daily_cos_2: Math.cos(2 * dailyAngle),
-    weekend: [0, 6].includes(target.getUTCDay()) ? 1 : 0,
-    log_hours_since_reset: Math.log1p(Math.min(hoursSinceReset, 24 * 60)),
-    since_reset_0_6h: inResetAgeRange(0, 6),
-    since_reset_6_18h: inResetAgeRange(6, 18),
-    since_reset_18_36h: inResetAgeRange(18, 36),
-    since_reset_36_72h: inResetAgeRange(36, 72),
-    since_reset_72_168h: inResetAgeRange(72, 168),
-    since_reset_over_168h: inResetAgeRange(168),
-    recent_reset_density_7d: recentResetAges.reduce(
-      (sum, age) => sum + exponentialDecay(age, 72),
-      0,
-    ),
-    official_reset_intent_decay: supports.reduce((sum, { signal, age, weight }) =>
-      sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
-        signal.data.provenance.source_role !== "aggregator" &&
-        isPrimaryStatement(signal) &&
-        ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type) &&
-        ["scheduled", "expected"].includes(signal.data.claim.phase) &&
-        activeResetTimingSignals.has(signal)
-        ? weight * exponentialDecay(age, 24)
-        : 0), 0),
-    official_reset_activity_decay: supports.reduce((sum, { signal, age, weight }) =>
-      sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
-        signal.data.provenance.source_role !== "aggregator" &&
-        isPrimaryStatement(signal) &&
-        ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type) &&
-        ["started", "completed"].includes(signal.data.claim.phase)
-        ? weight * exponentialDecay(age, 18)
-        : 0), 0),
     official_incident_decay: supports.reduce((sum, { signal, age, weight }) =>
       sum + (confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
         signal.data.provenance.source_role !== "aggregator" &&
@@ -400,16 +354,6 @@ export function featureVectorAt({
         ["incident", "capacity_restore"].includes(signal.data.claim.event_type)
         ? weight * exponentialDecay(age, 24)
         : 0), 0),
-    independent_support_decay: supports.reduce((sum, { signal, age, weight }) => {
-      const isConfirmationReset = signal.data.provenance.source_role !== "aggregator" &&
-        confirmationIdentityIds.has(signal.data.provenance.source_identity_id) &&
-        ["quota_reset", "quota_refill"].includes(signal.data.claim.event_type);
-      return sum + (isConfirmationReset ? 0 : weight * exponentialDecay(age, 18));
-    }, 0),
-    independent_contradict_decay: contradicts.reduce(
-      (sum, { age, weight }) => sum + weight * exponentialDecay(age, 18),
-      0,
-    ),
     asserted_time_overlap: knownSignals.reduce((sum, signal) => {
       if (signal.data.claim.stance !== "supports") return sum;
       if (!matchesTargetScope(signal, targetScope)) return sum;
@@ -448,10 +392,6 @@ export function featureVectorAt({
         : 1;
       return sum + authority * weight;
     }, 0),
-    openai_release_decay: recent.reduce((sum, { signal, age, weight }) =>
-      sum + (signal.data.claim.event_type === "release" && signal.data.claim.scope.vendor === "openai"
-        ? weight * exponentialDecay(age, 36)
-        : 0), 0),
     competitor_model_release_decay: Math.max(0, ...recent.map(({ signal, age, weight }) =>
       ["competitor_model_release", "competitor_limit_change"].includes(
         signal.data.claim.event_type,
@@ -463,15 +403,6 @@ export function featureVectorAt({
       signal.data.claim.scope.vendor === "other"
         ? weight * exponentialDecay(age, 36)
         : 0)),
-    development_activity_anomaly:
-      Math.log1p(development4h) - Math.log1p(developmentPrior68h / 17),
-    incident_decay: recent.reduce((sum, { signal, age, weight }) =>
-      sum + (["incident", "capacity_restore"].includes(signal.data.claim.event_type)
-        ? weight * exponentialDecay(age, 18)
-        : 0), 0),
-    provider_coverage: coverage,
-    provider_health: health,
-    source_delay_hours: Math.min(delayHours, 168),
   };
 
   return {
@@ -555,9 +486,10 @@ export async function buildForecastFeatureSnapshots(store, config, {
     });
     const candidate = createRecord({
       recordType: "feature_snapshot",
-      naturalKey: `${config.config_hash}:${config.feature_schema_version}:${toUtcIso(cutoff)}:${toUtcIso(targetStart)}`,
+      // A writer revision changes the stored payload, not the model input contract.
+      naturalKey: `${config.config_hash}:${config.feature_schema_version}:${toUtcIso(cutoff)}:${toUtcIso(targetStart)}:${FEATURE_SNAPSHOT_PRODUCER_VERSION}`,
       createdAt,
-      producer: producer("as-of-feature-builder", "0.3.2", {
+      producer: producer("as-of-feature-builder", FEATURE_SNAPSHOT_PRODUCER_VERSION, {
         config_hash: config.config_hash,
         feature_schema_version: config.feature_schema_version,
         taxonomy_version: config.taxonomy_version,
@@ -596,25 +528,9 @@ export async function buildForecastFeatureSnapshots(store, config, {
     });
     candidates.push(candidate);
   }
-  if (typeof store.appendOrReuseMany === "function") {
-    const results = await store.appendOrReuseMany(candidates);
-    return {
-      snapshots: results.map((result) => result.record),
-      inserted: results.filter((result) => result.inserted).length,
-    };
-  }
-  const existingSnapshots = await store.all("feature_snapshot");
-  const existingById = new Map(
-    existingSnapshots.map((snapshot) => [snapshot.record_id, snapshot]),
-  );
-  const records = candidates.map((candidate) =>
-    existingById.get(candidate.record_id) ?? candidate
-  );
-  const results = await store.appendMany(
-    records.filter((record) => !existingById.has(record.record_id)),
-  );
+  const results = await store.appendOrReuseMany(candidates);
   return {
-    snapshots: records,
+    snapshots: results.map((result) => result.record),
     inserted: results.filter((result) => result.inserted).length,
   };
 }

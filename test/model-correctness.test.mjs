@@ -1237,8 +1237,6 @@ test("reposts never inherit an authority source's reset or incident weight", () 
     ...common,
     signals: [resetRepost],
   }).features;
-  assert.ok(primaryResetFeatures.official_reset_intent_decay > 0);
-  assert.equal(repostResetFeatures.official_reset_intent_decay, 0);
   assert.equal(primaryResetFeatures.asserted_time_overlap, 1);
   assert.equal(repostResetFeatures.asserted_time_overlap, 0.35);
 });
@@ -1258,7 +1256,7 @@ test("coverage asserted in the future cannot alter an older feature cutoff", () 
   const baseline = featureVectorAt({
     ...args,
     coverageAssertionRecords: [],
-  }).features;
+  }).dataQuality;
   const withFutureAssertion = featureVectorAt({
     ...args,
     coverageAssertionRecords: [{
@@ -1270,14 +1268,14 @@ test("coverage asserted in the future cannot alter an older feature cutoff", () 
       end: "2026-07-21T00:00:00.000Z",
       asserted_at: "2026-07-22T00:00:00.000Z",
     }],
-  }).features;
+  }).dataQuality;
   assert.equal(
     withFutureAssertion.provider_coverage,
     baseline.provider_coverage,
   );
   assert.equal(
-    withFutureAssertion.source_delay_hours,
-    baseline.source_delay_hours,
+    withFutureAssertion.max_delay_seconds,
+    baseline.max_delay_seconds,
   );
 
   const firstRevision = {
@@ -1299,7 +1297,7 @@ test("coverage asserted in the future cannot alter an older feature cutoff", () 
   const beforeRevocation = featureVectorAt({
     ...args,
     coverageAssertionRecords: [firstRevision, futureRevocation],
-  }).features;
+  }).dataQuality;
   assert.equal(beforeRevocation.provider_coverage, 1);
   const visibleRevocation = featureVectorAt({
     ...args,
@@ -1307,7 +1305,7 @@ test("coverage asserted in the future cannot alter an older feature cutoff", () 
       firstRevision,
       { ...futureRevocation, asserted_at: "2026-07-20T11:00:00.000Z" },
     ],
-  }).features;
+  }).dataQuality;
   assert.equal(visibleRevocation.provider_coverage, 0.1);
 });
 
@@ -1352,7 +1350,7 @@ test("feature selection filters extractor rollback revisions before selecting th
     confirmationIdentityIds: new Set(["person_tibo_sottiaux"]),
     expectedExtractor,
   });
-  assert.ok(vector.features.official_reset_intent_decay > 0);
+  assert.deepEqual(vector.sourceRecords, [valid]);
   assert.equal(vector.features.competitor_model_release_decay, 0);
 });
 
@@ -1875,6 +1873,10 @@ test("feature construction consumes completed lineage and discounts only older i
     eventType: "release",
     phase: "completed",
     role: "employee",
+    assertedRange: {
+      start: "2026-07-29T06:00:00.000Z",
+      end: "2026-07-29T07:00:00.000Z",
+    },
   });
   const common = {
     targetTime: "2026-07-29T06:00:00.000Z",
@@ -1913,23 +1915,10 @@ test("feature construction consumes completed lineage and discounts only older i
     observations: [completionSource, newerSource],
   }).features;
 
-  assert.ok(olderBaseline.independent_support_decay > 0);
-  assert.ok(
-    Math.abs(
-      olderAfterOutcome.independent_support_decay -
-        olderBaseline.independent_support_decay * 0.5,
-    ) < 1e-12,
-  );
   assert.equal(olderBaseline.asserted_time_overlap, 0.35);
   assert.equal(olderAfterOutcome.asserted_time_overlap, 0.175);
-  assert.ok(newerBaseline.independent_support_decay > 0);
-  assert.ok(
-    Math.abs(
-      newerAfterOutcome.independent_support_decay -
-        newerBaseline.independent_support_decay,
-    ) < 1e-12,
-  );
-  assert.equal(olderAfterOutcome.official_reset_activity_decay, 0);
+  assert.equal(newerBaseline.asserted_time_overlap, 0.35);
+  assert.equal(newerAfterOutcome.asserted_time_overlap, 0.35);
 });
 
 test("the model design includes smoothed weekly and daily Fourier baselines", () => {
@@ -2159,9 +2148,9 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
     async readState(_name, fallback) {
       return fallback;
     },
-    async appendMany(records) {
+    async appendOrReuseMany(records) {
       appendedSnapshots.push(...records);
-      return records.map(() => ({ inserted: true }));
+      return records.map((record) => ({ record, inserted: true }));
     },
     async append(record) {
       appended = record;
@@ -2180,7 +2169,7 @@ test("forecast preserves its cutoff and rolls a crossed horizon forward before p
   assert.ok(Date.parse(appended.data.issued_at) <= Date.parse(appended.data.horizon.start));
   assert.equal(appended.data.slots.length, 168);
   assert.equal(appended.data.post_outcome_refractory.status, "disabled");
-  assert.equal(appendedSnapshots[0].producer.version, "0.3.2");
+  assert.deepEqual(Object.keys(appendedSnapshots[0].data.features).sort(), [...FEATURE_NAMES].sort());
   const firstPrediction = appended;
   const integrity = assessPredictionIntegrity({
     prediction: firstPrediction,

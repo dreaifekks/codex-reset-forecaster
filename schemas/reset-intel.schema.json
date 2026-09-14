@@ -1141,6 +1141,7 @@
           }
         },
         "features": {
+          "description": "Writer 0.3.3 stores the active model inputs only. Older immutable snapshots may also contain unused diagnostic features.",
           "type": "object",
           "additionalProperties": { "type": ["number", "integer", "boolean", "null"] }
         },
