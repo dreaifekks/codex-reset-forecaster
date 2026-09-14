@@ -106,6 +106,7 @@ export function buildResetReviewBundle(anchor, observations, config, cutoff) {
 export function resetReviewEvidenceValid(review, anchor, observations, config) {
   if (!review || review.policy_version !== RESET_REVIEW_POLICY || review.decision !== "confirmed" ||
       review.policy_hash !== hashLabel(resetReviewPolicy(config)) ||
+      review.model !== config.extractor.semantic_assistance.model || !Number.isFinite(review.confidence) ||
       !exact(anchor) ||
       !confirmationIdentityIds(config).has(anchor.data.author.identity_id) ||
       review.confidence < config.extractor.reset_review.minimum_confidence || review.confidence > 1 ||
@@ -121,6 +122,7 @@ export function resetReviewEvidenceValid(review, anchor, observations, config) {
   const evidenceByRef = new Map(bundle.evidence.map((item) => [key(item.observation_ref), item]));
   const cited = [];
   for (const citation of review.citations) {
+    if (!citation || typeof citation !== "object" || !citation.observation_ref) return false;
     const evidence = evidenceByRef.get(key(citation.observation_ref ?? {}));
     if (!evidence || !evidence.exact || typeof citation.quote !== "string" || citation.quote.length < 3 ||
         !evidence.text.includes(citation.quote) || !["completion", "scope", "product"].includes(citation.purpose)) return false;
@@ -142,6 +144,7 @@ export function resetReviewEvidenceValid(review, anchor, observations, config) {
         item.quote.toLowerCase().includes(subject) && /\b(?:rollout|rolling out|available|availability|across|offered|access)\b/i.test(item.quote)))) return false;
   // Explicit contradictory authority evidence in the window cannot be voted away.
   if (bundle.evidence.some((item) => confirmationIdentityIds(config).has(item.author) && item.exact &&
+      Math.abs(Date.parse(item.published_at) - Date.parse(anchor.data.published_at)) <= config.extractor.reset_review.window_hours * HOUR &&
       /\b(?:reset|refill)\b[^.!?\n]{0,40}\b(?:cancelled|canceled|not completed|not propagated)\b|\b(?:have not|haven.t|will not|won.t)\s+reset\b/i.test(item.text))) return false;
   return true;
 }
@@ -227,13 +230,18 @@ export async function reviewResetClaims(store, config, { now = new Date(), asses
       responseText = content;
       parsed = JSON.parse(content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
       if (!["confirmed", "pending"].includes(parsed.decision) || !Array.isArray(parsed.citations) || parsed.citations.length > 8 ||
+          parsed.citations.some((citation) => !citation || typeof citation !== "object" ||
+            typeof citation.observation_ref?.record_id !== "string" || !Number.isInteger(citation.observation_ref?.revision) ||
+            citation.observation_ref.revision < 1 || typeof citation.quote !== "string" ||
+            !["completion", "scope", "product"].includes(citation.purpose)) ||
           !Number.isFinite(parsed.confidence) || parsed.confidence < 0 || parsed.confidence > 1 ||
           typeof parsed.subject !== "string" || parsed.subject.length > 100 || typeof parsed.reason !== "string") throw new Error("invalid_review_response");
     } catch (error) { parsed = null; failure = String(error.message).slice(0, 240); }
     const completedAt = new Date(Math.max(Date.parse(cutoff), new Date(clock()).getTime())).toISOString();
     const review = { policy_version: RESET_REVIEW_POLICY, policy_hash: hashLabel(resetReviewPolicy(config)),
       model: config.extractor.semantic_assistance.model, decision: parsed?.decision ?? "pending", subject: parsed?.subject ?? "",
-      confidence: parsed?.confidence ?? 0, reason: parsed?.reason?.slice(0, 1000) ?? failure,
+      confidence: parsed?.confidence ?? 0, reason: parsed?.reason?.slice(0, 1000) ??
+        (failure === "awaiting_review_budget" ? "等待下一轮语义分析。" : "语义分析暂不可用，等待重试。"),
       knowledge_cutoff: cutoff, completed_at: completedAt, input_hash: inputHash, response_hash: parsed ? hashLabel(parsed) : null,
       citations: parsed?.citations ?? [], window: halfOpenRange(addHours(floorHour(anchor.data.published_at), -policy.window_hours), addHours(floorHour(anchor.data.published_at), 1), "unknown", "unresolved authority reset window") };
     if (!resetReviewEvidenceValid(review, anchor, observations, config)) {
@@ -245,7 +253,10 @@ export async function reviewResetClaims(store, config, { now = new Date(), asses
         bundle.evidence.some((item) => key(item.observation_ref) === key(citation.observation_ref ?? {}) && item.text.includes(citation.quote)))
         .map(({ observation_ref, quote, purpose }) => ({ observation_ref: { record_id: observation_ref.record_id, revision: observation_ref.revision }, quote, purpose }));
     }
-    await store.writeBlob("semantic-reset-reviews", `${inputHash}:${completedAt}`, { bundle, response: parsed, response_text: responseText, review });
+    review.citations = review.citations.map(({ observation_ref, quote, purpose }) => ({
+      observation_ref: { record_id: observation_ref.record_id, revision: observation_ref.revision }, quote, purpose,
+    }));
+    await store.writeBlob("semantic-reset-reviews", `${inputHash}:${completedAt}`, { bundle, response: parsed, response_text: responseText, failure, review });
     const priorSignal = signals.find((signal) => signal.record_id === makeRecordId("sig", `authority-reset-review:${statusId(anchor)}:${review.policy_hash}`));
     const signal = reviewSignal(anchor, review, config, priorSignal);
     await store.append(signal);

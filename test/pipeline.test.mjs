@@ -698,7 +698,7 @@ test("covered end-to-end pipeline passes the meaningful 80% gate and serves the 
   assert.match(appScript, /实时来源正常/);
   assert.match(appScript, /负标签按审计延迟成熟/);
   assert.doesNotMatch(appScript, /data_quality\?\.score/);
-  assert.match(page, /app\.js\?v=read-model-1/);
+  assert.match(page, /app\.js\?v=reset-review-1/);
   assert.match(page, /styles\.css\?v=seo-i18n-1/);
   assert.match(
     page,

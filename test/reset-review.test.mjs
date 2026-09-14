@@ -162,3 +162,14 @@ test("statements beyond the API budget are pending immediately", async (t) => {
   await reviewResetClaims(store, config, { now: "2026-09-14T14:10:00Z", clock: () => NOW, assessor });
   assert.equal(calls, 2, "the queued statement need not wait for a failed-attempt cooldown");
 });
+
+test("malformed model citations fail closed without crashing the pipeline", async (t) => {
+  const { config, store, assessment } = await setup(t);
+  const response = assessment(); response.citations = [null];
+  const result = await reviewResetClaims(store, config, { now: NOW, clock: () => NOW,
+    assessor: { requestContent: async () => JSON.stringify(response) } });
+  assert.equal(result.pending, 1);
+  const [signal] = await store.all("normalized_signal");
+  assert.deepEqual(signal.data.extraction.reset_review.citations, []);
+  assert.equal(signal.data.provenance.feature_eligible, false);
+});

@@ -197,6 +197,17 @@ test("latest eligible completion suppresses next-event hazard without creating a
   assert.deepEqual(baseEntries.map((entry) => entry.hazard), Array(4).fill(0.99));
 });
 
+test("Date forecast cutoffs preserve millisecond availability boundaries", async () => {
+  const config = await loadConfig({ configPath: "config/tibo-authority-live.json" });
+  const evidence = eligibleCompletion(config, { knownAt: "2026-07-29T04:10:00.500Z" });
+  const input = { hazardEntries: hazards("2026-07-29T05:00:00.000Z", 4),
+    signals: [evidence.signal], observations: [evidence.source], outcomes: [evidence.outcome], config };
+  assert.equal(conditionPostOutcomeRefractoryHazards({ ...input,
+    knowledgeCutoff: new Date("2026-07-29T04:10:00.750Z") }).metadata.applied, true);
+  assert.equal(conditionPostOutcomeRefractoryHazards({ ...input,
+    knowledgeCutoff: new Date("2026-07-29T04:10:00.499Z") }).metadata.status, "no_eligible_outcome");
+});
+
 test("unknown, excluded, and fully recovered outcomes do not alter hazards", async () => {
   const config = await loadConfig({
     configPath: "config/tibo-authority-live.json",

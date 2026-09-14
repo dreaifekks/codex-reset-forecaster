@@ -1,5 +1,5 @@
 import { recordRef } from "../core/records.mjs";
-import { clamp, HOUR_MS } from "../core/time.mjs";
+import { clamp, HOUR_MS, timestampMillis } from "../core/time.mjs";
 import { AS_OF_MODE, outcomeAvailableAt } from "./as-of.mjs";
 import { latestRecurrenceAnchorAsOf } from "./authority-timing.mjs";
 
@@ -203,7 +203,7 @@ export function conditionPostOutcomeRefractoryHazards({
     );
   }
   const availableAt = outcomeAvailableAt(outcome, asOfMode);
-  if (Date.parse(availableAt) > Date.parse(knowledgeCutoff)) {
+  if (timestampMillis(availableAt) > timestampMillis(knowledgeCutoff)) {
     throw new Error(
       "Post-outcome refractory outcome became available after the forecast cutoff",
     );
