@@ -2,6 +2,7 @@ import { hashLabel, makeRecordId } from "../core/hash.mjs";
 import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { extractorContract, matchesExtractorContract } from "../core/extractor-contract.mjs";
 import { confirmationIdentityIds, sourceRoleForIdentity } from "../core/sources.mjs";
+import { hasNarrowAuthorityResetScope } from "../core/authority-reply.mjs";
 import { floorHour, addHours, halfOpenRange } from "../core/time.mjs";
 import { selectCurrentSignals } from "../pipeline/signal-selection.mjs";
 import { OpenAICompatibleSemanticTimingAssessor } from "./openai-compatible-chat.mjs";
@@ -19,7 +20,7 @@ const LIMITED = /\bbanked\b|\bvouchers?\b|\b(?:only|just)\s+(?:pro|plus|business
 const CONTEXT_COMPLETION = /\b(?:done|completed|finished|all set)\b/i;
 export const ownResetCompletion = (value, nativeResetContext = false) =>
   ((RESET.test(value) && COMPLETED.test(value)) || (nativeResetContext && CONTEXT_COMPLETION.test(value))) &&
-  !FUTURE_OR_DENIED.test(value) && !LIMITED.test(value);
+  !FUTURE_OR_DENIED.test(value) && !LIMITED.test(value) && !hasNarrowAuthorityResetScope(value);
 
 export const RESET_REVIEW_PROMPT = [
   "Review one exact authority reset statement using the supplied evidence window and older product background.",
@@ -136,6 +137,7 @@ export function resetReviewEvidenceValid(review, anchor, observations, config) {
     cited.find((item) => item.purpose === "completion" && key(item.observation_ref) === key(recordRef(anchor)) &&
       /\b(?:everyone|everybody|all users|all paid)\b/i.test(item.quote));
   if (!scope || LIMITED.test(scope.evidence.text)) return false;
+  if (scope.evidence.text.split(/\n+|(?<=[.!?])\s+/).some((segment) => RESET.test(segment) && hasNarrowAuthorityResetScope(segment))) return false;
   const subject = String(review.subject ?? "").trim().toLowerCase();
   const productNamed = /\bcodex\b/i.test(scope.quote);
   if (!productNamed && (subject.length < 3 ||

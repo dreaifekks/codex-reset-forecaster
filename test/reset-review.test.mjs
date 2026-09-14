@@ -110,6 +110,12 @@ test("AI cannot invent completion, cite summaries, or override a future/limited 
   }
   const summaries = records.map((r) => { const copy = structuredClone(r); copy.data.content.media_type = "application/vnd.x-search-summary+text"; return copy; });
   assert.equal(resetReviewEvidenceValid(signal.data.extraction.reset_review, anchor, summaries, config), false);
+  for (const body of ["All reset for Pro users.", "All reset for users in the EU."]) {
+    const limited = structuredClone(anchor); limited.data.content.text = body;
+    const review = structuredClone(signal.data.extraction.reset_review);
+    review.citations[0].quote = body;
+    assert.equal(resetReviewEvidenceValid(review, limited, records.map(r => r.record_id === anchor.record_id ? limited : r), config), false);
+  }
 });
 
 test("API failure remains pending, does not create negatives, and waits six hours", async (t) => {
