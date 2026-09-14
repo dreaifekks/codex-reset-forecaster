@@ -1,11 +1,9 @@
 import { loadWebPushConfig } from "./config.mjs";
 import { createWebPushService } from "./service.mjs";
-import { createCoreStateAdapter } from "./state-store.mjs";
 
 export async function createWebPushRuntime({
   config: inputConfig = {},
   store = null,
-  stateAdapter = null,
   publicationLedger,
   sendNotification = null,
   webPushClient = null,
@@ -23,7 +21,7 @@ export async function createWebPushRuntime({
   }
   return createWebPushService({
     config,
-    stateAdapter: stateAdapter ?? createCoreStateAdapter(store, config.stateKey),
+    store,
     publicationLedger,
     sendNotification: sender,
     ...serviceOptions,

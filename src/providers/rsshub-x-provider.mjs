@@ -1,3 +1,4 @@
+import { readResponseText } from "../core/http.mjs";
 import { hashLabel } from "../core/hash.mjs";
 import { isFirstPersonFutureResetReply } from "../core/authority-reply.mjs";
 import {
@@ -863,6 +864,23 @@ export class RsshubXProvider {
     });
   }
 
+  async readFeedResponse(response, label) {
+    if (!response.ok) {
+      const body = await readResponseText(response, this.maximumResponseBytes);
+      throw new Error(`${label} returned ${response.status}: ${body.slice(0, 300)}`);
+    }
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (!contentType.includes("application/feed+json") && !contentType.includes("application/json")) {
+      throw new Error(`${label} returned non-JSON content`);
+    }
+    const text = await readResponseText(response, this.maximumResponseBytes);
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`${label} returned invalid JSON`);
+    }
+  }
+
   async fetchFeed(identity, previous = {}) {
     const url = rsshubXFeedUrl(this.config.base_url, identity.username, {
       count: this.count,
@@ -916,39 +934,7 @@ export class RsshubXProvider {
         },
       };
     }
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(
-        `RSSHub X feed @${identity.username} returned ${response.status}: ` +
-        body.slice(0, 300),
-      );
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (
-      !contentType.toLowerCase().includes("application/feed+json") &&
-      !contentType.toLowerCase().includes("application/json")
-    ) {
-      throw new Error(
-        `RSSHub X feed @${identity.username} returned non-JSON content`,
-      );
-    }
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (
-      Number.isFinite(declaredLength) &&
-      declaredLength > this.maximumResponseBytes
-    ) {
-      throw new RangeError(`RSSHub X feed @${identity.username} exceeds the response limit`);
-    }
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > this.maximumResponseBytes) {
-      throw new RangeError(`RSSHub X feed @${identity.username} exceeds the response limit`);
-    }
-    let payload;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error(`RSSHub X feed @${identity.username} returned invalid JSON`);
-    }
+    const payload = await this.readFeedResponse(response, `RSSHub X feed @${identity.username}`);
     const snapshot = parseFeedSnapshot(payload, {
       username: identity.username,
       identityId: identity.identity_id,
@@ -1004,45 +990,7 @@ export class RsshubXProvider {
       },
       signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(
-        `RSSHub X reply parent ${candidate.parentStatusId} returned ` +
-          `${response.status}: ${body.slice(0, 300)}`,
-      );
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (
-      !contentType.toLowerCase().includes("application/feed+json") &&
-      !contentType.toLowerCase().includes("application/json")
-    ) {
-      throw new Error(
-        `RSSHub X reply parent ${candidate.parentStatusId} returned non-JSON content`,
-      );
-    }
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (
-      Number.isFinite(declaredLength) &&
-      declaredLength > this.maximumResponseBytes
-    ) {
-      throw new RangeError(
-        `RSSHub X reply parent ${candidate.parentStatusId} exceeds the response limit`,
-      );
-    }
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > this.maximumResponseBytes) {
-      throw new RangeError(
-        `RSSHub X reply parent ${candidate.parentStatusId} exceeds the response limit`,
-      );
-    }
-    let payload;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error(
-        `RSSHub X reply parent ${candidate.parentStatusId} returned invalid JSON`,
-      );
-    }
+    const payload = await this.readFeedResponse(response, `RSSHub X reply parent ${candidate.parentStatusId}`);
     const route = response.headers.get("x-rsshub-route");
     if (route && route !== "/twitter/tweet/:id/status/:status/:original?") {
       throw new Error(

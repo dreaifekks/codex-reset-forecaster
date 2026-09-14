@@ -1,3 +1,6 @@
+import { readResponseText } from "../core/http.mjs";
+import { normalizeNotificationOutcomeRevisionGate } from "../notifications/subscription-policy.mjs";
+
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 function notificationCursor(value, label) {
@@ -15,93 +18,13 @@ function notificationCursor(value, label) {
 }
 
 function forecastOutcomeRevisionGate(value) {
-  const revisionToken = value?.revision_token ?? null;
-  const latestKnownAt = value?.latest_known_at ?? null;
-  const currentOutcomes = value?.current_outcomes ?? [];
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !(
-      (revisionToken === null && latestKnownAt === null) ||
-      (
-        typeof revisionToken === "string" &&
-        revisionToken.length > 0 &&
-        typeof latestKnownAt === "string" &&
-        latestKnownAt.endsWith("Z") &&
-        Number.isFinite(Date.parse(latestKnownAt))
-      )
-    ) ||
-    typeof value.closes_episode !== "boolean" ||
-    !Array.isArray(currentOutcomes)
-  ) {
-    throw new ForecasterApiError(
-      "Forecaster outcome revision gate is invalid",
-      { code: "INVALID_RESPONSE" },
-    );
+  try {
+    return normalizeNotificationOutcomeRevisionGate(value);
+  } catch {
+    throw new ForecasterApiError("Forecaster outcome revision gate is invalid", {
+      code: "INVALID_RESPONSE",
+    });
   }
-  const normalizedOutcomes = currentOutcomes.map((entry) => {
-    const range = entry?.occurred_time_range ?? null;
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      !entry.outcome_ref ||
-      typeof entry.outcome_ref.record_id !== "string" ||
-      entry.outcome_ref.record_id.length === 0 ||
-      !Number.isInteger(entry.outcome_ref.revision) ||
-      entry.outcome_ref.revision < 1 ||
-      typeof entry.outcome_token !== "string" ||
-      entry.outcome_token.length === 0 ||
-      typeof entry.status !== "string" ||
-      entry.status.length === 0 ||
-      typeof entry.known_at !== "string" ||
-      !entry.known_at.endsWith("Z") ||
-      !Number.isFinite(Date.parse(entry.known_at)) ||
-      !(
-        range === null ||
-        (
-          typeof range === "object" &&
-          !Array.isArray(range) &&
-          typeof range.start === "string" &&
-          range.start.endsWith("Z") &&
-          Number.isFinite(Date.parse(range.start)) &&
-          typeof range.end === "string" &&
-          range.end.endsWith("Z") &&
-          Number.isFinite(Date.parse(range.end)) &&
-          Date.parse(range.end) > Date.parse(range.start)
-        )
-      )
-    ) {
-      throw new ForecasterApiError(
-        "Forecaster outcome revision gate entry is invalid",
-        { code: "INVALID_RESPONSE" },
-      );
-    }
-    return {
-      outcome_ref: {
-        record_id: entry.outcome_ref.record_id,
-        revision: entry.outcome_ref.revision,
-      },
-      outcome_token: entry.outcome_token,
-      status: entry.status,
-      known_at: entry.known_at,
-      occurred_time_range: range === null ? null : {
-        start: range.start,
-        end: range.end,
-      },
-    };
-  }).sort((left, right) =>
-    left.outcome_ref.record_id.localeCompare(right.outcome_ref.record_id) ||
-    left.outcome_ref.revision - right.outcome_ref.revision ||
-    left.outcome_token.localeCompare(right.outcome_token)
-  );
-  return {
-    revision_token: revisionToken,
-    latest_known_at: latestKnownAt,
-    closes_episode: value.closes_episode,
-    current_outcomes: normalizedOutcomes,
-  };
 }
 
 function requestedForecastHorizons(value) {
@@ -250,39 +173,12 @@ function requestSignal(timeoutMs, externalSignal) {
 }
 
 async function responsePayload(response, maxBytes, request) {
-  const contentLength = Number(response.headers?.get?.("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    request.abort(new Error("response exceeds size limit"));
-    await response.body?.cancel?.().catch(() => {});
-    throw new RangeError("HTTP response exceeds the configured size limit");
-  }
   let text;
-  if (typeof response.body?.getReader === "function") {
-    const reader = response.body.getReader();
-    const chunks = [];
-    let bytes = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = Buffer.from(value);
-        bytes += chunk.length;
-        if (bytes > maxBytes) {
-          request.abort(new Error("response exceeds size limit"));
-          await reader.cancel().catch(() => {});
-          throw new RangeError("HTTP response exceeds the configured size limit");
-        }
-        chunks.push(chunk);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    text = Buffer.concat(chunks, bytes).toString("utf8");
-  } else {
-    text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > maxBytes) {
-      throw new RangeError("HTTP response exceeds the configured size limit");
-    }
+  try {
+    text = await readResponseText(response, maxBytes);
+  } catch (error) {
+    request.abort(error);
+    throw error;
   }
   try {
     return JSON.parse(text);

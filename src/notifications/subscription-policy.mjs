@@ -280,7 +280,7 @@ function normalizeSnapshot(value) {
   };
 }
 
-function normalizeOutcomeRevisionGate(value) {
+export function normalizeNotificationOutcomeRevisionGate(value) {
   if (!plainObject(value)) {
     throw new TypeError("outcomeRevisionGate is required");
   }
@@ -348,10 +348,6 @@ function normalizeOutcomeRevisionGate(value) {
     closes_episode: value.closes_episode,
     current_outcomes: normalizedOutcomes,
   };
-}
-
-export function normalizeNotificationOutcomeRevisionGate(value) {
-  return normalizeOutcomeRevisionGate(value);
 }
 
 function evaluationTimestamp(value) {
@@ -424,7 +420,7 @@ function validatePreviousState(value) {
         : latest,
     null,
   );
-  const normalizedGate = normalizeOutcomeRevisionGate({
+  const normalizedGate = normalizeNotificationOutcomeRevisionGate({
     revision_token: entriesLatestKnownAt === null
       ? null
       : candidate.outcome_revision_token ?? "migrated_outcome_gate",
@@ -524,7 +520,7 @@ export function transitionProbabilitySubscription({
   const preferences = normalizeNotificationPreferences(inputPreferences);
   const previous = validatePreviousState(previousState);
   const snapshot = normalizeSnapshot(inputSnapshot);
-  const gate = normalizeOutcomeRevisionGate(inputGate);
+  const gate = normalizeNotificationOutcomeRevisionGate(inputGate);
   const evaluated = evaluationTimestamp(evaluatedAt);
   const selectedProbability = snapshot.schema_version ===
       "notification-probability-snapshot/2"

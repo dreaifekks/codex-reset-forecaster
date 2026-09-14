@@ -22,14 +22,7 @@ import {
 import { JsonlStore } from "../src/store/jsonl-store.mjs";
 
 function response(payload, { status = 200 } = {}) {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: { get: () => null },
-    async text() {
-      return JSON.stringify(payload);
-    },
-  };
+  return Response.json(payload, { status });
 }
 
 async function enabledConfig(tokenFile, directory) {

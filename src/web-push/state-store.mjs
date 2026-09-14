@@ -22,31 +22,12 @@ function normalizedState(value) {
   return structuredClone(value);
 }
 
-export function createCoreStateAdapter(store, stateKey = "web-push") {
-  if (
-    typeof store?.readState !== "function" ||
-    typeof store?.writeState !== "function"
-  ) {
-    throw new TypeError("A core store with readState/writeState is required");
-  }
-  return {
-    read: () => store.readState(stateKey, null),
-    write: (value) => store.writeState(stateKey, value),
-  };
-}
-
-export function createQueuedStateStore(stateAdapter) {
-  if (
-    typeof stateAdapter?.read !== "function" ||
-    typeof stateAdapter?.write !== "function"
-  ) {
-    throw new TypeError("A web push stateAdapter with read/write is required");
-  }
+export function createQueuedStateStore(store, stateKey = "web-push") {
   let mutationTail = Promise.resolve();
 
   async function read() {
     await mutationTail;
-    return normalizedState(await stateAdapter.read());
+    return normalizedState(await store.readState(stateKey, null));
   }
 
   function mutate(mutator) {
@@ -54,10 +35,10 @@ export function createQueuedStateStore(stateAdapter) {
       throw new TypeError("Web push state mutation requires a callback");
     }
     const operation = mutationTail.then(async () => {
-      const draft = normalizedState(await stateAdapter.read());
+      const draft = normalizedState(await store.readState(stateKey, null));
       const result = await mutator(draft);
       const next = normalizedState(draft);
-      await stateAdapter.write(next);
+      await store.writeState(stateKey, next);
       return result;
     });
     mutationTail = operation.catch(() => {});

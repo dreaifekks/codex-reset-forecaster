@@ -6,6 +6,7 @@ import { normalizeTelegramId } from "./config.mjs";
 import { normalizeTelegramLocale } from "./locale.mjs";
 import {
   normalizeNotificationPreferences,
+  normalizeNotificationOutcomeRevisionGate as outcomeRevisionGate,
   normalizeProbabilitySubscriptionState,
   notificationPreferencesHash,
 } from "../notifications/subscription-policy.mjs";
@@ -71,85 +72,6 @@ function defaultOutcomeRevisionGate() {
     latest_known_at: null,
     closes_episode: false,
     current_outcomes: [],
-  };
-}
-
-function outcomeGateEntry(value) {
-  const range = value?.occurred_time_range ?? null;
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !value.outcome_ref ||
-    typeof value.outcome_ref.record_id !== "string" ||
-    value.outcome_ref.record_id.length === 0 ||
-    !Number.isInteger(value.outcome_ref.revision) ||
-    value.outcome_ref.revision < 1 ||
-    typeof value.outcome_token !== "string" ||
-    value.outcome_token.length === 0 ||
-    typeof value.status !== "string" ||
-    value.status.length === 0 ||
-    iso(value.known_at, "outcome gate known_at") !== value.known_at ||
-    !(
-      range === null ||
-      (
-        typeof range === "object" &&
-        !Array.isArray(range) &&
-        iso(range.start, "outcome gate range start") === range.start &&
-        iso(range.end, "outcome gate range end") === range.end &&
-        Date.parse(range.end) > Date.parse(range.start)
-      )
-    )
-  ) {
-    throw new TypeError("Invalid Telegram forecast outcome gate entry");
-  }
-  return {
-    outcome_ref: {
-      record_id: value.outcome_ref.record_id,
-      revision: value.outcome_ref.revision,
-    },
-    outcome_token: value.outcome_token,
-    status: value.status,
-    known_at: value.known_at,
-    occurred_time_range: range === null ? null : {
-      start: range.start,
-      end: range.end,
-    },
-  };
-}
-
-function outcomeRevisionGate(value) {
-  const revisionToken = value?.revision_token ?? null;
-  const latestKnownAt = value?.latest_known_at ?? null;
-  const currentOutcomes = value?.current_outcomes ?? [];
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !(
-      (revisionToken === null && latestKnownAt === null) ||
-      (
-        typeof revisionToken === "string" &&
-        revisionToken.length > 0 &&
-        iso(latestKnownAt, "outcome revision latest_known_at") === latestKnownAt
-      )
-    ) ||
-    typeof value.closes_episode !== "boolean" ||
-    !Array.isArray(currentOutcomes)
-  ) {
-    throw new TypeError("Invalid Telegram forecast outcome revision gate");
-  }
-  const normalizedOutcomes = currentOutcomes.map(outcomeGateEntry)
-    .sort((left, right) =>
-      left.outcome_ref.record_id.localeCompare(right.outcome_ref.record_id) ||
-      left.outcome_ref.revision - right.outcome_ref.revision ||
-      left.outcome_token.localeCompare(right.outcome_token)
-    );
-  return {
-    revision_token: revisionToken,
-    latest_known_at: latestKnownAt,
-    closes_episode: value.closes_episode,
-    current_outcomes: normalizedOutcomes,
   };
 }
 
@@ -576,7 +498,6 @@ export class TelegramStateStore {
       if (result === NO_STATE_CHANGE) return null;
       draft.updated_at = this.now().toISOString();
       pruneState(draft);
-      assertTelegramState(draft);
       await this.#write(draft);
       this.#state = draft;
       return result;

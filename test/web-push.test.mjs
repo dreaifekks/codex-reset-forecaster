@@ -57,10 +57,10 @@ function memoryStateAdapter({ writeDelayMs = 0 } = {}) {
   let value = null;
   let writes = 0;
   return {
-    async read() {
+    async readState() {
       return structuredClone(value);
     },
-    async write(next) {
+    async writeState(_key, next) {
       if (writeDelayMs) {
         await new Promise((resolve) => setTimeout(resolve, writeDelayMs));
       }
@@ -162,7 +162,7 @@ function service({
     publications,
     webPush: createWebPushService({
       config: appConfig,
-      stateAdapter: adapter,
+      store: adapter,
       publicationLedger: publications,
       forecastInputStream: forecasts,
       sendNotification,

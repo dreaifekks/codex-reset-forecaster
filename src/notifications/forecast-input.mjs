@@ -1,3 +1,4 @@
+import { normalizeNotificationOutcomeRevisionGate as normalizeOutcomeRevisionGate } from "./subscription-policy.mjs";
 import { hashLabel } from "../core/hash.mjs";
 import { loadOutcomePublicationProjection } from "../query/history-results.mjs";
 import { usableForecastSnapshot } from "./projector.mjs";
@@ -37,79 +38,6 @@ function outcomeGateStatus(item) {
   if (["rejected", "cancelled"].includes(status)) return status;
   if (status === "confirmed") return "verification_withdrawn";
   return String(status ?? "unknown");
-}
-
-function normalizeOutcomeGateEntry(value) {
-  const ref = referenceKey(value?.outcome_ref);
-  const range = value?.occurred_time_range ?? null;
-  if (
-    !ref ||
-    typeof value.outcome_token !== "string" ||
-    value.outcome_token.length === 0 ||
-    typeof value.status !== "string" ||
-    value.status.length === 0 ||
-    iso(value.known_at, "outcome gate known_at") !== value.known_at ||
-    !(
-      range === null ||
-      (
-        typeof range === "object" &&
-        !Array.isArray(range) &&
-        iso(range.start, "outcome gate range start") === range.start &&
-        iso(range.end, "outcome gate range end") === range.end &&
-        Date.parse(range.end) > Date.parse(range.start)
-      )
-    )
-  ) {
-    throw new TypeError("Invalid notification outcome gate entry");
-  }
-  return {
-    outcome_ref: {
-      record_id: value.outcome_ref.record_id,
-      revision: value.outcome_ref.revision,
-    },
-    outcome_token: value.outcome_token,
-    status: value.status,
-    known_at: value.known_at,
-    occurred_time_range: range === null ? null : {
-      start: range.start,
-      end: range.end,
-    },
-  };
-}
-
-function normalizeOutcomeRevisionGate(value) {
-  const revisionToken = value?.revision_token ?? null;
-  const latestKnownAt = value?.latest_known_at ?? null;
-  const currentOutcomes = value?.current_outcomes ?? [];
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !(
-      (revisionToken === null && latestKnownAt === null) ||
-      (
-        typeof revisionToken === "string" &&
-        revisionToken.length > 0 &&
-        iso(latestKnownAt, "outcome revision latest_known_at") === latestKnownAt
-      )
-    ) ||
-    typeof value.closes_episode !== "boolean" ||
-    !Array.isArray(currentOutcomes)
-  ) {
-    throw new TypeError("Invalid notification outcome revision gate");
-  }
-  const normalizedOutcomes = currentOutcomes.map(normalizeOutcomeGateEntry)
-    .sort((left, right) =>
-      left.outcome_ref.record_id.localeCompare(right.outcome_ref.record_id) ||
-      left.outcome_ref.revision - right.outcome_ref.revision ||
-      left.outcome_token.localeCompare(right.outcome_token)
-    );
-  return {
-    revision_token: revisionToken,
-    latest_known_at: latestKnownAt,
-    closes_episode: value.closes_episode,
-    current_outcomes: normalizedOutcomes,
-  };
 }
 
 export function notificationOutcomeRevisionGate(items = []) {

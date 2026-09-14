@@ -336,7 +336,7 @@ function recordGeneration(record) {
 
 export function createWebPushService({
   config: inputConfig = {},
-  stateAdapter,
+  store,
   publicationLedger,
   forecastInputStream = null,
   sendNotification,
@@ -358,20 +358,14 @@ export function createWebPushService({
     forecastInputStream !== null &&
     (
       typeof forecastInputStream.listAfter !== "function" ||
-      !(
-        typeof forecastInputStream.tail === "function" ||
-        (
-          typeof forecastInputStream.getCursor === "function" &&
-          typeof forecastInputStream.latest === "function"
-        )
-      )
+      typeof forecastInputStream.tail !== "function"
     )
   ) {
     throw new TypeError(
-      "forecastInputStream must provide listAfter and an atomic tail or getCursor/latest",
+      "forecastInputStream must provide listAfter and an atomic tail",
     );
   }
-  const state = createQueuedStateStore(stateAdapter);
+  const state = createQueuedStateStore(store, config.stateKey);
   let interval = null;
   let dispatchInFlight = null;
   let stopping = false;
@@ -418,24 +412,11 @@ export function createWebPushService({
 
   async function forecastTail() {
     if (!forecastInputStream) return { cursor: 0, input: null };
-    if (typeof forecastInputStream.tail === "function") {
-      const result = await forecastInputStream.tail();
-      return {
-        cursor: assertCursor(result?.cursor, "forecast input cursor"),
-        input: result?.input ?? null,
-        outcome_revision_gate: probabilityOutcomeGate(
-          result?.outcome_revision_gate,
-        ),
-      };
-    }
-    const [cursor, input] = await Promise.all([
-      forecastInputStream.getCursor(),
-      forecastInputStream.latest(),
-    ]);
+    const result = await forecastInputStream.tail();
     return {
-      cursor: assertCursor(cursor, "forecast input cursor"),
-      input,
-      outcome_revision_gate: probabilityOutcomeGate(null),
+      cursor: assertCursor(result?.cursor, "forecast input cursor"),
+      input: result?.input ?? null,
+      outcome_revision_gate: probabilityOutcomeGate(result?.outcome_revision_gate),
     };
   }
 

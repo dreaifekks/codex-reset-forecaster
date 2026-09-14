@@ -1,3 +1,4 @@
+import { readResponseText } from "../core/http.mjs";
 import fs from "node:fs/promises";
 import { hashLabel } from "../core/hash.mjs";
 import { semanticTimingPhaseHasWrapperSupport } from "./phase-policy.mjs";
@@ -43,34 +44,6 @@ const SYSTEM_PROMPT = [
 
 function endpoint(baseUrl) {
   return `${String(baseUrl).replace(/\/+$/, "")}/chat/completions`;
-}
-
-async function boundedResponseText(response, maximumBytes) {
-  const contentLength = Number(response.headers?.get?.("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
-    throw new RangeError("Semantic assistance response exceeds the configured byte limit");
-  }
-  if (!response.body?.getReader) {
-    const value = await response.text();
-    if (Buffer.byteLength(value, "utf8") > maximumBytes) {
-      throw new RangeError("Semantic assistance response exceeds the configured byte limit");
-    }
-    return value;
-  }
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maximumBytes) {
-      await reader.cancel();
-      throw new RangeError("Semantic assistance response exceeds the configured byte limit");
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
 function jsonObjectFromContent(content) {
@@ -191,7 +164,7 @@ export class OpenAICompatibleSemanticTimingAssessor {
       }),
       signal: AbortSignal.timeout(this.policy.request_timeout_ms),
     });
-    const wireText = await boundedResponseText(
+    const wireText = await readResponseText(
       response,
       this.policy.maximum_output_bytes,
     );
