@@ -428,6 +428,23 @@ upstream can return exact text but may bill a full upstream page even for a smal
 requested limit; enable it only deliberately. No gateway mode asserts exhaustive
 timeline coverage, so gateway results cannot create negative labels.
 
+## Multi-source reset review
+
+The Tibo-authority profile enables `extractor.reset_review` using the existing
+protected semantic-assistance token. The configured gateway model is
+`deepseek-flash`, with thinking disabled for bounded structured extraction.
+After deterministic normalization, the pipeline reviews previously unrecognized
+completion statements from the last 14 days. Each evidence bundle includes a
+24-hour window on each side plus up to 30 days of older authoritative product
+background, deduplicated by exact status ID. Native quote/reply context is retained;
+missing context, ambiguous scope, contradictory evidence or API failures stay pending.
+At most four statements are reviewed per run. Unchanged successful responses are
+cached; changed evidence and failures are rechecked no more often than every six
+hours. Raw citations are validated again when outcomes are consumed. The website
+marks unresolved statements as “重置待确认” / “Reset awaiting confirmation”.
+This review is enabled only for the authority-completion operational target; it
+cannot turn announcements into independently observed physical resets.
+
 ## Scheduled website service
 
 By default, `npm start` only serves saved data. Set

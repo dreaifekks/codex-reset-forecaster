@@ -405,6 +405,19 @@ corrected current claim changes a previously confirmed outcome interval,
 adjudication appends a new outcome revision and points to the exact superseded
 revision.
 
+The optional `extraction.reset_review` field records `authority-reset-review/1`:
+model and policy/input/response hashes, the frozen knowledge cutoff, actual
+completion time, a bounded uncertain event window, extraction confidence, and
+verbatim citations to exact observation revisions. Its decision is `confirmed`
+or `pending`; it is never a reset probability. Full input and response are retained
+in immutable `semantic-reset-reviews` blobs. The anchor's own completed-reset
+statement, authority identity, native context, and exact product/scope passages
+are independently checked before normal outcome adjudication may confirm it.
+Search summaries cannot supply those citations. A pending review is
+feature-ineligible and censors overlapping negative training/evaluation/settlement
+windows only after its actual `available_at`; it does not invent a reset outcome.
+Retrospective review never backdates `available_at`, `known_at`, or replay labels.
+
 Feature selection requires the exact signal `semantic_policy_hash`; old
 extractions cannot survive a target or role-policy change. The complete extractor
 contract is also included in the model contract hash. Feature snapshots copy

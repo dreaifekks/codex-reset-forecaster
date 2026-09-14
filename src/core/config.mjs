@@ -153,6 +153,7 @@ function validateSemanticAssistance(config) {
     baseUrl.hash ||
     typeof policy.model !== "string" ||
     policy.model.trim().length === 0 ||
+    ![undefined, "enabled", "disabled"].includes(policy.thinking) ||
     ![null, "string"].includes(
       policy.token_file === null ? null : typeof policy.token_file,
     ) ||
@@ -192,6 +193,19 @@ function validateSemanticAssistance(config) {
   policy.model = policy.model.trim();
   if (typeof policy.token_file === "string") {
     policy.token_file = path.resolve(root, policy.token_file);
+  }
+}
+
+function validateResetReview(config) {
+  const policy = config.extractor.reset_review;
+  if (!policy || policy.policy_version !== "authority-reset-review/1" ||
+      typeof policy.enabled !== "boolean" ||
+      (policy.enabled && config.outcome_definition.event_semantics !== "qualifying_authority_completion_statement") ||
+      !Number.isFinite(policy.minimum_confidence) || policy.minimum_confidence < 0.5 || policy.minimum_confidence > 1 ||
+      [["window_hours", 1, 48], ["background_days", 1, 90], ["lookback_days", 1, 30],
+       ["refresh_interval_hours", 1, 24], ["maximum_posts", 4, 40], ["maximum_reviews_per_run", 1, 8]]
+        .some(([key, min, max]) => !Number.isInteger(policy[key]) || policy[key] < min || policy[key] > max)) {
+    throw new TypeError("extractor.reset_review must use the bounded authority-reset-review/1 policy");
   }
 }
 
@@ -547,6 +561,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validatePublicationRuntime(config);
   validateSchedulerInterval(config);
   validateSemanticAssistance(config);
+  validateResetReview(config);
   validateXSearchGatewayProvider(config);
   validateRsshubXProvider(config);
   config.config_hash = semanticConfigHash(config);

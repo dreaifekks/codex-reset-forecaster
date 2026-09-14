@@ -167,21 +167,9 @@ export class OpenAICompatibleSemanticTimingAssessor {
     return this.cachedToken;
   }
 
-  async assess({ wrapper_text: wrapperText, quote_text: quoteText, target_product: targetProduct }) {
-    const input = {
-      target_product: String(targetProduct ?? ""),
-      wrapper_text: String(wrapperText ?? ""),
-      exact_native_quote_text: String(quoteText ?? ""),
-    };
-    const inputChars = Object.values(input)
-      .reduce((total, value) => total + value.length, 0);
-    if (
-      input.target_product.length === 0 ||
-      input.wrapper_text.trim().length === 0 ||
-      input.exact_native_quote_text.trim().length === 0 ||
-      inputChars > this.policy.maximum_input_chars
-    ) {
-      throw new RangeError("Semantic assistance input violates its configured bounds");
+  async requestContent(input, systemPrompt) {
+    if (JSON.stringify(input).length > this.policy.maximum_input_chars) {
+      throw new RangeError("Semantic input exceeds configured limit");
     }
     const token = await this.token();
     const response = await this.fetch(endpoint(this.policy.base_url), {
@@ -194,9 +182,10 @@ export class OpenAICompatibleSemanticTimingAssessor {
         model: this.policy.model,
         temperature: 0,
         max_tokens: this.policy.max_tokens,
+        ...(this.policy.thinking ? { thinking: { type: this.policy.thinking } } : {}),
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt },
           { role: "user", content: JSON.stringify(input) },
         ],
       }),
@@ -224,6 +213,27 @@ export class OpenAICompatibleSemanticTimingAssessor {
     if (typeof content !== "string") {
       throw new TypeError("Semantic assistance response is missing message content");
     }
+    if (!content.trim()) throw new TypeError("Semantic response content is empty");
+    return content;
+  }
+
+  async assess({ wrapper_text: wrapperText, quote_text: quoteText, target_product: targetProduct }) {
+    const input = {
+      target_product: String(targetProduct ?? ""),
+      wrapper_text: String(wrapperText ?? ""),
+      exact_native_quote_text: String(quoteText ?? ""),
+    };
+    const inputChars = Object.values(input)
+      .reduce((total, value) => total + value.length, 0);
+    if (
+      input.target_product.length === 0 ||
+      input.wrapper_text.trim().length === 0 ||
+      input.exact_native_quote_text.trim().length === 0 ||
+      inputChars > this.policy.maximum_input_chars
+    ) {
+      throw new RangeError("Semantic assistance input violates its configured bounds");
+    }
+    const content = await this.requestContent(input, SYSTEM_PROMPT);
     const parsed = jsonObjectFromContent(content);
     const expectedReason = ALLOWED_PHASE_REASON.get(parsed.phase);
     if (

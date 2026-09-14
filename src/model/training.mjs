@@ -1,3 +1,4 @@
+import { pendingResetReviewRanges } from "../semantic-assistance/reset-review.mjs";
 import { addHours, floorHour, toUtcIso } from "../core/time.mjs";
 import { normalizeCoverageIntervals } from "../pipeline/coverage.mjs";
 import { FEATURE_NAMES, featureVectorAt, featuresToArray } from "./features.mjs";
@@ -165,6 +166,7 @@ export async function buildTrainingExamples(store, config, {
   const currentSignals = selectCurrentSignals(
     latestSignalsAsOf(signals, cutoff, resolvedAsOfMode),
   );
+  const pendingReviewRanges = pendingResetReviewRanges(latestSignalsAsOf(signals, cutoff, resolvedAsOfMode), config);
   const currentObservations = latestObservationsAsOf(
     observations,
     cutoff,
@@ -196,6 +198,7 @@ export async function buildTrainingExamples(store, config, {
   );
   const baseRows = uniqueSlots.map((slot) => {
     const vector = featureVectorAt({
+      config,
       targetTime: slot.start,
       knowledgeCutoff: slot.start,
       signals,
@@ -223,6 +226,11 @@ export async function buildTrainingExamples(store, config, {
       }
     }
   }
+  for (const range of pendingReviewRanges) {
+    for (const { slot } of baseRows) {
+      if (overlaps(slot.start, slot.end, range)) censoredRows.add(slot.start);
+    }
+  }
   const eventExamples = [];
   for (const outcome of settledOutcomes) {
     const matching = hourlySlotsOverlappingRange(
@@ -239,6 +247,7 @@ export async function buildTrainingExamples(store, config, {
     const eventRows = matching.map((slot) => {
       const slotStart = new Date(slot.start);
       const vector = featureVectorAt({
+        config,
         targetTime: slot.start,
         knowledgeCutoff: slotStart < eventKnowledgeCutoff ? slotStart : eventKnowledgeCutoff,
         signals,

@@ -385,7 +385,7 @@ follows from that fit. The `validated` status still requires at least 1,008
 evaluated hourly windows, 20 eligible events, and a compatible challenger that
 passes the fixed-policy walk-forward and calibration gates.
 
-The current checked-in configuration contract is `provider-config/0.3.7`, with
+The current checked-in configuration contract is `provider-config/0.3.8`, with
 `reset-taxonomy/0.3.1`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
 rules `0.3.4` (`reset-extract/rules-0.3.4`). The model contract also binds the
 `winsorized-zscore/1` transform:

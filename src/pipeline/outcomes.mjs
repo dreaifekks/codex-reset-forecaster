@@ -16,6 +16,7 @@ import {
   OPERATOR_CONFIRMATION_POLICY_VERSION,
 } from "../core/operator-confirmation.mjs";
 import { selectCurrentSignals } from "./signal-selection.mjs";
+import { resetReviewEvidenceValid } from "../semantic-assistance/reset-review.mjs";
 import {
   sameProductScope,
   scopeIncludesProduct,
@@ -85,7 +86,7 @@ export function buildOutcomeEligibilityContext({ observations, signals, config =
   );
   const currentSignalsByObservationId = new Map(
     selectCurrentSignals(signals).flatMap((signal) =>
-      signal.data.observation_refs.map((reference) => [reference.record_id, signal])
+      signal.data.observation_refs.slice(0, 1).map((reference) => [reference.record_id, signal])
     ),
   );
   return {
@@ -100,6 +101,7 @@ export function buildOutcomeEligibilityContext({ observations, signals, config =
         ).config_hash
       : null,
     target: config?.target ?? null,
+    config,
   };
 }
 
@@ -110,6 +112,7 @@ export function eligibleConfirmedOutcomeVerifications(outcome, {
   expectedExtractor = null,
   expectedAdjudicationContractHash = null,
   target = null,
+  config = null,
 } = {}) {
   if (
     outcome.data.status !== "confirmed" ||
@@ -154,6 +157,9 @@ export function eligibleConfirmedOutcomeVerifications(outcome, {
     ) return false;
     const signal = currentSignalsByObservationId.get(entry.observation_ref.record_id);
     if (!signal) return false;
+    if (signal.data.extraction.reset_review && (!config || !resetReviewEvidenceValid(
+      signal.data.extraction.reset_review, observation, [...observationsByExactRef.values()], config,
+    ))) return false;
     const exactSignalReference = signal.data.observation_refs.some((reference) =>
       reference.record_id === entry.observation_ref.record_id &&
       reference.revision === entry.observation_ref.revision
@@ -269,7 +275,10 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
         if (signal.data.provenance.derivation !== "primary_statement") return false;
         const reference = signal.data.observation_refs[0];
         const observation = observations.get(`${reference.record_id}@${reference.revision}`);
-        return observation?.data.content.media_type === "text/plain";
+        return observation?.data.content.media_type === "text/plain" &&
+          (!signal.data.extraction.reset_review || resetReviewEvidenceValid(
+            signal.data.extraction.reset_review, observation, [...observations.values()], config,
+          ));
       })
       .map((signal) => {
         const reference = signal.data.observation_refs[0];

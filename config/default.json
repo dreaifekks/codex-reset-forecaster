@@ -1,5 +1,5 @@
 {
-  "config_version": "provider-config/0.3.7",
+  "config_version": "provider-config/0.3.8",
   "taxonomy_version": "reset-taxonomy/0.3.1",
   "feature_schema_version": "reset-features/0.3.1",
   "deduplication_version": "reset-dedup/0.2.3",
@@ -15,7 +15,8 @@
       "enabled": false,
       "protocol": "openai-compatible-chat-completions/1",
       "base_url": "https://tokenflux.dev/v1",
-      "model": "deepseek-v4-flash",
+      "model": "deepseek-flash",
+      "thinking": "disabled",
       "token_file": null,
       "prompt_version": "authority-quote-timing/1",
       "request_timeout_ms": 30000,
@@ -24,6 +25,17 @@
       "max_tokens": 2048,
       "minimum_confidence": 0.8,
       "maximum_observation_age_hours": 6
+    },
+    "reset_review": {
+      "policy_version": "authority-reset-review/1",
+      "enabled": false,
+      "window_hours": 24,
+      "background_days": 30,
+      "lookback_days": 14,
+      "refresh_interval_hours": 6,
+      "maximum_posts": 24,
+      "maximum_reviews_per_run": 4,
+      "minimum_confidence": 0.85
     }
   },
   "outcome_definition": {

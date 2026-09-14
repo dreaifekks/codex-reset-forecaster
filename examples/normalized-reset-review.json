@@ -1,7 +1,7 @@
 {
   "schema_version": "reset-intel/0.2",
   "record_type": "normalized_signal",
-  "record_id": "sig_example_001",
+  "record_id": "sig_b16eecd17e169d5b88321847",
   "revision": 1,
   "supersedes": null,
   "created_at": "2026-07-23T04:03:20Z",
@@ -21,14 +21,18 @@
     "taxonomy_version": "reset-taxonomy/0.3.1",
     "claim": {
       "event_type": "quota_reset",
-      "phase": "scheduled",
+      "phase": "rumor",
       "stance": "supports",
       "scope": {
         "vendor": "openai",
         "product": "codex",
         "population": "platform",
-        "plans": ["unknown"],
-        "regions": ["global"],
+        "plans": [
+          "unknown"
+        ],
+        "regions": [
+          "global"
+        ],
         "quota_bucket": null
       },
       "asserted_time_range": {
@@ -39,7 +43,7 @@
         "timezone_basis": "author_local_inferred",
         "original_text": "later today"
       },
-      "author_certainty": "probable",
+      "author_certainty": "possible",
       "impact": null,
       "competitive_context": null
     },
@@ -48,7 +52,8 @@
       "source_role": "product_team_member",
       "root_evidence_id": "obs_x_example_001",
       "derivation": "primary_statement",
-      "independence_group_id": "ind_example_001"
+      "independence_group_id": "ind_example_001",
+      "feature_eligible": false
     },
     "extraction": {
       "model": "deterministic-rules",
@@ -58,13 +63,35 @@
       "confidence": 0.91,
       "relevance": {
         "policy_version": "reset-topic-relevance/6",
-        "decision": "relevant",
-        "reason_code": "target_operational_claim",
+        "decision": "pending_context",
+        "reason_code": "semantic_reset_pending",
         "basis": "self",
         "matched_segments": [
-          "Codex usage limits will reset later today."
+          "Reset all propagated."
         ],
         "context_refs": []
+      },
+      "reset_review": {
+        "policy_version": "authority-reset-review/1",
+        "policy_hash": "sha256:6991401c4ca24ee93d65c28864bb1627d55cb455b35738ae6e54fa19609f8dc4",
+        "model": "deepseek-flash",
+        "decision": "pending",
+        "subject": "",
+        "confidence": 0,
+        "reason": "等待可核验的产品范围证据。",
+        "knowledge_cutoff": "2026-07-23T04:03:20Z",
+        "completed_at": "2026-07-23T04:03:20Z",
+        "input_hash": "sha256:ed6a21025f24c09382fabc3e27e6064acb5b928b8a9b2ce6057edbf3e084413d",
+        "response_hash": null,
+        "citations": [],
+        "window": {
+          "start": "2026-07-23T08:00:00Z",
+          "end": "2026-07-24T00:00:00Z",
+          "boundary": "[start,end)",
+          "precision": "part_of_day",
+          "timezone_basis": "author_local_inferred",
+          "original_text": "later today"
+        }
       }
     }
   }

@@ -809,7 +809,11 @@ function renderTimeline(items) {
     const eventType = item.event_type
       ? eventTypeLabels[item.event_type] ?? item.event_type
       : tr("未匹配信号", "Unmatched signal");
-    const relevance = timelineRelevanceLabels[item.relevance] ??
+    const relevance = item.reset_review_status === "pending"
+      ? tr("重置待确认", "Reset awaiting confirmation")
+      : item.reset_review_status === "confirmed"
+      ? tr("原文核验确认重置", "Reset confirmed from source evidence")
+      : timelineRelevanceLabels[item.relevance] ??
       item.relevance ??
       tr("状态未知", "Unknown state");
     const featureStatus = item.quarantined_relation

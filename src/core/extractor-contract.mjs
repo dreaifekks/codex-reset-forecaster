@@ -34,6 +34,7 @@ function normalizedSemanticAssistance(policy) {
     enabled: policy?.enabled === true,
     protocol: policy?.protocol ?? null,
     model: policy?.model ?? null,
+    thinking: policy?.thinking ?? null,
     prompt_version: policy?.prompt_version ?? null,
     maximum_input_chars: policy?.maximum_input_chars ?? null,
     max_tokens: policy?.max_tokens ?? null,
@@ -45,7 +46,7 @@ function normalizedSemanticAssistance(policy) {
 
 export function extractionSemanticPolicy(config) {
   return {
-    version: "extractor-semantic-policy/6",
+    version: "extractor-semantic-policy/7",
     target: normalizedTarget(config?.target),
     source_identity_policy: canonicalSourceIdentityPolicy(config),
     authority_scope_policy: normalizedAuthorityScopePolicy(config?.outcome_definition),
@@ -58,6 +59,7 @@ export function extractionSemanticPolicy(config) {
     semantic_assistance: normalizedSemanticAssistance(
       config?.extractor?.semantic_assistance,
     ),
+    reset_review: config?.extractor?.reset_review ?? null,
   };
 }
 

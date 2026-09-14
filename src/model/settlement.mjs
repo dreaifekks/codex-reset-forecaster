@@ -1,3 +1,4 @@
+import { pendingResetReviewRanges } from "../semantic-assistance/reset-review.mjs";
 import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { hashLabel } from "../core/hash.mjs";
 import { floorHour, halfOpenRange } from "../core/time.mjs";
@@ -77,6 +78,7 @@ export async function settleIssuedPredictions(store, config, {
     cutoff,
     AS_OF_MODE.LIVE,
   ));
+  const pendingReviewRanges = pendingResetReviewRanges(latestSignalsAsOf(signals, cutoff, AS_OF_MODE.LIVE), config);
   const currentObservations = latestObservationsAsOf(
     observations,
     cutoff,
@@ -141,6 +143,9 @@ export async function settleIssuedPredictions(store, config, {
     } else if (matchingAmbiguousOutcomes.length > 0) {
       status = "censored";
       reason = "window overlaps an outcome record that does not satisfy the current label policy";
+    } else if (pendingReviewRanges.some((range) => overlaps(start, end, range))) {
+      status = "censored";
+      reason = "window overlaps an unresolved authority reset review";
     } else if (coverageComplete) {
       status = "negative";
       reason = "window matured with complete confirmation-source coverage and no outcome";

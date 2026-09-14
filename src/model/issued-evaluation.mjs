@@ -1,3 +1,4 @@
+import { pendingResetReviewRanges } from "../semantic-assistance/reset-review.mjs";
 import { addHours, clamp, floorHour, toUtcIso } from "../core/time.mjs";
 import { latestRevisionsAsOf } from "../core/revisions.mjs";
 import { hashLabel } from "../core/hash.mjs";
@@ -554,6 +555,7 @@ export async function evaluateIssuedForecasts(store, config, {
     cutoff,
     AS_OF_MODE.LIVE,
   ));
+  const pendingReviewRanges = pendingResetReviewRanges(latestSignalsAsOf(signals, cutoff, AS_OF_MODE.LIVE), config);
   const currentObservations = latestObservationsAsOf(
     observations,
     cutoff,
@@ -626,6 +628,7 @@ export async function evaluateIssuedForecasts(store, config, {
         assertion,
       );
     }
+    if (pendingReviewRanges.some((range) => overlaps(windowStart, windowEnd, range))) continue;
     if (ambiguousOutcomes.some((outcome) =>
       overlaps(windowStart, windowEnd, outcome.data.occurred_time_range),
     )) {

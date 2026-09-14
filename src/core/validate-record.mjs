@@ -751,6 +751,35 @@ export function assertCanonicalRecord(record) {
       /^sha256:[a-f0-9]{64}$/.test(data.extraction?.semantic_policy_hash ?? ""),
       "signal extraction semantic policy hash invalid",
     );
+    if (data.extraction?.reset_review !== undefined) {
+      const review = data.extraction.reset_review;
+      invariant(review.policy_version === "authority-reset-review/1" &&
+        ["confirmed", "pending"].includes(review.decision) &&
+        typeof review.model === "string" && review.model.length > 0 &&
+        typeof review.subject === "string" && review.subject.length <= 100 &&
+        typeof review.reason === "string" && review.reason.length <= 1000 &&
+        [review.policy_hash, review.input_hash].every((value) => /^sha256:[a-f0-9]{64}$/.test(value)) &&
+        (review.response_hash === null || /^sha256:[a-f0-9]{64}$/.test(review.response_hash)) &&
+        isUtc(review.knowledge_cutoff) && isUtc(review.completed_at) &&
+        Date.parse(review.completed_at) >= Date.parse(review.knowledge_cutoff) &&
+        Date.parse(data.available_at) >= Date.parse(review.completed_at) &&
+        Array.isArray(review.citations) && review.citations.length <= 8,
+      "signal reset review invalid");
+      probability(review.confidence, "reset review confidence");
+      range(review.window, "reset review window");
+      for (const citation of review.citations) {
+        recordReference(citation.observation_ref, "reset review citation");
+        invariant(typeof citation.quote === "string" && citation.quote.length >= 3 &&
+          ["completion", "scope", "product"].includes(citation.purpose) &&
+          data.observation_refs.some((ref) => ref.record_id === citation.observation_ref.record_id && ref.revision === citation.observation_ref.revision),
+        "reset review citation invalid");
+      }
+      invariant(data.provenance.derivation === "primary_statement" &&
+        (review.decision === "confirmed"
+          ? data.claim.phase === "completed" && review.response_hash !== null && review.citations.length >= 2 && data.provenance.feature_eligible === true
+          : data.claim.phase === "rumor" && data.provenance.feature_eligible === false && data.extraction.relevance.decision === "pending_context"),
+      "reset review decision must match claim");
+    }
     if (data.extraction?.semantic_assistance !== undefined) {
       const assistance = data.extraction.semantic_assistance;
       invariant(

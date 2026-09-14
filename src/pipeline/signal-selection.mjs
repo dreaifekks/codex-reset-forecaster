@@ -38,9 +38,9 @@ function currentSignals(signals) {
   return [...selected.values()].filter((signal) => !isProviderDiagnostic(signal));
 }
 
-export function selectCurrentSignals(signals) {
+export function selectCurrentSignals(signals, { includeIneligible = false } = {}) {
   return currentSignals(signals).filter((signal) =>
-    signal.data.provenance?.feature_eligible !== false
+    includeIneligible || signal.data.provenance?.feature_eligible !== false
   );
 }
 

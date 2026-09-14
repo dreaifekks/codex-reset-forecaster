@@ -2,6 +2,7 @@ import { XProvider } from "../providers/x-provider.mjs";
 import { XSearchGatewayProvider } from "../providers/x-search-gateway-provider.mjs";
 import { HistoricalMonitorProvider } from "../providers/historical-monitor-provider.mjs";
 import { RsshubXProvider } from "../providers/rsshub-x-provider.mjs";
+import { reviewResetClaims } from "../semantic-assistance/reset-review.mjs";
 import { normalizeNewObservations } from "./extract.mjs";
 import { linkEventCandidates } from "./link.mjs";
 import { buildImpactEpisodes } from "./impact-episodes.mjs";
@@ -67,12 +68,15 @@ async function configuredCoverageWaiting(store, config, collection, now) {
 
 export async function processRecords(store, config, { now = new Date() } = {}) {
   const normalized = await normalizeNewObservations(store, config, { now });
+  const resetReview = await reviewResetClaims(store, config, { now });
+  const processedAt = resetReview.completed_at
+    ? new Date(Math.max(new Date(now).getTime(), Date.parse(resetReview.completed_at))) : now;
   const impactEpisodes = await buildImpactEpisodes(store, config, {
-    asOf: now,
+    asOf: processedAt,
   });
-  const linked = await linkEventCandidates(store, config, { asOf: now });
-  const outcomes = await adjudicateOutcomes(store, config, { now });
-  return { normalized, impactEpisodes, linked, outcomes };
+  const linked = await linkEventCandidates(store, config, { asOf: processedAt });
+  const outcomes = await adjudicateOutcomes(store, config, { now: processedAt });
+  return { normalized, resetReview, impactEpisodes, linked, outcomes };
 }
 
 function assertCompatibleModel(model, config) {

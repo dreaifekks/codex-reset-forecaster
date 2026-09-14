@@ -1,6 +1,7 @@
 {
   "extractor": {
-    "authority_reply_identity_ids": ["person_tibo_sottiaux"]
+    "authority_reply_identity_ids": ["person_tibo_sottiaux"],
+    "reset_review": { "enabled": true }
   },
   "outcome_definition": {
     "version": "authority-announced-platform-reset/2",

@@ -403,7 +403,7 @@ if (
 const defaultConfig = readJson(path.join(root, "config", "default.json"));
 const defaultExtractor = extractorContract(defaultConfig);
 if (
-  defaultConfig.config_version !== "provider-config/0.3.7" ||
+  defaultConfig.config_version !== "provider-config/0.3.8" ||
   defaultConfig.taxonomy_version !== "reset-taxonomy/0.3.1" ||
   defaultConfig.feature_schema_version !== "reset-features/0.3.1" ||
   defaultConfig.deduplication_version !== "reset-dedup/0.2.3" ||

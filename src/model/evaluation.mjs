@@ -1,3 +1,4 @@
+import { pendingResetReviewRanges } from "../semantic-assistance/reset-review.mjs";
 import { addHours, clamp, floorHour, toUtcIso } from "../core/time.mjs";
 import { hashLabel, sha256, stableStringify } from "../core/hash.mjs";
 import {
@@ -275,7 +276,8 @@ export function selectFixedBudgetAlerts(rows, budget) {
   return sortByProbability(rows).slice(0, Math.min(budget, rows.length));
 }
 
-export function causalWindowLabel(anchor, windowEnd, outcomes, censoredOutcomes = []) {
+export function causalWindowLabel(anchor, windowEnd, outcomes, censoredOutcomes = [], pendingReviewRanges = []) {
+  if (pendingReviewRanges.some((range) => overlaps(anchor, windowEnd, range))) return null;
   if (censoredOutcomes.some((outcome) =>
     overlaps(anchor, windowEnd, outcome.data.occurred_time_range),
   )) {
@@ -852,6 +854,7 @@ export async function evaluateWalkForward(store, config, {
     cutoff,
     asOfMode,
   ));
+  const pendingReviewRanges = pendingResetReviewRanges(latestSignalsAsOf(signals, cutoff, asOfMode), config);
   const currentObservations = latestObservationsAsOf(
     observations,
     cutoff,
@@ -1092,6 +1095,7 @@ export async function evaluateWalkForward(store, config, {
         windowEnd,
         evaluationOutcomes,
         ambiguousOutcomes,
+        pendingReviewRanges,
       );
       if (label === null) continue;
       const exclusions = foldSourceExclusionsAtAnchor(
@@ -1117,6 +1121,7 @@ export async function evaluateWalkForward(store, config, {
         }
         const target = addHours(anchor, offset);
         const row = featuresToArray(featureVectorAt({
+          config,
           targetTime: target,
           knowledgeCutoff: anchor,
           signals,

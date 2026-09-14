@@ -1055,6 +1055,8 @@ function confirmationTimeline(observations, signals, config) {
         text: timelineObservationText(selectedObservation),
         ingest_provider: selectedObservation.data.ingest_provider,
         matched_signal: Boolean(matchedSignal),
+        reset_review_status: matchedSignal?.data.extraction?.reset_review?.decision ?? null,
+        reset_review_reason: matchedSignal?.data.extraction?.reset_review?.reason ?? null,
         matched_signal_ref: matchedSignal
           ? { record_id: matchedSignal.record_id, revision: matchedSignal.revision }
           : null,

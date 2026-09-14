@@ -142,7 +142,7 @@ test("OpenAI-compatible assessor sends bounded public text and accepts only safe
     "Bearer tokenflux-test-key",
   );
   const body = JSON.parse(requests[0].options.body);
-  assert.equal(body.model, "deepseek-v4-flash");
+  assert.equal(body.model, "deepseek-flash");
   assert.equal(body.temperature, 0);
   assert.equal(body.max_tokens, 2048);
   assert.deepEqual(body.response_format, { type: "json_object" });
@@ -150,7 +150,7 @@ test("OpenAI-compatible assessor sends bounded public text and accepts only safe
   assert.deepEqual(assessed, {
     policy_version: "semantic-timing-assistance/1",
     protocol: "openai-compatible-chat-completions/1",
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
     prompt_version: "authority-quote-timing/1",
     decision: "applied",
     phase: "started",
@@ -306,7 +306,7 @@ test("semantic quote assistance creates only a primary started signal with exact
       return {
         policy_version: "semantic-timing-assistance/1",
         protocol: "openai-compatible-chat-completions/1",
-        model: "deepseek-v4-flash",
+        model: "deepseek-flash",
         prompt_version: "authority-quote-timing/1",
         decision: "applied",
         phase: "started",
@@ -404,7 +404,7 @@ test("semantic assistance errors and completion attempts fall back without promo
         return {
           policy_version: "semantic-timing-assistance/1",
           protocol: "openai-compatible-chat-completions/1",
-          model: "deepseek-v4-flash",
+          model: "deepseek-flash",
           prompt_version: "authority-quote-timing/1",
           decision: "applied",
           phase: "completed",

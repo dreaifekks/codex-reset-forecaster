@@ -203,6 +203,7 @@ function signalEventTime(signal, observationsByExactRef, observationsById) {
 }
 
 export function featureVectorAt({
+  config = null,
   targetTime,
   knowledgeCutoff,
   signals,
@@ -257,6 +258,7 @@ export function featureVectorAt({
   const outcomeEligibility = buildOutcomeEligibilityContext({
     observations: observationRecords,
     signals: signalRecords,
+    config,
   });
   outcomeEligibility.expectedExtractor = expectedExtractor;
   outcomeEligibility.target = targetScope;
@@ -536,6 +538,7 @@ export async function buildForecastFeatureSnapshots(store, config, {
     const targetStart = addHours(firstTarget, index);
     const targetEnd = addHours(targetStart, 1);
     const vector = featureVectorAt({
+      config,
       targetTime: targetStart,
       knowledgeCutoff: cutoff,
       signals,

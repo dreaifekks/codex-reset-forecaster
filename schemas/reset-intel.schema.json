@@ -562,6 +562,104 @@
               "pattern": "^sha256:[a-f0-9]{64}$"
             },
             "confidence": { "$ref": "#/$defs/probability" },
+            "reset_review": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_version",
+                "policy_hash",
+                "model",
+                "decision",
+                "subject",
+                "confidence",
+                "reason",
+                "knowledge_cutoff",
+                "completed_at",
+                "input_hash",
+                "response_hash",
+                "citations",
+                "window"
+              ],
+              "properties": {
+                "policy_version": {
+                  "const": "authority-reset-review/1"
+                },
+                "policy_hash": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "decision": {
+                  "enum": [
+                    "confirmed",
+                    "pending"
+                  ]
+                },
+                "subject": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "confidence": {
+                  "$ref": "#/$defs/probability"
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                "knowledge_cutoff": {
+                  "$ref": "#/$defs/utcTimestamp"
+                },
+                "completed_at": {
+                  "$ref": "#/$defs/utcTimestamp"
+                },
+                "input_hash": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "response_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "window": {
+                  "$ref": "#/$defs/timeRange"
+                },
+                "citations": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "observation_ref",
+                      "quote",
+                      "purpose"
+                    ],
+                    "properties": {
+                      "observation_ref": {
+                        "$ref": "#/$defs/recordRef"
+                      },
+                      "quote": {
+                        "type": "string",
+                        "minLength": 3
+                      },
+                      "purpose": {
+                        "enum": [
+                          "completion",
+                          "scope",
+                          "product"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
             "semantic_assistance": {
               "type": "object",
               "additionalProperties": false,

@@ -199,13 +199,23 @@ uses the same lifecycle, so pre-reset evidence cannot keep probability elevated
 after the reset. The default phase priors are `0.80` for scheduled, `0.55` for
 expected, and `0.90` for started.
 
-The sole context-dependent exception is a direct future reset commitment from an
+One context-dependent path is a direct future reset commitment from an
 identity in the versioned `extractor.authority_reply_identity_ids` allowlist. Its
 exact reply parent may establish only target-product and platform scope. The child
 keeps its own primary root and supplies the scheduled phase and asserted time; the
 parent cannot supply authority, phase, timing, or outcome semantics. Indirect,
 uncertain, negative, mixed-phase, personal-scope, and unresolved-parent cases fail
 closed.
+
+`authority-reset-review/1` additionally supports source-verified completion
+statements whose scope is supplied by native context and authoritative product
+background. The authority wrapper must itself assert completion. The AI proposes
+verbatim evidence citations; deterministic source, phase, scope, identity and
+knowledge-time checks must pass before the existing outcome adjudicator confirms
+an event. Copies and quoted chains are not independent votes. Unresolved reviews
+censor negatives across training, walk-forward, issued evaluation and settlement;
+review confidence never enters the reset probability. Both review policy and
+semantic model configuration are bound into the extractor/model contract.
 
 These values and the within-window allocation basis are deliberately recorded as
 `versioned_prior_non_exhaustive_statement_history`, not learned reliability.
