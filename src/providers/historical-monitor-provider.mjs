@@ -545,9 +545,15 @@ export class HistoricalMonitorProvider {
     if (responseId !== item.id || author !== "thsottiaux" || !text) {
       throw new Error(`X oEmbed verification failed for ${item.id}`);
     }
+    const archiveText = comparableTweetText(item.archive_text);
+    const verifiedText = comparableTweetText(text);
+    // Archive cards may omit the trailing t.co attachment link supplied by X.
+    // Compare the body without that one suffix, but retain the full verified
+    // text and oEmbed payload for extraction, lineage, and linked-post discovery.
     if (
       item.timestamp_verification === "same_utc_day_snowflake_correction" &&
-      comparableTweetText(item.archive_text) !== comparableTweetText(text)
+      archiveText !== verifiedText &&
+      archiveText !== verifiedText.replace(/\s+https:\/\/t\.co\/[A-Za-z0-9]+$/, "")
     ) {
       throw new Error(`Archive text does not match X oEmbed for ${item.id}`);
     }
@@ -809,7 +815,7 @@ export class HistoricalMonitorProvider {
           selection_context: item.selection_context ?? null,
         }, {
           providerName: this.providerName,
-          providerVersion: "0.3.0",
+          providerVersion: "0.3.1",
           config: this.config,
           firstSeenAt: fetchedAt,
           fetchedAt,
@@ -850,7 +856,7 @@ export class HistoricalMonitorProvider {
           },
         }, {
           providerName: this.providerName,
-          providerVersion: "0.3.0",
+          providerVersion: "0.3.1",
           config: this.config,
           firstSeenAt: observation.data.first_seen_at,
           fetchedAt,

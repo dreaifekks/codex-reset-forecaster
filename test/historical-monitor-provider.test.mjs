@@ -308,6 +308,29 @@ test("same-day clock correction requires matching X oEmbed identity and text", a
   );
 });
 
+test("clock-corrected archive cards may omit one trailing X attachment link", async () => {
+  const runConfig = await loadConfig();
+  const item = parseHistoricalMonitorHtml(archiveHtml()
+    .replace(ITEMS[1].at, "2026-07-10T12:00:00.000Z")).items[1];
+  const link = "https://t.co/WBM38JotGO";
+  let payload = oembed(ITEMS[1]);
+  payload.html = payload.html.replace("</p>", ` <a href="${link}">${link}</a></p>`);
+  const provider = new HistoricalMonitorProvider({
+    config: runConfig.providers.historical_monitor,
+    fetchFn: async () => Response.json(payload),
+  });
+  const verified = await provider.verifyWithOEmbed(item);
+  assert.equal(verified.text, `${ITEMS[1].text} ${link}`);
+  assert.deepEqual(verified.short_links, [link]);
+  assert.deepEqual(verified.oembed, payload);
+  assert.equal(verified.timestamp_verification, "same_utc_day_snowflake_correction");
+  for (const archive_text of ["An actually different body.", `${item.archive_text} https://t.co/other`]) {
+    await assert.rejects(provider.verifyWithOEmbed({ ...item, archive_text }), /Archive text does not match/);
+  }
+  payload = { ...payload, html: payload.html.replaceAll(link, "https://example.com/attachment") };
+  await assert.rejects(provider.verifyWithOEmbed(item), /Archive text does not match/);
+});
+
 test("same-day clock drift never matures into negative-label coverage", async (t) => {
   const { clock, provider, store } = await authoritativeHarness(t);
   clock.html = archiveHtml().replace(
