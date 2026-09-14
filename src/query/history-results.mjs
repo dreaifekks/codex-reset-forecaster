@@ -88,10 +88,11 @@ export async function loadOutcomePublicationProjection(store, config) {
         .map((reference) => [exactRecordKey(reference), reference]),
     ).values(),
   ];
-  const observations = await store.allByRefs(
-    "raw_observation",
-    verificationRefs,
-  );
+  // Semantic confirmations also depend on native context, product background,
+  // and contradictory evidence in their frozen window, not just the anchor.
+  const observations = signals.some((signal) => signal.data.extraction?.reset_review)
+    ? await store.all("raw_observation", { latestOnly: false })
+    : await store.allByRefs("raw_observation", verificationRefs);
   return projectLatestOutcomeEligibility({
     outcomes,
     observations,

@@ -11,6 +11,7 @@ import { adjudicateOutcomes, buildOutcomeEligibilityContext, isEligibleConfirmed
 import { latestSignalsAsOf } from "../src/model/as-of.mjs";
 import { causalWindowLabel } from "../src/model/evaluation.mjs";
 import { buildTrainingExamples } from "../src/model/training.mjs";
+import { loadConfirmedHistoryResults } from "../src/query/history-results.mjs";
 
 const NOW = "2026-09-14T14:00:00.000Z";
 async function setup(t) {
@@ -56,6 +57,9 @@ test("window review confirms a source-backed completion and preserves live knowl
   assert.equal(outcome.data.replay_available_at, null);
   const context = buildOutcomeEligibilityContext({ observations: await store.all("raw_observation"), signals: [signal], config });
   assert.equal(isEligibleConfirmedOutcome(outcome, context), true);
+  const history = await loadConfirmedHistoryResults(store, config);
+  assert.equal(history.length, 1, "history projection must load the original context needed for verification");
+  assert.equal(history[0].source.canonical_url, anchor.data.canonical_url);
   assert.equal(context.currentSignalsByObservationId.has(signal.data.observation_refs[1].record_id), false,
     "a context citation must not inherit the anchor's completed claim");
   const forged = structuredClone(signal); forged.data.extraction.reset_review.citations[0].quote = "Invented completion statement";

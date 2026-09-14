@@ -197,7 +197,8 @@ export async function reviewResetClaims(store, config, { now = new Date(), asses
       observation.data.native_relations.some((relation) => ["quotes", "reply"].includes(relation.type) &&
         observations.some((parent) => statusId(parent) === String(relation.provider_item_id) && exact(parent) &&
           observedAt(parent) <= Date.parse(cutoff) && RESET.test(text(parent))));
-    if (!exact(observation) || !statusId(observation) || age < 0 || age > policy.lookback_days * 24 * HOUR ||
+    if (!exact(observation) || !statusId(observation) || age < 0 ||
+        (age > policy.lookback_days * 24 * HOUR && !cache.reviews[statusId(observation)]) ||
         observedAt(observation) > Date.parse(cutoff) || !confirmationIdentityIds(config).has(observation.data.author.identity_id) ||
         !(RESET.test(text(observation)) && COMPLETED.test(text(observation)) || contextCompletion) ||
         observation.data.selection_context?.feature_eligible === false || observation.data.selection_context?.outcome_conditioned) continue;
