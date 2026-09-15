@@ -242,6 +242,20 @@ test("historical monitor preserves source evidence without treating its date gri
   assert.equal((await provider.collect(store, { force: true })).collected, 0);
 });
 
+test("historical monitor parser accepts added card attributes without changing the ledger", () => {
+  const expected = parseHistoricalMonitorHtml(archiveHtml());
+  for (const html of [
+    archiveHtml()
+      .replaceAll('<li class="log-item">', '<li class="log-item" data-tweet-id="display-id">')
+      .replaceAll('<p class="log-item-text">', '<p class="log-item-text" data-role="tweet-display-text">'),
+    archiveHtml()
+      .replaceAll('<li class="log-item">', '<li data-tweet-id="display-id" class="log-item">')
+      .replaceAll('<p class="log-item-text">', '<p data-role="tweet-display-text" class="log-item-text">'),
+  ]) {
+    assert.deepEqual(parseHistoricalMonitorHtml(html), expected);
+  }
+});
+
 test("historical monitor parser quarantines same-day clock drift and rejects cross-day drift", () => {
   assert.throws(
     () => parseHistoricalMonitorHtml(archiveHtml().replace("2026-07-10\"", "2026-07-12\"")),

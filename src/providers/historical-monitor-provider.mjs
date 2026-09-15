@@ -53,7 +53,7 @@ function plainText(value) {
 
 export function parseHistoricalMonitorHtml(html) {
   const items = [];
-  const itemPattern = /<li class="log-item">[\s\S]*?data-datetime="([^"]+)"[\s\S]*?<p class="log-item-text">([\s\S]*?)<\/p>[\s\S]*?href="https:\/\/x\.com\/thsottiaux\/status\/(\d+)"[\s\S]*?<\/li>/g;
+  const itemPattern = /<li\b[^>]*?\sclass="log-item"[^>]*>[\s\S]*?data-datetime="([^"]+)"[\s\S]*?<p\b[^>]*?\sclass="log-item-text"[^>]*>([\s\S]*?)<\/p>[\s\S]*?href="https:\/\/x\.com\/thsottiaux\/status\/(\d+)"[\s\S]*?<\/li>/g;
   for (const match of String(html).matchAll(itemPattern)) {
     const [, publishedAt, encodedText, id] = match;
     const pageTimestamp = new Date(publishedAt).toISOString();
