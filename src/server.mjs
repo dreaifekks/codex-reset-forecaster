@@ -65,7 +65,7 @@ const pipelineWorker = createPipelineWorker({
   dataDir: config.runtime.data_dir,
   config,
 });
-const operationsRuntime = await createOperationsRuntime({ store });
+const operationsRuntime = await createOperationsRuntime({ store, config });
 const publicationLedger = createPublicationLedger(store);
 const publicationProjector = createPublicationProjector({
   store,

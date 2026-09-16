@@ -1,4 +1,5 @@
 import path from "node:path";
+import { getProviderFreshness } from "../runtime/readiness.mjs";
 import {
   authorizedOperationsRequest,
   readProtectedToken,
@@ -21,6 +22,7 @@ function optionalInteger(value, name) {
 
 export async function createOperationsRuntime({
   store,
+  config = null,
   env = process.env,
   now = () => new Date(),
   monotonicNow,
@@ -83,6 +85,7 @@ export async function createOperationsRuntime({
         write: (state) => store.writeState("traffic-monitor", state),
       },
       now,
+      ...(config ? { providerFreshness: (at) => getProviderFreshness(store, config, at) } : {}),
       ...(monotonicNow ? { monotonicNow } : {}),
       ...(timers ? { timers } : {}),
       logger,

@@ -92,6 +92,27 @@ function validateModelFeatureTransform(config) {
   }
 }
 
+function validateSourcePolicies(config) {
+  const required = config.runtime?.required_source_providers;
+  const policy = config.live_evidence_policy;
+  const validIds = (ids) => Array.isArray(ids) && ids.length > 0 &&
+    new Set(ids).size === ids.length && ids.every((id) =>
+      typeof id === "string" && Object.entries(config.providers).some(([name, provider]) =>
+        id === (provider.provider_name ?? name) ||
+        (name === "x_search_gateway" && id === `x_search_gateway_${provider.upstream_provider}`)
+      )
+    );
+  if (required != null && !validIds(required)) {
+    throw new TypeError("runtime.required_source_providers must name non-empty configured provider IDs");
+  }
+  if (policy && (policy.version !== "primary-full-text/1" ||
+      !validIds(policy.primary_providers) ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(policy.effective_at) ||
+      !Number.isFinite(Date.parse(policy.effective_at)))) {
+    throw new TypeError("live_evidence_policy must declare primary-full-text/1, primary providers and a UTC effective_at");
+  }
+}
+
 function validateProvisionalBootstrap(config) {
   const bootstrap = config.runtime?.provisional_bootstrap;
   if (
@@ -551,6 +572,7 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   validateModelCalibrator(config);
   validateModelFeatureTransform(config);
   validateProvisionalBootstrap(config);
+  validateSourcePolicies(config);
   validateOutcomeCoverageProviders(config);
   validateAuthorityTiming(config);
   validatePostOutcomeRefractory(config);

@@ -1,6 +1,6 @@
 import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { addHours, floorHour, halfOpenRange } from "../core/time.mjs";
-import { confirmationIdentityIds } from "../core/sources.mjs";
+import { confirmationIdentityIds, primaryEvidenceAllowed, providerSuppliesPrimaryEvidence } from "../core/sources.mjs";
 import {
   extractorContract,
   matchesExtractorContract,
@@ -155,6 +155,7 @@ export function eligibleConfirmedOutcomeVerifications(outcome, {
     if (
       entry.kind !== "official_confirmation"
     ) return false;
+    if (!primaryEvidenceAllowed(observation, config)) return false;
     const signal = currentSignalsByObservationId.get(entry.observation_ref.record_id);
     if (!signal) return false;
     if (signal.data.extraction.reset_review && (!config || !resetReviewEvidenceValid(
@@ -229,6 +230,9 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
     )[0]
   );
   const existing = await store.all("reset_outcome");
+  const historicalVerificationRefs = new Set(existing
+    .filter((outcome) => outcome.data.status === "confirmed")
+    .flatMap((outcome) => outcome.data.verification.map((entry) => exactRefKey(entry.observation_ref))));
   const referencedCandidateIds = new Set(existing.flatMap((outcome) =>
     outcome.data.candidate_refs?.map((reference) => reference.record_id) ?? []
   ));
@@ -275,7 +279,10 @@ export async function adjudicateOutcomes(store, config, { knownAt = null, now = 
         if (signal.data.provenance.derivation !== "primary_statement") return false;
         const reference = signal.data.observation_refs[0];
         const observation = observations.get(`${reference.record_id}@${reference.revision}`);
-        return observation?.data.content.media_type === "text/plain" &&
+        return primaryEvidenceAllowed(observation, config) &&
+          (providerSuppliesPrimaryEvidence(observation.data.ingest_provider, config, now) ||
+            historicalVerificationRefs.has(exactRefKey(observation))) &&
+          observation?.data.content.media_type === "text/plain" &&
           (!signal.data.extraction.reset_review || resetReviewEvidenceValid(
             signal.data.extraction.reset_review, observation, [...observations.values()], config,
           ));

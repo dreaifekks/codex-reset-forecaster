@@ -227,10 +227,10 @@ revision.
 
 ## Non-canonical operations state
 
-`traffic-monitor-state/2` is bounded, mutable runtime telemetry rather than an
+`traffic-monitor-state/3` is bounded, mutable runtime telemetry rather than an
 intelligence or publication record. It contains only UTC minute/day counters,
 low-cardinality route classes, latency/runtime histograms, capacity policy state,
-and a separate operations alert cursor. It must never enter collection evidence,
+provider-health incident state, and a separate operations alert cursor. It must never enter collection evidence,
 features, labels, forecasts, outcomes, calibration, or `publication-event/1`.
 Operations alerts are administrator delivery jobs only; ordinary feed, Web Push,
 and Telegram subscriptions cannot consume them. No IP address, user agent, query,
@@ -239,6 +239,11 @@ Version 1 state is migrated by retaining only traffic aggregates and resetting t
 pressure incident and operations-alert stream. This prevents a stricter policy or
 older alert shape from being treated as current evidence; Bot cursor recovery then
 records the gap and starts a new local stream generation.
+Version 2 migrates without resetting its alert cursor or existing capacity events.
+`provider.failed` and `provider.recovered` share the protected operations stream;
+one sustained failure produces one alert across polls and process restarts, then
+one recovery alert. Each records the provider ID, error and whether it is required
+for serving. Reference failures never enter ordinary subscriber notifications.
 
 ## Time semantics
 

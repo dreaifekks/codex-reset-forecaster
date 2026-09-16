@@ -531,15 +531,33 @@ prediction reference changes. Evidence is not part of the forecast page's
 first-render critical path. This reduces initial work without changing the
 underlying 10-minute collection scheduler.
 
+The live profile separates online availability from historical training coverage.
+`runtime.required_source_providers` names the providers required for serving;
+the deployed profile requires only `rsshub_x_timeline`. Optional reference-source
+failures remain visible in health and generate administrator provider alerts, but
+do not block a fresh compatible forecast. `model.outcome_coverage_providers`
+continues to identify stored training-coverage evidence; it is not an online
+dependency list. Profiles without an explicit required-source list retain the
+legacy freshness checks.
+
+`live_evidence_policy` (`primary-full-text/1`) records the UTC cutover and primary
+provider IDs. From the cutover, only RSS full-text observations and RSS-sourced
+context may drive new automatic judgments in the live profile. The eligibility
+clock is the latest of creation, first-seen and fetch time, never a backfilled
+publication date. Already verified historical evidence/outcomes remain usable.
+Reference archives retain inspectable snapshots and health diagnostics but cannot
+create or revise outcomes or training coverage. Missing future coverage remains
+pending/censored; a finite RSS feed never supplies automatic negative labels.
+
 `/api/health` reports every configured provider separately, including its role,
 last success, latest unresolved error, age threshold, and effective stale state.
 The aggregate compatibility timestamp is informational only: a fresh context
-provider cannot mask a stale required exact/outcome source. Provisional availability
+provider cannot mask a stale required primary source. Provisional availability
 and validated readiness are separate. Insufficient causal/as-issued evaluation by
 itself does not block an eligible provisional forecast, but the response remains
 explicitly labeled `provisional`, retains the validation blockers, and must not be
 presented as a validated probability. Missing legal training coverage, stale
-required sources, or model/feature integrity failures still fail closed. Pipeline
+required primary sources, or model/feature integrity failures still fail closed. Pipeline
 failures remain visible and prevent validated publication; a still-fresh compatible
 stable forecast may continue serving under its existing stage. An explicitly
 labeled `synthetic_demo` remains available only for local mechanics and carries its

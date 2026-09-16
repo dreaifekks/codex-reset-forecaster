@@ -1,5 +1,33 @@
 import { stableStringify } from "./hash.mjs";
 
+export function requiredSourceProviderIds(config) {
+  return config.runtime?.required_source_providers ?? null;
+}
+
+export function providerSuppliesPrimaryEvidence(providerId, config, at = new Date()) {
+  const policy = config?.live_evidence_policy;
+  return !policy || new Date(at).getTime() < Date.parse(policy.effective_at) ||
+    policy.primary_providers.includes(providerId);
+}
+
+export function evidenceObservedAt(observation) {
+  // A late import or revision never inherits its post's historical publication clock.
+  return Math.max(...[
+    observation.created_at, observation.data.first_seen_at, observation.data.fetched_at,
+  ].map(Date.parse).filter(Number.isFinite));
+}
+
+export function primaryEvidenceAllowed(observation, config, at = null) {
+  if (!observation) return false;
+  if (!config?.live_evidence_policy) return true;
+  const learnedAt = evidenceObservedAt(observation);
+  if (!Number.isFinite(learnedAt)) return false;
+  return providerSuppliesPrimaryEvidence(
+    observation.data.ingest_provider, config,
+    new Date(Math.max(learnedAt, at ? new Date(at).getTime() : learnedAt)).toISOString(),
+  );
+}
+
 function providerConfigurations(config) {
   return Object.values(config.providers ?? {}).filter((provider) =>
     provider && typeof provider === "object" && !Array.isArray(provider),

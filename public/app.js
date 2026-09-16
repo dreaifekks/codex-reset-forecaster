@@ -128,11 +128,13 @@ const publicationBlockerLabels = {
   negative_label_coverage_pending: tr("历史覆盖正在复验", "Historical coverage is being revalidated"),
   negative_label_coverage_missing: tr("历史覆盖数据不足", "Historical coverage is insufficient"),
   required_outcome_source_not_fresh: tr("核心来源更新不及时", "Core source is not fresh"),
+  required_source_not_fresh: tr("原文来源更新不及时", "Primary source is not fresh"),
   exact_source_not_fresh: tr("核心来源更新不及时", "Core source is not fresh"),
   pipeline_error: tr("数据更新失败", "Data refresh failed"),
 };
 
 const publicationBlockerPriority = [
+  "required_source_not_fresh",
   "negative_label_coverage_pending",
   "negative_label_coverage_missing",
   "required_outcome_source_not_fresh",
@@ -1338,6 +1340,7 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   ];
   const sourceFreshnessBlocked = servingBlockers.some((blocker) =>
     [
+      "required_source_not_fresh",
       "required_outcome_source_not_fresh",
       "exact_source_not_fresh",
     ].includes(blocker)

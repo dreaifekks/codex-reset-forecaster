@@ -175,6 +175,40 @@ test("archive failures wait for the refresh interval without claiming recovery",
   assert.equal((await store.readState("historical-monitor-provider")).last_error, null);
 });
 
+test("a reference archive cannot revise stored evidence or training coverage", async (t) => {
+  const { clock, provider, store } = await authoritativeHarness(t);
+  await provider.collect(store, { force: true });
+  clock.now = new Date("2026-07-12T18:00:00.000Z");
+  await provider.collect(store, { force: true });
+  const coverage = await coverageAssertions(store, ["historical_monitor"]);
+  await processRecords(store, (await loadConfig({ overrides: {
+    outcome_definition: AUTHORITY_OUTCOME_DEFINITION,
+    target: AUTHORITY_TARGET,
+  } })), { now: clock.now });
+  const outcomes = await store.all("reset_outcome");
+  assert.ok(outcomes.some((record) => record.data.status === "confirmed"));
+  const before = (await store.all("raw_observation")).filter((r) => r.data.content.media_type === "text/plain");
+  provider.evidencePolicy = {
+    version: "primary-full-text/1", primary_providers: ["rsshub_x_timeline"],
+    effective_at: "2026-07-13T00:00:00.000Z",
+  };
+  clock.now = new Date("2026-07-13T06:00:00.000Z");
+  clock.html = clock.html.replace(ITEMS[1].text, "We have not reset usage limits across Codex.");
+  const result = await provider.collect(store, { force: true });
+  assert.equal(result.reference_only, true);
+  assert.equal(result.collected, 0);
+  assert.deepEqual(await coverageAssertions(store, ["historical_monitor"]), coverage);
+  assert.deepEqual((await store.all("raw_observation")).filter((r) => r.data.content.media_type === "text/plain"), before);
+  assert.equal((await store.readState("historical-monitor-provider")).last_error, null);
+  const primaryConfig = await loadConfig({ overrides: {
+    outcome_definition: AUTHORITY_OUTCOME_DEFINITION,
+    target: AUTHORITY_TARGET,
+    live_evidence_policy: provider.evidencePolicy,
+  } });
+  await processRecords(store, primaryConfig, { now: clock.now });
+  assert.deepEqual(await store.all("reset_outcome"), outcomes);
+});
+
 test("historical monitor preserves source evidence without treating its date grid as negative coverage", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reset-historical-monitor-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

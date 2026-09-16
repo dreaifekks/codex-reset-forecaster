@@ -1837,6 +1837,15 @@ test("gateway impact discovery mirrors high-impact and recovery vocabulary", asy
 });
 
 test("RSSHub provider identity and capabilities cannot be reconfigured", async () => {
+  await assert.rejects(loadConfig({ overrides: {
+    runtime: { required_source_providers: [] },
+  } }), /required_source_providers/);
+  await assert.rejects(loadConfig({ overrides: {
+    runtime: { required_source_providers: ["missing_provider"] },
+  } }), /required_source_providers/);
+  await assert.rejects(loadConfig({ overrides: {
+    live_evidence_policy: { version: "primary-full-text/1", primary_providers: ["rsshub_x_timeline"], effective_at: "yesterday" },
+  } }), /live_evidence_policy/);
   await assert.rejects(
     loadConfig({ overrides: {
       providers: {

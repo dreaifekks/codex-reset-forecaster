@@ -16,6 +16,7 @@ import {
 } from "../model/evaluation.mjs";
 import { issueForecast } from "../model/forecast.mjs";
 import { ceilHour, floorHour } from "../core/time.mjs";
+import { requiredSourceProviderIds } from "../core/sources.mjs";
 import { evaluateIssuedForecasts } from "../model/issued-evaluation.mjs";
 import { settleIssuedPredictions } from "../model/settlement.mjs";
 import {
@@ -228,14 +229,16 @@ export async function trainEvaluatePromote(store, config, {
 
 export async function collectConfiguredProviders(store, config, { instances = {} } = {}) {
   const collections = {};
-  const outcomeProviders = new Set(config.model.outcome_coverage_providers ?? []);
+  const requiredProviders = new Set(
+    requiredSourceProviderIds(config) ?? config.model.outcome_coverage_providers ?? [],
+  );
   const descriptors = [];
   const addProvider = (name, providerName, provider, { mutatesCoverage = false } = {}) => {
     descriptors.push({
       name,
       providerName,
       provider,
-      required: outcomeProviders.has(providerName),
+      required: requiredProviders.has(providerName),
       mutatesCoverage,
     });
   };
@@ -292,6 +295,7 @@ export async function collectConfiguredProviders(store, config, { instances = {}
       config: config.providers.historical_monitor,
       target: config.target,
       outcomeDefinition: config.outcome_definition,
+      evidencePolicy: config.live_evidence_policy,
     });
     addProvider(
       "historical_monitor",

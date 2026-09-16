@@ -1,7 +1,7 @@
 import { createRecord, producer, recordRef, targetScope } from "../core/records.mjs";
 import { makeRecordId, stableStringify } from "../core/hash.mjs";
 import { addHours, floorHour, halfOpenRange } from "../core/time.mjs";
-import { confirmationIdentityIds, sourceRoleForIdentity } from "../core/sources.mjs";
+import { confirmationIdentityIds, sourceRoleForIdentity, primaryEvidenceAllowed, evidenceObservedAt } from "../core/sources.mjs";
 import {
   AUTHORITY_SCOPE_POLICY,
   extractorContract,
@@ -997,7 +997,8 @@ export function extractSignal(observation, config, {
   hasUnresolvedContext = false,
   semanticAssistance = null,
 } = {}) {
-  if (!SIGNAL_MEDIA_TYPES.has(observation.data.content.media_type)) {
+  if (!SIGNAL_MEDIA_TYPES.has(observation.data.content.media_type) ||
+      !primaryEvidenceAllowed(observation, config)) {
     return null;
   }
   const extractor = extractorContract(config);
@@ -1284,6 +1285,7 @@ export async function normalizeNewObservations(store, config, {
 } = {}) {
   const extractor = extractorContract(config);
   const observations = (await store.all("raw_observation", { latestOnly: false }))
+    .filter((observation) => primaryEvidenceAllowed(observation, config))
     .sort((left, right) =>
       left.data.first_seen_at.localeCompare(right.data.first_seen_at) ||
       left.record_id.localeCompare(right.record_id) ||
@@ -1335,9 +1337,15 @@ export async function normalizeNewObservations(store, config, {
   ].join(":");
   const processed = normalizationState.versions[versionKey]?.processed ?? {};
   const observationsByRelationId = contextIndex(observations);
+  const primaryContextsByRelationId = config.live_evidence_policy
+    ? contextIndex(observations.filter((observation) =>
+        primaryEvidenceAllowed(observation, config, config.live_evidence_policy.effective_at)))
+    : observationsByRelationId;
   const relationContextByRef = new Map(observations.map((observation) => [
     exactRef(observation),
-    relationContexts(observation, observationsByRelationId),
+    relationContexts(observation,
+      config.live_evidence_policy && evidenceObservedAt(observation) >= Date.parse(config.live_evidence_policy.effective_at)
+        ? primaryContextsByRelationId : observationsByRelationId),
   ]));
   const contextSignature = (relationContext) => [
     relationContext.hasUnresolvedContext ? "unresolved" : "resolved",

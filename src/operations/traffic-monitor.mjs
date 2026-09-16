@@ -3,7 +3,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { getHeapStatistics } from "node:v8";
 
-export const TRAFFIC_MONITOR_STATE_VERSION = "traffic-monitor-state/2";
+export const TRAFFIC_MONITOR_STATE_VERSION = "traffic-monitor-state/3";
+const PROVIDER_ALERT_POLICY_VERSION = "provider-health/1";
 export const TRAFFIC_MONITOR_SUMMARY_VERSION = "traffic-monitor-summary/1";
 export const TRAFFIC_ALERT_POLICY_VERSION = "traffic-capacity-policy/1";
 const LEGACY_TRAFFIC_MONITOR_STATE_VERSION = "traffic-monitor-state/1";
@@ -167,10 +168,14 @@ function defaultState(now, activePolicyHash) {
     pressure: defaultPressure(now),
     next_alert_sequence: 1,
     alerts: [],
+    provider_health: {},
   };
 }
 
 function migrateState(state, now) {
+  if (state?.schema_version === "traffic-monitor-state/2") {
+    return { ...structuredClone(state), schema_version: TRAFFIC_MONITOR_STATE_VERSION, provider_health: {} };
+  }
   if (state?.schema_version !== LEGACY_TRAFFIC_MONITOR_STATE_VERSION) {
     return state;
   }
@@ -180,6 +185,7 @@ function migrateState(state, now) {
   migrated.pressure = defaultPressure(now);
   migrated.next_alert_sequence = 1;
   migrated.alerts = [];
+  migrated.provider_health = {};
   migrated.updated_at = iso(now, "traffic state migration time");
   return migrated;
 }
@@ -465,16 +471,25 @@ function assertState(state) {
     minuteKey(pressure.last_evaluated_minute) !== pressure.last_evaluated_minute
   ) throw new TypeError("Invalid traffic pressure evaluation time");
   let previousSequence = 0;
+  if (!state.provider_health || typeof state.provider_health !== "object" || Array.isArray(state.provider_health)) {
+    throw new TypeError("Invalid provider health alert state");
+  }
+  for (const incident of Object.values(state.provider_health)) {
+    if (!incident || typeof incident.unhealthy !== "boolean" ||
+        (incident.unhealthy ? !String(incident.incident_id ?? "").startsWith("provider:") : incident.incident_id !== null)) {
+      throw new TypeError("Invalid provider health incident");
+    }
+  }
   for (const alert of state.alerts) {
     if (
       !alert ||
       !Number.isSafeInteger(alert.sequence) ||
       alert.sequence <= previousSequence ||
       alert.alert_id !== `traffic:${alert.sequence}` ||
-      !String(alert.alert_type ?? "").startsWith("capacity.") ||
+      !/^(?:capacity\.|provider\.(?:failed|recovered)$)/.test(alert.alert_type ?? "") ||
       !["normal", "strained", "critical"].includes(alert.level) ||
       typeof alert.incident_id !== "string" ||
-      !alert.incident_id.startsWith("capacity:") ||
+      !/^(?:capacity|provider):/.test(alert.incident_id) ||
       typeof alert.title !== "string" ||
       typeof alert.summary !== "string" ||
       !Array.isArray(alert.reasons) ||
@@ -535,6 +550,7 @@ export class TrafficMonitor {
     monotonicNow = () => performance.now(),
     timers = { setInterval, clearInterval },
     readFile = fs.readFile,
+    providerFreshness = null,
     logger = console,
     options = {},
   }) {
@@ -546,6 +562,7 @@ export class TrafficMonitor {
     this.monotonicNow = monotonicNow;
     this.timers = timers;
     this.readFile = readFile;
+    this.providerFreshness = providerFreshness;
     this.logger = logger;
     const sampleIntervalMs = integer(
       options.sampleIntervalMs ?? DEFAULTS.sampleIntervalMs,
@@ -714,6 +731,7 @@ export class TrafficMonitor {
     reasons,
     incidentId,
     previousPolicyHash = null,
+    provider = null,
     observedAt,
   }) {
     const state = this.#requireState();
@@ -732,22 +750,53 @@ export class TrafficMonitor {
     state.alerts.push({
       sequence,
       alert_id: `traffic:${sequence}`,
-      alert_type: `capacity.${transition}`,
+      alert_type: `${provider ? "provider" : "capacity"}.${transition}`,
       incident_id: incidentId,
       level,
-      title,
-      summary: reasons.length
+      title: provider ? `数据来源${transition === "recovered" ? "已恢复" : "异常"}：${provider.provider_id}` : title,
+      summary: provider ? (provider.last_error ?? provider.status) : reasons.length
         ? `触发信号：${reasons.join("、")}`
         : "连续健康窗口已达到恢复条件。",
       reasons: [...reasons],
-      policy_version: TRAFFIC_ALERT_POLICY_VERSION,
-      policy_hash: this.policyHash,
+      policy_version: provider ? PROVIDER_ALERT_POLICY_VERSION : TRAFFIC_ALERT_POLICY_VERSION,
+      policy_hash: provider
+        ? `sha256:${createHash("sha256").update(PROVIDER_ALERT_POLICY_VERSION).digest("hex")}`
+        : this.policyHash,
+      ...(provider ? { provider: structuredClone(provider) } : {}),
       ...(previousPolicyHash ? { superseded_policy_hash: previousPolicyHash } : {}),
       emitted_at: emittedAt,
       observed_at: emittedAt,
       expires_at: expiresAt,
     });
     this.#trim();
+  }
+
+  updateProviderHealth(freshness, { at = this.now() } = {}) {
+    const state = this.#requireState();
+    for (const provider of Object.values(freshness.providers ?? {})) {
+      if (!provider.enabled || provider.status === "unknown") continue;
+      const id = provider.provider_id;
+      const unhealthy = provider.status !== "fresh";
+      const previous = state.provider_health[id];
+      if ((previous?.unhealthy ?? false) !== unhealthy) {
+        const incidentId = unhealthy
+          ? `provider:${id}:${iso(at, "provider incident time")}` : previous.incident_id;
+        this.#appendAlert({
+          level: unhealthy ? (provider.required_for_serving ? "critical" : "strained") : "normal",
+          transition: unhealthy ? "failed" : "recovered",
+          reasons: [provider.status], incidentId, observedAt: at,
+          provider: {
+            provider_id: id, status: provider.status,
+            required_for_serving: provider.required_for_serving === true,
+            last_success_at: provider.last_success_at,
+            last_error: provider.last_error,
+          },
+        });
+        state.provider_health[id] = { unhealthy, incident_id: unhealthy ? incidentId : null };
+      } else if (!previous) {
+        state.provider_health[id] = { unhealthy, incident_id: null };
+      }
+    }
   }
 
   evaluate({ at = this.now(), detectedAt = at } = {}) {
@@ -999,6 +1048,9 @@ export class TrafficMonitor {
     });
     const alertTailBeforeEvaluation =
       this.#requireState().next_alert_sequence - 1;
+    if (this.providerFreshness) {
+      this.updateProviderHealth(await this.providerFreshness(observedAt), { at: observedAt });
+    }
     this.evaluate({
       at: new Date(observedAt.getTime() - 60_000),
       detectedAt: observedAt,

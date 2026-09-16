@@ -503,6 +503,19 @@ export function formatOperationsAlert(
 ) {
   const english = isEnglishTelegramLocale(locale);
   const level = clean(alert?.level ?? alert?.severity ?? "warning");
+  if (String(alert?.alert_type).startsWith("provider.")) {
+    const recovered = alert.alert_type === "provider.recovered";
+    const provider = alert.provider ?? {};
+    return limitTelegramText([
+      english ? "Data provider alert (admin only)" : "数据来源提醒（仅管理员）",
+      `${clean(provider.provider_id)} · ${english ? (recovered ? "recovered" : "unavailable") : (recovered ? "已恢复" : "异常")}`,
+      provider.required_for_serving
+        ? (english ? "Required primary source; forecast availability follows its health." : "这是必需原文来源，预测可用性取决于其状态。")
+        : (english ? "Reference source; this incident does not pause forecasts." : "这是参考来源，本次故障不会暂停网站预测。"),
+      !recovered ? `${english ? "Reason" : "原因"}：${clean(provider.last_error ?? provider.status)}` : "",
+      `${english ? "Time" : "时间"}：${dateTime(alert.observed_at ?? alert.emitted_at, timeZone, locale)}`,
+    ].filter(Boolean).join("\n"));
+  }
   const reasons = Array.isArray(alert?.reasons)
     ? alert.reasons.map((reason) => runtimeResourceReasonLabel(reason, locale))
     : [];

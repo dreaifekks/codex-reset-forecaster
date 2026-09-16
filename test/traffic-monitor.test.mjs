@@ -13,6 +13,7 @@ import {
 } from "../src/operations/traffic-monitor.mjs";
 import { createOperationsRuntime } from "../src/operations/runtime.mjs";
 import { createRequestHandler } from "../src/web/app.mjs";
+import { formatOperationsAlert } from "../src/telegram/format.mjs";
 
 function memoryAdapter(initial = null) {
   let state = initial;
@@ -28,6 +29,45 @@ function memoryAdapter(initial = null) {
     },
   };
 }
+
+test("provider failures and recoveries persist once across restarts on the admin stream", async () => {
+  const adapter = memoryAdapter();
+  const at = new Date("2026-09-16T04:00:00Z");
+  let monitor = await new TrafficMonitor({ stateAdapter: adapter, now: () => at }).init();
+  const provider = {
+    provider_id: "historical_monitor", enabled: true, status: "error",
+    required_for_serving: false, last_success_at: null, last_error: "archive markup changed",
+  };
+  monitor.updateProviderHealth({ providers: { historical_monitor: provider } });
+  assert.equal(monitor.listAlerts(0).alerts.length, 0, "unpersisted alerts must not be served");
+  await monitor.flush();
+  assert.equal(monitor.listAlerts(0).alerts.length, 1);
+  monitor = await new TrafficMonitor({ stateAdapter: adapter, now: () => at }).init();
+  monitor.updateProviderHealth({ providers: { historical_monitor: provider } });
+  await monitor.flush();
+  assert.equal(monitor.listAlerts(0).alerts.length, 1);
+  const [failure] = monitor.listAlerts(0).alerts;
+  assert.equal(failure.alert_type, "provider.failed");
+  assert.match(formatOperationsAlert(failure), /historical_monitor[\s\S]*参考来源[\s\S]*不会暂停[\s\S]*archive markup changed/);
+  assert.match(formatOperationsAlert(failure, { locale: "en" }), /Reference source/);
+  monitor.updateProviderHealth({ providers: { historical_monitor: { ...provider, status: "fresh", last_error: null } } });
+  await monitor.flush();
+  assert.deepEqual(monitor.listAlerts(0).alerts.map((a) => a.alert_type), ["provider.failed", "provider.recovered"]);
+  assert.equal(monitor.listAlerts(0).alerts[1].incident_id, failure.incident_id);
+  const v2 = adapter.snapshot();
+  v2.schema_version = "traffic-monitor-state/2";
+  v2.alerts = v2.alerts.map(({ provider, ...alert }) => ({
+    ...alert, alert_type: alert.level === "normal" ? "capacity.recovered" : "capacity.strained",
+    incident_id: "capacity:legacy", policy_version: "traffic-capacity-policy/1", policy_hash: monitor.policyHash,
+  }));
+  delete v2.provider_health;
+  await adapter.write(v2);
+  monitor = await new TrafficMonitor({ stateAdapter: adapter, now: () => at }).init();
+  assert.equal(monitor.listAlerts().cursor, 2);
+  assert.deepEqual(monitor.listAlerts(0).alerts, v2.alerts);
+  await monitor.flush();
+  assert.equal(adapter.snapshot().schema_version, "traffic-monitor-state/3");
+});
 
 test("traffic monitor stores bounded origin aggregates without request identity", async () => {
   const adapter = memoryAdapter();
@@ -279,7 +319,7 @@ test("legacy traffic state migrates without trusting old alert semantics", async
   }).init();
   assert.equal(second.summary().capacity.level, "normal");
   assert.equal(second.listAlerts().cursor, 0);
-  assert.equal(adapter.snapshot().schema_version, "traffic-monitor-state/2");
+  assert.equal(adapter.snapshot().schema_version, "traffic-monitor-state/3");
 });
 
 test("traffic state rejects a non-contiguous or fictional alert tail", async () => {

@@ -12,8 +12,42 @@ import { latestSignalsAsOf } from "../src/model/as-of.mjs";
 import { causalWindowLabel } from "../src/model/evaluation.mjs";
 import { buildTrainingExamples } from "../src/model/training.mjs";
 import { loadConfirmedHistoryResults } from "../src/query/history-results.mjs";
+import { extractSignal } from "../src/pipeline/extract.mjs";
+import { primaryEvidenceAllowed } from "../src/core/sources.mjs";
 
 const NOW = "2026-09-14T14:00:00.000Z";
+
+test("primary-source cutover preserves old evidence but refuses new reference judgments", async () => {
+  const config = await loadConfig({ configPath: "config/tibo-authority-live.json" });
+  const policy = config.live_evidence_policy;
+  const observation = rawObservationFromItem({
+    provider_item_id: "2098685367058612394",
+    canonical_url: "https://x.com/thsottiaux/status/2098685367058612394",
+    published_at: "2026-09-12T08:09:17.852Z",
+    author: { identity_id: "person_tibo_sottiaux" },
+    content: { media_type: "text/plain", text: "We have reset Codex usage limits for all users." },
+  }, {
+    providerName: "historical_monitor", providerVersion: "test", config: {},
+    firstSeenAt: "2026-09-12T09:00:00.000Z",
+  });
+  assert.equal(primaryEvidenceAllowed(observation, config), true);
+  assert.ok(extractSignal(observation, config));
+  const corrected = structuredClone(observation);
+  corrected.created_at = corrected.data.fetched_at = policy.effective_at;
+  assert.equal(primaryEvidenceAllowed(corrected, config), false);
+  assert.equal(extractSignal(corrected, config), null);
+  corrected.data.ingest_provider = "rsshub_x_timeline";
+  corrected.record_id = "obs_rss_primary";
+  assert.ok(extractSignal(corrected, config));
+  const referenceParent = structuredClone(observation);
+  referenceParent.record_id = "obs_reference_parent";
+  referenceParent.data.canonical_url = "https://x.com/thsottiaux/status/2098612714704891959";
+  corrected.data.native_relations = [{ type: "quotes", provider_item_id: "2098612714704891959" }];
+  const bundle = buildResetReviewBundle(corrected, [observation, corrected, referenceParent], config, policy.effective_at);
+  assert.ok(bundle.evidence.every((item) => item.observation_ref.record_id === corrected.record_id));
+  // An archive's old publication time cannot backdate newly learned evidence.
+  assert.equal(primaryEvidenceAllowed(observation, config, policy.effective_at), false);
+});
 async function setup(t) {
   const directory = await fs.mkdtemp("/tmp/reset-semantic-review-test-");
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

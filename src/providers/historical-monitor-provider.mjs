@@ -1,4 +1,5 @@
 import { hashLabel } from "../core/hash.mjs";
+import { providerSuppliesPrimaryEvidence } from "../core/sources.mjs";
 import {
   addCoverageAssertion,
   COVERAGE_ADEQUACY,
@@ -163,12 +164,14 @@ export class HistoricalMonitorProvider {
     config,
     target = null,
     outcomeDefinition = null,
+    evidencePolicy = null,
     fetchFn = fetch,
     now = () => new Date(),
   }) {
     this.config = config;
     this.target = target;
     this.outcomeDefinition = outcomeDefinition;
+    this.evidencePolicy = evidencePolicy;
     this.fetch = fetchFn;
     this.now = now;
     this.providerName = config.provider_name ?? "historical_monitor";
@@ -670,6 +673,9 @@ export class HistoricalMonitorProvider {
 
   async collect(store, { force = false } = {}) {
     const startedAt = this.now();
+    const referenceOnly = !providerSuppliesPrimaryEvidence(
+      this.providerName, { live_evidence_policy: this.evidencePolicy }, startedAt,
+    );
     const previousState = await store.readState("historical-monitor-provider", {});
     const requestedAdequacy = this.config.coverage_adequacy;
     const completenessAttestation =
@@ -690,7 +696,7 @@ export class HistoricalMonitorProvider {
           })
         : null;
     const invalidatedCoverageAssertions =
-      await this.invalidateIncompatibleAuthorityCoverage(store, {
+      referenceOnly ? 0 : await this.invalidateIncompatibleAuthorityCoverage(store, {
         coverageContractHash,
         assertedAt: startedAt,
       });
@@ -714,7 +720,7 @@ export class HistoricalMonitorProvider {
     const currentContractAlreadyObserved =
       Object.hasOwn(previousState, "coverage_contract_hash") &&
       previousState.coverage_contract_hash === coverageContractHash;
-    const pendingCoverageWaiting = await this.coverageWaiting(
+    const pendingCoverageWaiting = referenceOnly ? null : await this.coverageWaiting(
       store,
       completenessAttestation,
       startedAt,
@@ -788,6 +794,29 @@ export class HistoricalMonitorProvider {
           html,
         },
       );
+      if (referenceOnly) {
+        // Keep the reference snapshot for inspection. Existing canonical evidence
+        // and coverage remain intact; this source cannot create or revise labels.
+        const delaySeconds = Math.max(0, Math.round((fetchedAt - startedAt) / 1000));
+        await store.append(this.healthObservation({ ok: true, at: fetchedAt, delaySeconds }));
+        await store.writeState("historical-monitor-provider", {
+          ...previousState,
+          provider: this.providerName,
+          source_url: this.config.base_url,
+          reference_only: true,
+          evidence_policy: this.evidencePolicy,
+          reference_snapshot_ref: archiveSnapshotRef,
+          verified_items: verified.length,
+          coverage_waiting: null,
+          last_success_at: fetchedAt.toISOString(),
+          last_error: null,
+        });
+        return {
+          collected: 0, verified_items: verified.length, reference_only: true,
+          coverage_waiting: null, archive_snapshot_ref: archiveSnapshotRef,
+          health: { ok: true, delay_seconds: delaySeconds },
+        };
+      }
       let inserted = 0;
       for (const item of verified) {
         const result = await appendRawObservationRevision(store, {

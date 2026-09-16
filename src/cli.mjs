@@ -94,6 +94,7 @@ try {
       config: config.providers.historical_monitor,
       target: config.target,
       outcomeDefinition: config.outcome_definition,
+      evidencePolicy: config.live_evidence_policy,
     }).collect(store, { force: true }));
   } else if (command === "ingest-timeline") {
     const filePath = argument("--file");

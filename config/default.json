@@ -271,6 +271,7 @@
     }
   },
   "runtime": {
+    "required_source_providers": null,
     "data_dir": "data",
     "host": "127.0.0.1",
     "port": 8787,

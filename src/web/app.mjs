@@ -15,6 +15,7 @@ import {
   assessEvaluationCompatibility,
   getProviderFreshness,
   getReadiness,
+  sourceFreshnessBlockers,
 } from "../runtime/readiness.mjs";
 import {
   selectCurrentRelevantSignals,
@@ -106,6 +107,7 @@ const DYNAMIC_FORECAST_BLOCKERS = new Set([
   "forecast_invalid",
 ]);
 const DYNAMIC_SOURCE_BLOCKERS = new Set([
+  "required_source_not_fresh",
   "required_outcome_source_not_fresh",
   "exact_source_not_fresh",
 ]);
@@ -533,6 +535,7 @@ export async function buildEvaluationEventViews(
 
 export function servingSnapshotConfig(config) {
   const servingRuntime = {
+    required_source_providers: config.runtime?.required_source_providers ?? null,
     forecast_fresh_age_hours:
       config.runtime?.forecast_fresh_age_hours ?? null,
     forecast_stale_age_hours:
@@ -657,12 +660,7 @@ function withoutDynamicBlockers(blockers, { includePipeline = false } = {}) {
 }
 
 function appendDynamicSourceBlockers(blockers, providerFreshness) {
-  if (providerFreshness.groups.required_outcome.status !== "fresh") {
-    blockers.push("required_outcome_source_not_fresh");
-  }
-  if (providerFreshness.groups.exact.status !== "fresh") {
-    blockers.push("exact_source_not_fresh");
-  }
+  blockers.push(...sourceFreshnessBlockers(providerFreshness));
 }
 
 function runtimeFailureIsCurrent(runtimeState) {

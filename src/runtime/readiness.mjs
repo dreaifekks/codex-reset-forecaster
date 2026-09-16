@@ -10,7 +10,7 @@ import {
   buildOutcomeEligibilityContext,
   isEligibleConfirmedOutcome,
 } from "../pipeline/outcomes.mjs";
-import { confirmationIdentityIds } from "../core/sources.mjs";
+import { confirmationIdentityIds, requiredSourceProviderIds } from "../core/sources.mjs";
 import { FEATURE_NAMES } from "../model/features.mjs";
 import { assertModelCompatibility } from "../model/logistic-hazard.mjs";
 import { assessPredictionIntegrity } from "../model/prediction-integrity.mjs";
@@ -371,6 +371,21 @@ export function assessEvaluationCompatibility(
   };
 }
 
+export function sourceFreshnessBlockers(freshness) {
+  if (freshness.groups.required_source) {
+    return freshness.groups.required_source.status === "fresh"
+      ? [] : ["required_source_not_fresh"];
+  }
+  const blockers = [];
+  if (freshness.groups.required_outcome.status !== "fresh") {
+    blockers.push("required_outcome_source_not_fresh");
+  }
+  if (freshness.groups.exact.status !== "fresh") {
+    blockers.push("exact_source_not_fresh");
+  }
+  return blockers;
+}
+
 function stateKey(name) {
   return `${name.replaceAll("_", "-")}-provider`;
 }
@@ -663,9 +678,19 @@ export async function getProviderFreshness(store, config, now = new Date()) {
     ),
   ]));
   const providers = Object.fromEntries(states);
+  const requiredSources = requiredSourceProviderIds(config);
+  for (const provider of Object.values(providers)) {
+    provider.required_for_serving = requiredSources
+      ? requiredSources.includes(provider.provider_id)
+      : provider.roles.some((role) => ["required_outcome", "exact"].includes(role));
+    if (requiredSources && provider.required_for_serving) provider.roles.push("required_source");
+  }
   return {
     providers,
     groups: {
+      ...(requiredSources ? {
+        required_source: freshnessGroup("required_source", providers, requiredSources),
+      } : {}),
       required_outcome: freshnessGroup(
         "required_outcome",
         providers,
@@ -1155,12 +1180,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   if (latestPrediction && activeModel && !predictionIntegrity.valid) {
     servingBlockers.push("forecast_integrity_failed");
   }
-  if (providerFreshnessSummary.groups.required_outcome.status !== "fresh") {
-    servingBlockers.push("required_outcome_source_not_fresh");
-  }
-  if (providerFreshnessSummary.groups.exact.status !== "fresh") {
-    servingBlockers.push("exact_source_not_fresh");
-  }
+  servingBlockers.push(...sourceFreshnessBlockers(providerFreshnessSummary));
   const servingReady = forecastAvailable && servingBlockers.length === 0;
   const servingStage = !servingReady
     ? "blocked"
@@ -1237,12 +1257,7 @@ export async function getReadiness(store, config, { now = new Date() } = {}) {
   if (evaluationWaiting && !champion) {
     publicationBlockers.push("model_evaluation_pending");
   }
-  if (providerFreshnessSummary.groups.required_outcome.status !== "fresh") {
-    publicationBlockers.push("required_outcome_source_not_fresh");
-  }
-  if (providerFreshnessSummary.groups.exact.status !== "fresh") {
-    publicationBlockers.push("exact_source_not_fresh");
-  }
+  publicationBlockers.push(...sourceFreshnessBlockers(providerFreshnessSummary));
   if (runtimeFailureIsCurrent) publicationBlockers.push("pipeline_error");
   return {
     generated_at: now.toISOString(),

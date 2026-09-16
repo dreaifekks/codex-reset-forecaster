@@ -1,4 +1,9 @@
 {
+  "live_evidence_policy": {
+    "version": "primary-full-text/1",
+    "effective_at": "2026-09-16T03:35:00.000Z",
+    "primary_providers": ["rsshub_x_timeline"]
+  },
   "extractor": {
     "authority_reply_identity_ids": ["person_tibo_sottiaux"],
     "reset_review": { "enabled": true }
@@ -52,6 +57,7 @@
     }
   },
   "runtime": {
+    "required_source_providers": ["rsshub_x_timeline"],
     "scheduler_enabled": true,
     "run_on_start": true,
     "public_base_url": "https://codexreset.dreaife.tokyo",

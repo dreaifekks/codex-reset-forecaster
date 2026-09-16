@@ -1,7 +1,7 @@
 import { hashLabel, makeRecordId } from "../core/hash.mjs";
 import { createRecord, producer, recordRef } from "../core/records.mjs";
 import { extractorContract, matchesExtractorContract } from "../core/extractor-contract.mjs";
-import { confirmationIdentityIds, sourceRoleForIdentity } from "../core/sources.mjs";
+import { confirmationIdentityIds, sourceRoleForIdentity, primaryEvidenceAllowed, evidenceObservedAt as observedAt } from "../core/sources.mjs";
 import { hasNarrowAuthorityResetScope } from "../core/authority-reply.mjs";
 import { floorHour, addHours, halfOpenRange } from "../core/time.mjs";
 import { selectCurrentSignals } from "../pipeline/signal-selection.mjs";
@@ -35,12 +35,6 @@ export const RESET_REVIEW_PROMPT = [
   "Product background must establish actual availability or rollout across the target product. A benchmark merely using a Codex harness is not sufficient product-availability evidence. A completion passage saying everyone may also establish scope; do not omit product evidence when the subject is a model name."
 ].join(" ");
 
-function observedAt(observation) {
-  // Live knowledge never inherits a retrospectively attested publication clock.
-  return Math.max(...[observation.created_at, observation.data.first_seen_at, observation.data.fetched_at]
-    .map(Date.parse).filter(Number.isFinite));
-}
-
 export function resetReviewPolicy(config) {
   return { ...config.extractor.reset_review, model: config.extractor.semantic_assistance.model,
     thinking: config.extractor.semantic_assistance.thinking ?? null, prompt_hash: hashLabel(RESET_REVIEW_PROMPT) };
@@ -52,7 +46,8 @@ export function buildResetReviewBundle(anchor, observations, config, cutoff) {
   const anchorMs = Date.parse(anchor.data.published_at);
   const latest = new Map();
   for (const observation of observations) {
-    if (!statusId(observation) || observedAt(observation) > cutoffMs ||
+    if (!primaryEvidenceAllowed(observation, config, cutoff) ||
+        !statusId(observation) || observedAt(observation) > cutoffMs ||
         Date.parse(observation.data.published_at) > cutoffMs) continue;
     const prior = latest.get(observation.record_id);
     if (!prior || observation.revision > prior.revision) latest.set(observation.record_id, observation);
@@ -108,7 +103,7 @@ export function resetReviewEvidenceValid(review, anchor, observations, config) {
   if (!review || review.policy_version !== RESET_REVIEW_POLICY || review.decision !== "confirmed" ||
       review.policy_hash !== hashLabel(resetReviewPolicy(config)) ||
       review.model !== config.extractor.semantic_assistance.model || !Number.isFinite(review.confidence) ||
-      !exact(anchor) ||
+      !exact(anchor) || !primaryEvidenceAllowed(anchor, config) ||
       !confirmationIdentityIds(config).has(anchor.data.author.identity_id) ||
       review.confidence < config.extractor.reset_review.minimum_confidence || review.confidence > 1 ||
       !Number.isFinite(Date.parse(review.completed_at)) ||
@@ -199,7 +194,7 @@ export async function reviewResetClaims(store, config, { now = new Date(), asses
       observation.data.native_relations.some((relation) => ["quotes", "reply"].includes(relation.type) &&
         observations.some((parent) => statusId(parent) === String(relation.provider_item_id) && exact(parent) &&
           observedAt(parent) <= Date.parse(cutoff) && RESET.test(text(parent))));
-    if (!exact(observation) || !statusId(observation) || age < 0 ||
+    if (!primaryEvidenceAllowed(observation, config, cutoff) || !exact(observation) || !statusId(observation) || age < 0 ||
         (age > policy.lookback_days * 24 * HOUR && !cache.reviews[statusId(observation)]) ||
         observedAt(observation) > Date.parse(cutoff) || !confirmationIdentityIds(config).has(observation.data.author.identity_id) ||
         !(RESET.test(text(observation)) && COMPLETED.test(text(observation)) || contextCompletion) ||

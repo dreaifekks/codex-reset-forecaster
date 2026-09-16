@@ -949,8 +949,13 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
   ));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const config = await loadConfig({ overrides: {
+    providers: {
+      rsshub_x_timeline: { enabled: true },
+      historical_monitor: { enabled: true },
+    },
     runtime: {
       data_dir: directory,
+      required_source_providers: ["rsshub_x_timeline"],
       provisional_bootstrap: {
         enabled: false,
         minimum_outcomes: 3,
@@ -1063,4 +1068,28 @@ test("live coverage can fit a challenger while causal walk-forward remains pendi
     null,
   );
   assert.equal((await store.all("prediction")).length, 2);
+
+  const servingNow = addHours(now, 2);
+  await store.writeState("rsshub-x-timeline-provider", { last_success_at: servingNow.toISOString() });
+  await store.writeState("historical-monitor-provider", {
+    last_failure_at: servingNow.toISOString(), last_error: "archive markup changed",
+  });
+  const readiness = await getReadiness(store, config, { now: servingNow });
+  assert.equal(readiness.serving_ready, true);
+  assert.deepEqual(readiness.serving_blockers, []);
+  const server = http.createServer(createRequestHandler({ store, config, now: () => servingNow }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(`${base}/api/health`)).status, 200);
+  assert.equal((await fetch(`${base}/api/forecast/current`)).status, 200);
+  await store.writeState("rsshub-x-timeline-provider", {
+    last_failure_at: servingNow.toISOString(), last_error: "primary feed failed",
+  });
+  const blocked = await fetch(`${base}/api/health`);
+  assert.equal(blocked.status, 503);
+  assert.deepEqual((await blocked.json()).serving_blockers, ["required_source_not_fresh"]);
+  assert.equal((await fetch(`${base}/api/forecast/current`)).status, 503);
+  await store.writeState("rsshub-x-timeline-provider", { last_success_at: servingNow.toISOString() });
+  assert.equal((await fetch(`${base}/api/forecast/current`)).status, 200);
 });
