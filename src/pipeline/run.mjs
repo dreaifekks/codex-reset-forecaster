@@ -615,26 +615,29 @@ export async function runLitePipeline(store, config, {
   };
   // Lite retention rewrites feature_snapshot.jsonl down to one batch, so it may
   // only ever run on a data root that export-lite created for that purpose.
-  if (!await store.readState(LITE_PACK_STATE_KEY, null)) {
+  const pack = await store.readState(LITE_PACK_STATE_KEY, null);
+  if (!pack) {
     throw new Error(
       "Lite mode only runs on a data root created by export-lite; this data root has no lite-pack manifest",
     );
   }
-  // A pack exported under another extractor or model contract must stop here,
-  // before normalization would replay every observation under the new contract.
-  const champion = await compatibleStoredModel(store, "champion", config);
-  const challenger = champion
-    ? null
-    : await compatibleStoredModel(store, "challenger", config);
-  const provisionalModel =
-    eligibleProvisionalBootstrapModel(challenger, config) ? challenger : null;
-  const forecastModel = champion ?? provisionalModel;
-  if (!forecastModel) {
+  // The pack names the one model the full instance was serving when it was
+  // exported. Lite never picks a model itself, and a pack exported under another
+  // extractor or model contract must stop here, before normalization would
+  // replay every observation under the new contract.
+  const forecastModel = await compatibleStoredModel(
+    store,
+    pack.model.role,
+    config,
+  );
+  if (forecastModel?.artifact_hash !== pack.model.artifact_hash) {
     throw new Error(
-      `Lite mode has no stored model compatible with model contract ${modelContractHash(config)} ` +
+      `Lite mode cannot serve the exported ${pack.model.role} ${pack.model.version} ` +
+      `under model contract ${modelContractHash(config)} ` +
       `(timezone database ${config.timezone_database_version})`,
     );
   }
+  const provisional = pack.model.validation_status === "provisional";
   if (collect) {
     result.collection = await collectConfiguredProviders(store, config, {
       instances: providerInstances,
@@ -649,7 +652,7 @@ export async function runLitePipeline(store, config, {
   result.timing.horizon_start = horizonStart.toISOString();
   let guardedSnapshots = null;
   if (
-    provisionalModel &&
+    provisional &&
     config.model.live_forecast_promotion_guard?.enabled === true
   ) {
     ({ snapshots: guardedSnapshots } = await buildForecastFeatureSnapshots(
@@ -663,7 +666,7 @@ export async function runLitePipeline(store, config, {
       },
     ));
     const guard = await assessPromotionGuard({
-      candidate: provisionalModel,
+      candidate: forecastModel,
       previous: null,
       snapshots: guardedSnapshots,
       policy: config.model.live_forecast_promotion_guard,
@@ -671,7 +674,16 @@ export async function runLitePipeline(store, config, {
     result.promotion_guard = guard;
     result.training.promotion_guard = guard;
     if (!guard.passed) {
-      await store.retainFeatureSnapshots(guardedSnapshots);
+      // Only the rejected batch is dropped. The forecast still on display must
+      // stay verifiable against its own snapshots.
+      const served = (await store.all("prediction"))
+        .sort((left, right) =>
+          left.data.issued_at.localeCompare(right.data.issued_at)
+        )
+        .at(-1);
+      await store.retainFeatureSnapshots(
+        served?.data.feature_snapshot_refs ?? [],
+      );
       result.status = "promotion_blocked";
       result.timing.completed_at = currentTime().toISOString();
       return result;
@@ -679,7 +691,7 @@ export async function runLitePipeline(store, config, {
   }
   result.forecast = await issueForecast(store, config, {
     model: forecastModel,
-    validationStatus: provisionalModel ? "provisional" : "validated",
+    validationStatus: pack.model.validation_status,
     knowledgeCutoff,
     horizonStart,
     clock: currentTime,

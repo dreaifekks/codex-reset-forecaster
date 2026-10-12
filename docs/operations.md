@@ -1066,10 +1066,10 @@ A lite run does:
   adjudicate outcomes exactly as the full pipeline does, so a qualifying
   completion statement still becomes a `reset_outcome`, re-anchors the forecast,
   and reaches the publication ledger;
-- select the stored model: a compatible champion issues `validated` forecasts,
-  otherwise a compatible challenger that meets the provisional-bootstrap minimum
-  issues `provisional` ones after passing the live promotion guard on that run's
-  snapshots;
+- serve the one model the pack names: the model, and the `validated` or
+  `provisional` status, of the forecast the full instance issued in its last
+  completed run. A provisional model still has to pass the live promotion guard
+  on each run's snapshots;
 - issue the 168-slot forecast, materialize the serving snapshot, and project
   publication events and forecast inputs.
 
@@ -1081,11 +1081,19 @@ evaluation blobs. The calibration endpoint keeps serving the exported last-good
 profiles; a horizon missing from that export returns
 `notification_calibration_unavailable`.
 
-The model is selected before collection. If neither stored model matches the
-current model contract, the run fails with `Lite mode has no stored model
-compatible with model contract …` and touches no record, because normalizing
-under a different extractor contract would replay every observation. The website
-keeps serving the last good read model while that error is visible in health.
+A lite instance never chooses a model. Whether a model may issue forecasts is the
+full pipeline's decision, taken with evaluation evidence a pack does not carry, so
+the export records that decision and lite mode only follows it. The model is
+checked before collection: if the exported model does not match the current model
+contract, the run fails with `Lite mode cannot serve the exported …` and touches
+no record, because normalizing under a different extractor contract would replay
+every observation. The website keeps serving the last good read model while that
+error is visible in health.
+
+When the live promotion guard rejects a provisional run, that run issues nothing,
+drops only its own rejected snapshots, and keeps the snapshots of the forecast
+that is still on display. Readiness then reports `provisional_guard_rejected`,
+exactly as the full instance does.
 
 `feature_snapshot` is a bounded working set in lite mode: after each forecast
 only the 168 snapshots behind that prediction remain, and the sidecar index is
@@ -1111,8 +1119,8 @@ node src/cli.mjs export-lite --output /absolute/path/to/empty-directory
 ```
 
 Run it with the full instance's configuration and environment. It only reads the
-configured data root and refuses a non-empty output directory. From the Compose
-deployment:
+configured data root and refuses a non-empty output directory. The writer does
+not have to stop. From the Compose deployment:
 
 ```bash
 mkdir lite-pack
@@ -1126,8 +1134,10 @@ The pack contains:
 - every revision of `raw_observation`, `normalized_signal`, `event_candidate`,
   and `reset_outcome`;
 - the latest revision of each `impact_episode`;
-- the latest prediction and its 168 feature snapshots;
-- `champion` and `challenger` plus their immutable artifacts;
+- the forecast issued by the last completed pipeline run and its 168 feature
+  snapshots;
+- the one model that forecast was issued from, written as `champion` or
+  `challenger` from its immutable artifact;
 - the coverage and publication audit logs, and every coverage evidence blob the
   assertions reference;
 - provider cursors, normalization and reset-review state, the publication and
@@ -1136,12 +1146,40 @@ The pack contains:
 - `state/lite-pack.json`, a manifest with the export time, source `config_hash`,
   model contract hash, time-zone database version, and model identity.
 
-It omits older predictions and feature snapshots, settlements, every evaluation
-summary and blob, raw payload and archive blobs that no coverage assertion
-references, and traffic telemetry. The export keeps only complete JSONL lines and
-copies mutable cursors before the logs they describe, so it tolerates a live
-writer; stopping the writer first still gives the cleanest handover. The pack is
-a starting point for a lite instance, not a backup of the full data root.
+It omits other predictions and feature snapshots, settlements, every evaluation
+summary and blob, the other model pointer, raw payload and archive blobs that no
+coverage assertion references, and traffic telemetry. The pack is a starting
+point for a lite instance, not a backup of the full data root.
+
+The export takes one consistent cut of a data root that is still being written:
+
+- mutable cursors and projections are copied first, then every append-only log
+  is cut at one instant (two identical size passes) and trimmed to whole lines,
+  so no exported record references a revision that was appended later;
+- the served forecast is the one `state/runtime.json` attributes to the last
+  completed run, not whatever a run in flight has appended since;
+- the model pointer is written from the artifact that forecast names, so a
+  promotion or refit during the export cannot separate pointer and artifact.
+
+Before the manifest is written the export checks its own output: every exact
+record reference in the pack must resolve inside the pack, and the publication
+projection a lite instance runs at startup must have nothing to emit. If either
+check fails, the output directory is emptied and the command exits non-zero. The
+manifest is written last, and lite mode refuses a data root without it, so an
+interrupted export cannot be started either.
+
+The export refuses, with the reason, when:
+
+- the last completed pipeline run issued no forecast: it failed (for example
+  `No model passed the promotion gate` after a challenger failed its evaluation
+  gate), waited for coverage, or was blocked by the promotion guard. The full
+  instance is not serving a model in that state, and a lite instance must not
+  serve one either. A data root that never ran under the scheduler has no such
+  record and cannot be exported;
+- the data root holds a change its own publication projection has not emitted
+  yet, such as an outcome revision adjudicated by the run in flight. Rerun the
+  export after that run completes; a pack never publishes on the full instance's
+  behalf.
 
 ### Running the lite instance
 
