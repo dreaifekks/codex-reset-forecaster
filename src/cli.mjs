@@ -192,16 +192,17 @@ try {
   } else if (command === "export-lite") {
     const outputDir = argument("--output");
     if (!outputDir) throw new TypeError("export-lite requires --output DIR");
+    const waitSeconds = argument("--wait-seconds");
     output(await exportLitePack({
       sourceDir: config.runtime.data_dir,
       outputDir,
       config,
-      now,
+      ...(waitSeconds === null ? {} : { waitMs: Number(waitSeconds) * 1_000 }),
     }));
   } else if (command === "status") {
     output(await getReadiness(store, config));
   } else {
-    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  confirm-reset --offline --attest-platform --source-status STATUS --actor ID (--effective-at ISO | --ago-hours HOURS) [--note TEXT] [--now ISO]\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  export-lite --output DIR\n  status\n`);
+    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  confirm-reset --offline --attest-platform --source-status STATUS --actor ID (--effective-at ISO | --ago-hours HOURS) [--note TEXT] [--now ISO]\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  export-lite --output DIR [--wait-seconds N]\n  status\n`);
   }
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

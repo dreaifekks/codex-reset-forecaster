@@ -33,7 +33,7 @@ import {
   aggregateCoverageWaiting,
   normalizeProviderCoverageWaiting,
 } from "../core/coverage-waiting.mjs";
-import { LITE_PACK_STATE_KEY } from "../runtime/lite-mode.mjs";
+import { readLitePack } from "../runtime/lite-mode.mjs";
 
 function providerStateKey(name) {
   return `${name.replaceAll("_", "-")}-provider`;
@@ -613,14 +613,7 @@ export async function runLitePipeline(store, config, {
       completed_at: null,
     },
   };
-  // Lite retention rewrites feature_snapshot.jsonl down to one batch, so it may
-  // only ever run on a data root that export-lite created for that purpose.
-  const pack = await store.readState(LITE_PACK_STATE_KEY, null);
-  if (!pack) {
-    throw new Error(
-      "Lite mode only runs on a data root created by export-lite; this data root has no lite-pack manifest",
-    );
-  }
+  const pack = await readLitePack(store);
   // The pack names the one model the full instance was serving when it was
   // exported. Lite never picks a model itself, and a pack exported under another
   // extractor or model contract must stop here, before normalization would

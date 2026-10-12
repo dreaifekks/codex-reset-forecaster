@@ -26,6 +26,7 @@ import {
 } from "./notifications/forecast-input.mjs";
 import { createWebPushRuntime } from "./web-push/runtime.mjs";
 import { createOperationsRuntime } from "./operations/runtime.mjs";
+import { assertLiteServingSeed } from "./runtime/lite-mode.mjs";
 import {
   PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
   createFrozenProbabilityProfileProvider,
@@ -58,6 +59,9 @@ try {
   process.stderr.write(
     `Serving snapshot seed failed: ${error.stack ?? error.message}\n`,
   );
+}
+if (config.runtime.lite_mode) {
+  await assertLiteServingSeed(store, servingSnapshotSeed);
 }
 const servingSnapshotProvider = createServingSnapshotProvider(
   servingSnapshotSeed,

@@ -1105,6 +1105,12 @@ re-verified against its snapshots. Because that retention rewrites
 `RESET_LITE_MODE=true` on a full data root fails before anything is collected or
 removed.
 
+A lite process checks the persisted serving snapshot before it listens: the
+forecast that snapshot displays must be a prediction this data root holds,
+issued from the model the pack names. That is true of the exported snapshot and
+of every snapshot a lite run writes afterwards. A data root without the
+manifest, or with a snapshot from another round or model, does not start.
+
 `/api/health` and `/api/readiness` add a `lite_mode` object (absent in full
 mode) with the collected providers, the paused stages, the pack export time, and
 the serving model's version, validation status, and `training_cutoff`. The
@@ -1115,12 +1121,14 @@ reporting the last state carried in the pack; they are not required for serving.
 ### Exporting the data pack
 
 ```bash
-node src/cli.mjs export-lite --output /absolute/path/to/empty-directory
+node src/cli.mjs export-lite --output /absolute/path/to/empty-directory \
+  [--wait-seconds 900]
 ```
 
 Run it with the full instance's configuration and environment. It only reads the
 configured data root and refuses a non-empty output directory. The writer does
-not have to stop. From the Compose deployment:
+not have to stop: the command waits, up to `--wait-seconds` (default 900), for a
+moment between two pipeline runs. From the Compose deployment:
 
 ```bash
 mkdir lite-pack
@@ -1144,29 +1152,49 @@ The pack contains:
   forecast-input projections with their cursors, the last-good serving snapshot
   and probability profiles, and `runtime`;
 - `state/lite-pack.json`, a manifest with the export time, source `config_hash`,
-  model contract hash, time-zone database version, and model identity.
+  model contract hash, time-zone database version, the served forecast and
+  model identity, and the capture attempts and wait.
 
 It omits other predictions and feature snapshots, settlements, every evaluation
 summary and blob, the other model pointer, raw payload and archive blobs that no
 coverage assertion references, and traffic telemetry. The pack is a starting
 point for a lite instance, not a backup of the full data root.
 
-The export takes one consistent cut of a data root that is still being written:
+A pack is the data root as it stood at one instant between two pipeline runs,
+after the last completed run was fully projected. Everything in it belongs to
+that one round: the append-only logs, the scheduler's `runtime` state, the
+serving snapshot, the publication projection, the served forecast, and its
+model. The export establishes that instant itself:
 
-- mutable cursors and projections are copied first, then every append-only log
-  is cut at one instant (two identical size passes) and trimmed to whole lines,
-  so no exported record references a revision that was appended later;
-- the served forecast is the one `state/runtime.json` attributes to the last
-  completed run, not whatever a run in flight has appended since;
-- the model pointer is written from the artifact that forecast names, so a
-  promotion or refit during the export cannot separate pointer and artifact.
+- it reads all mutable state into memory between two identical `stat` passes
+  over every state file and log, so a write to any of them during the read is
+  seen and the capture is repeated;
+- the instant only counts when no pipeline run is in flight, the serving
+  snapshot carries the watermark and forecast of the last completed run, and
+  the publication projection has processed that run;
+- the logs are then copied up to the sizes observed at that instant, trimmed to
+  whole lines. Appends that land afterwards are outside the pack;
+- the served forecast is the one `runtime` attributes to that run, and the
+  model pointer is written from the immutable artifact that forecast names, so
+  a promotion or refit during the export cannot separate pointer and artifact.
 
 Before the manifest is written the export checks its own output: every exact
 record reference in the pack must resolve inside the pack, and the publication
-projection a lite instance runs at startup must have nothing to emit. If either
-check fails, the output directory is emptied and the command exits non-zero. The
-manifest is written last, and lite mode refuses a data root without it, so an
-interrupted export cannot be started either.
+projection, run against the pack with the exported snapshot, must have nothing
+to emit. That projection always runs; there is no state in which it is skipped.
+
+While the data root is not settled on one round, the export empties its output,
+polls every second, and tries again: during a run, between a run's success
+record and its serving snapshot or publication projection, or while a change is
+still unpublished. When the wait limit passes it exits non-zero and names what
+it was waiting for. The manifest records how many captures were attempted and
+how long the export waited. It is written last, and lite mode refuses a data
+root without it, so an interrupted export cannot be started either.
+
+When pipeline runs nearly fill the scheduler cadence, the settled instant between
+two runs lasts only seconds, so an export started mid-run waits for most of that
+run. A writer that was killed mid-run leaves `current_run_started_at` set
+forever; start the full instance and let one run complete before exporting.
 
 The export refuses, with the reason, when:
 
@@ -1176,10 +1204,9 @@ The export refuses, with the reason, when:
   instance is not serving a model in that state, and a lite instance must not
   serve one either. A data root that never ran under the scheduler has no such
   record and cannot be exported;
-- the data root holds a change its own publication projection has not emitted
-  yet, such as an outcome revision adjudicated by the run in flight. Rerun the
-  export after that run completes; a pack never publishes on the full instance's
-  behalf.
+- the wait limit passed before the data root settled on one completed round,
+  for example because it still held a change its own publication projection had
+  not emitted. A pack never publishes on the full instance's behalf.
 
 ### Running the lite instance
 

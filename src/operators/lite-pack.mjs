@@ -10,9 +10,6 @@ import {
   LITE_PACK_SCHEMA_VERSION,
   LITE_PACK_STATE_KEY,
 } from "../runtime/lite-mode.mjs";
-import {
-  completedRunOwnsServingSnapshot,
-} from "../runtime/startup-projection.mjs";
 import { JsonlStore } from "../store/jsonl-store.mjs";
 
 // Inference replays every revision of these small record types.
@@ -51,8 +48,10 @@ const PACK_RECORD_ID_PREFIXES = new Set([
 const BLOB_REFERENCE = /^blob:\/\/([a-zA-Z0-9_-]+)\/([a-f0-9]{64}\.json)$/;
 const PREDICTION_TAIL_BYTES = 8 * 1024 * 1024;
 const FEATURE_SNAPSHOT_TAIL_BYTES = 64 * 1024 * 1024;
-const CUT_ATTEMPTS = 20;
-const CUT_RETRY_DELAY_MS = 100;
+const DEFAULT_WAIT_MS = 15 * 60_000;
+// The settled instant between two runs can be seconds long when runs fill the
+// scheduler cadence, so polling has to be finer than that.
+const DEFAULT_POLL_MS = 1_000;
 
 function exactKey(record) {
   return `${record.record_id}@${record.revision}`;
@@ -67,40 +66,99 @@ async function readFileIfPresent(file) {
   }
 }
 
-async function copyIfPresent(source, target) {
-  try {
-    await fs.copyFile(source, target);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-}
-
-async function sizes(files) {
-  return Promise.all(files.map(async (file) => {
+async function stamps(files) {
+  return JSON.stringify(await Promise.all(files.map(async (file) => {
     try {
-      return (await fs.stat(file)).size;
+      const { size, mtimeMs, ino } = await fs.stat(file);
+      return { size, mtimeMs, ino };
     } catch (error) {
-      if (error.code === "ENOENT") return 0;
+      if (error.code === "ENOENT") return null;
       throw error;
     }
-  }));
+  })));
 }
 
-// The source usually has a live writer. Two identical size passes over the
-// append-only logs pin all of them to one instant, so every record in the cut
-// finds the records it references in the same cut.
-async function consistentCut(files) {
-  for (let attempt = 0; attempt < CUT_ATTEMPTS; attempt += 1) {
-    const first = await sizes(files);
-    const second = await sizes(files);
-    if (second.every((size, index) => size === first[index])) {
-      return new Map(files.map((file, index) => [file, second[index]]));
+// A pack is the data root as it stood at one instant between two pipeline runs.
+// The mutable state is read into memory between two identical stat passes over
+// every state file and log, which pins all of them to that instant, and the
+// instant only counts once the last completed run has been fully projected.
+// Returns the captured state, or the reason the data root is not settled yet.
+async function captureSettledState(sourceDir, config) {
+  const stateKeys = [
+    ...STATE_KEYS,
+    ...Object.keys(config.providers).map((name) =>
+      `${name.replaceAll("_", "-")}-provider`
+    ),
+  ];
+  const stateFile = (key) => path.join(sourceDir, "state", `${key}.json`);
+  const logs = [
+    ...PACK_RECORD_TYPES.map((type) => path.join("records", `${type}.jsonl`)),
+    ...AUDIT_TYPES.map((type) => path.join("audit", `${type}.jsonl`)),
+  ];
+  const watched = [
+    ...stateKeys.map(stateFile),
+    ...logs.map((file) => path.join(sourceDir, file)),
+  ];
+  const before = await stamps(watched);
+  const state = new Map();
+  const parsed = (key) => JSON.parse(state.get(key) ?? "null");
+  // `runtime` is first in the key list: while a run is in flight there is
+  // nothing else worth reading.
+  let runtime = null;
+  for (const key of stateKeys) {
+    const text = await readFileIfPresent(stateFile(key));
+    if (text) state.set(key, text);
+    if (key !== "runtime") continue;
+    runtime = parsed("runtime");
+    if (runtime?.current_run_started_at) {
+      return {
+        unsettled:
+          `the pipeline run started at ${runtime.current_run_started_at} has not completed`,
+      };
     }
-    await delay(CUT_RETRY_DELAY_MS);
   }
-  throw new Error(
-    "The source data root kept appending while its logs were being cut; rerun export-lite",
-  );
+  if (await stamps(watched) !== before) {
+    return { unsettled: "the data root changed while its state was being read" };
+  }
+  const issuedAt = runtime?.last_timing?.forecast_issued_at;
+  if (runtime?.last_status === "error" || !issuedAt) {
+    // The pack may serve only what the full instance's last completed scheduled
+    // run served. A run that failed, waited, or was blocked issued nothing, so
+    // neither may a lite instance started from that state.
+    throw new Error(
+      "The last completed pipeline run of this data root issued no forecast " +
+      `(status ${runtime?.last_status ?? "none"}${runtime?.last_error ? `: ${runtime.last_error}` : ""}), ` +
+      "so a lite instance has no model it may serve",
+    );
+  }
+  const snapshot = parsed("serving-snapshot");
+  if (
+    snapshot?.runtime_watermark?.last_success_at !== runtime.last_success_at ||
+    snapshot.prediction_ref?.record_id !== runtime.last_prediction_id
+  ) {
+    return {
+      unsettled:
+        "the serving snapshot has not been materialized for the last completed pipeline run",
+    };
+  }
+  const projection = parsed("publication-projection");
+  if (
+    config.runtime.publication.enabled &&
+    projection &&
+    Date.parse(projection.updated_at) < Date.parse(runtime.last_success_at)
+  ) {
+    return {
+      unsettled:
+        "the publication projection has not processed the last completed pipeline run",
+    };
+  }
+  const sizes = JSON.parse(before).slice(stateKeys.length);
+  return {
+    state,
+    runtime,
+    snapshot,
+    logBytes: new Map(logs.map((file, index) => [file, sizes[index]?.size ?? 0])),
+  };
 }
 
 // A cut may land inside an append; only whole JSONL lines belong to it.
@@ -201,21 +259,10 @@ async function copyReferencedBlobs(sourceDir, outputDir, value, copied) {
   }
 }
 
-// The pack may serve only what the full instance's last completed scheduled run
-// served. A run that failed, waited, or was blocked issued nothing, so neither
-// may a lite instance started from that state.
 function servedPredictionOf(runtime, predictions) {
-  const issuedAt = runtime?.last_timing?.forecast_issued_at;
-  if (runtime?.last_status === "error" || !issuedAt) {
-    throw new Error(
-      "The last completed pipeline run of this data root issued no forecast " +
-      `(status ${runtime?.last_status ?? "none"}${runtime?.last_error ? `: ${runtime.last_error}` : ""}), ` +
-      "so a lite instance has no model it may serve",
-    );
-  }
   const prediction = predictions.find((candidate) =>
     candidate.record_id === runtime.last_prediction_id &&
-    candidate.data.issued_at === issuedAt
+    candidate.data.issued_at === runtime.last_timing.forecast_issued_at
   );
   if (!prediction) {
     throw new Error(
@@ -257,15 +304,10 @@ async function assertReferencesResolve(store) {
   }
 }
 
-// A lite instance projects publication from the exported snapshot before its
-// first run. Anything that projection would emit is a change the full instance
-// has not published itself, and a pack must not publish on its behalf.
-async function assertNothingToPublish(store, config, now) {
-  const [runtime, snapshot] = await Promise.all([
-    store.readState("runtime", {}),
-    store.readState("serving-snapshot", null),
-  ]);
-  if (!completedRunOwnsServingSnapshot(runtime, snapshot)) return;
+// Whatever the publication projection would still emit for the captured round
+// is a change the full instance has not published itself. A pack must not
+// publish on its behalf, so this always runs and its result decides the export.
+async function unpublishedEventTypes(store, config, snapshot, now) {
   const readOnly = new Proxy(store, {
     get(target, key) {
       if (key === "appendAudit") {
@@ -280,16 +322,13 @@ async function assertNothingToPublish(store, config, now) {
     store: readOnly,
     config,
   }).project({ snapshot, emittedAt: now, allowInitialize: true });
-  if (events.length > 0) {
-    throw new Error(
-      "The source data root holds changes its own publication projection has not emitted yet " +
-      `(${events.map((event) => event.event_type).join(", ")}); ` +
-      "rerun export-lite after the current pipeline run completes",
-    );
-  }
+  return events.map((event) => event.event_type);
 }
 
 async function writeLitePack({ sourceDir, outputDir, config, now }) {
+  const captured = await captureSettledState(sourceDir, config);
+  if (captured.unsettled) return captured;
+  const { state, runtime, snapshot, logBytes } = captured;
   const source = (...parts) => path.join(sourceDir, ...parts);
   const output = (...parts) => path.join(outputDir, ...parts);
   await Promise.all(
@@ -297,29 +336,16 @@ async function writeLitePack({ sourceDir, outputDir, config, now }) {
       fs.mkdir(output(directory), { recursive: true })
     ),
   );
-
-  // Mutable cursors and projections are copied before the logs are cut, so the
-  // logs are never behind the state that describes them.
-  const stateKeys = [
-    ...STATE_KEYS,
-    ...Object.keys(config.providers).map((name) =>
-      `${name.replaceAll("_", "-")}-provider`
-    ),
-  ];
-  for (const key of stateKeys) {
-    await copyIfPresent(
-      source("state", `${key}.json`),
-      output("state", `${key}.json`),
-    );
+  for (const [key, text] of state) {
+    await fs.writeFile(output("state", `${key}.json`), text, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   }
-  const logs = [
-    ...PACK_RECORD_TYPES.map((type) => path.join("records", `${type}.jsonl`)),
-    ...AUDIT_TYPES.map((type) => path.join("audit", `${type}.jsonl`)),
-  ];
-  const cut = await consistentCut(logs.map((file) => source(file)));
+  // Appends that land after the captured instant are simply outside the cut.
   const bytes = new Map();
-  for (const file of logs) {
-    bytes.set(file, await completeLineBytes(source(file), cut.get(source(file))));
+  for (const [file, size] of logBytes) {
+    bytes.set(file, await completeLineBytes(source(file), size));
   }
   const cutBytes = (directory, type) =>
     bytes.get(path.join(directory, `${type}.jsonl`));
@@ -344,9 +370,6 @@ async function writeLitePack({ sourceDir, outputDir, config, now }) {
     cutBytes("records", "impact_episode"),
   );
 
-  const runtime = JSON.parse(
-    await readFileIfPresent(output("state", "runtime.json")) || "null",
-  );
   const prediction = servedPredictionOf(runtime, await tailRecords(
     source("records", "prediction.jsonl"),
     cutBytes("records", "prediction"),
@@ -391,7 +414,13 @@ async function writeLitePack({ sourceDir, outputDir, config, now }) {
 
   const store = new JsonlStore(outputDir);
   await assertReferencesResolve(store);
-  await assertNothingToPublish(store, config, now);
+  const unpublished = await unpublishedEventTypes(store, config, snapshot, now);
+  if (unpublished.length > 0) {
+    return {
+      unsettled:
+        `the data root holds changes its own publication projection has not emitted (${unpublished.join(", ")})`,
+    };
+  }
 
   const files = (await fs.readdir(outputDir, {
     recursive: true,
@@ -426,33 +455,61 @@ async function writeLitePack({ sourceDir, outputDir, config, now }) {
     files: files.length,
     bytes: packBytes,
   };
-  // Written last: a lite run refuses a data root without this manifest, so an
-  // interrupted export can never be started.
-  await fs.writeFile(
-    output("state", `${LITE_PACK_STATE_KEY}.json`),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
-  );
-  return manifest;
+  return { manifest };
+}
+
+async function emptyDirectory(directory) {
+  for (const entry of await fs.readdir(directory)) {
+    await fs.rm(path.join(directory, entry), { recursive: true, force: true });
+  }
 }
 
 export async function exportLitePack({
   sourceDir,
   outputDir,
   config,
-  now = new Date(),
+  now = null,
+  waitMs = DEFAULT_WAIT_MS,
+  pollMs = DEFAULT_POLL_MS,
 }) {
   await fs.mkdir(outputDir, { recursive: true });
   if ((await fs.readdir(outputDir)).length > 0) {
     throw new Error(`Lite pack output directory is not empty: ${outputDir}`);
   }
+  const startedAt = Date.now();
   try {
-    return await writeLitePack({ sourceDir, outputDir, config, now });
+    for (let attempts = 1; ; attempts += 1) {
+      const result = await writeLitePack({
+        sourceDir,
+        outputDir,
+        config,
+        now: now ?? new Date(),
+      });
+      if (result.manifest) {
+        const manifest = {
+          ...result.manifest,
+          capture: { attempts, waited_ms: Date.now() - startedAt },
+        };
+        // Written last: a lite process refuses a data root without this
+        // manifest, so an interrupted export can never be started.
+        await fs.writeFile(
+          path.join(outputDir, "state", `${LITE_PACK_STATE_KEY}.json`),
+          `${JSON.stringify(manifest, null, 2)}\n`,
+          "utf8",
+        );
+        return manifest;
+      }
+      await emptyDirectory(outputDir);
+      if (Date.now() - startedAt >= waitMs) {
+        throw new Error(
+          `The data root did not settle on one completed pipeline run within ${Math.round(waitMs / 1_000)} s: ${result.unsettled}`,
+        );
+      }
+      await delay(pollMs);
+    }
   } catch (error) {
     // A pack that failed its own checks must not be left looking usable.
-    for (const entry of await fs.readdir(outputDir)) {
-      await fs.rm(path.join(outputDir, entry), { recursive: true, force: true });
-    }
+    await emptyDirectory(outputDir);
     throw error;
   }
 }

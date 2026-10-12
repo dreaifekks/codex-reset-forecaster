@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "../src/core/config.mjs";
 import { sha256, stableStringify } from "../src/core/hash.mjs";
 import { recordRef } from "../src/core/records.mjs";
@@ -58,8 +60,8 @@ const PROVISIONAL = {
   },
 };
 
-function configFor(directory, { lite = true, runtime = {}, model = {} } = {}) {
-  return loadConfig({ overrides: {
+function overridesFor(directory, { lite = true, runtime = {}, model = {} } = {}) {
+  return {
     providers: {
       rsshub_x_timeline: { enabled: true },
       historical_monitor: { enabled: true },
@@ -80,7 +82,11 @@ function configFor(directory, { lite = true, runtime = {}, model = {} } = {}) {
       promotion: PROMOTION,
       ...model,
     },
-  } });
+  };
+}
+
+function configFor(directory, options) {
+  return loadConfig({ overrides: overridesFor(directory, options) });
 }
 
 function temporaryDirectory(t, name) {
@@ -115,6 +121,19 @@ function fakeProviders(calls, now) {
   };
 }
 
+// Fixture data roots are settled, so an export that would have to wait is a
+// failure the test should see at once.
+function exportPack(sourceDir, outputDir, config, options = {}) {
+  return exportLitePack({
+    sourceDir,
+    outputDir,
+    config,
+    now: addHours(NOW, 2),
+    waitMs: 0,
+    ...options,
+  });
+}
+
 function guardDecision(passed) {
   return ({ candidate }) => ({
     schema_version: LIVE_FORECAST_PROMOTION_GUARD_VERSION,
@@ -132,8 +151,14 @@ function guardDecision(passed) {
 // One pipeline run driven the way the server drives it: the scheduler records
 // the run in runtime state, then the serving snapshot and the publication
 // ledger are projected from the result.
-async function scheduledRun(store, config, now, { calls = [], ...pipeline } = {}) {
+async function scheduledRun(
+  store,
+  config,
+  now,
+  { calls = [], beforeProjection = null, ...pipeline } = {},
+) {
   let published = [];
+  let projectionFailure = null;
   const scheduler = startScheduler({
     store,
     config: { ...config, runtime: { ...config.runtime, run_on_start: false } },
@@ -147,12 +172,17 @@ async function scheduledRun(store, config, now, { calls = [], ...pipeline } = {}
       ),
     afterState: async ({ status }) => {
       if (status !== "success") return;
-      const snapshot = await materializeServingSnapshot(store, config, {
-        materializedAt: now,
-        persist: true,
-      });
-      ({ events: published } = await createPublicationProjector({ store, config })
-        .project({ snapshot, emittedAt: now, allowInitialize: true }));
+      try {
+        await beforeProjection?.();
+        const snapshot = await materializeServingSnapshot(store, config, {
+          materializedAt: now,
+          persist: true,
+        });
+        ({ events: published } = await createPublicationProjector({ store, config })
+          .project({ snapshot, emittedAt: now, allowInitialize: true }));
+      } catch (error) {
+        projectionFailure = error;
+      }
     },
   });
   try {
@@ -160,6 +190,7 @@ async function scheduledRun(store, config, now, { calls = [], ...pipeline } = {}
   } finally {
     scheduler.stop();
   }
+  if (projectionFailure) throw projectionFailure;
   return { runtime: await store.readState("runtime"), published };
 }
 
@@ -269,12 +300,11 @@ function sharedProvisionalDataRoot() {
 function sharedPack(name, source, options) {
   return sharedDirectory(name, async (directory) => {
     const sourceDir = await source();
-    await exportLitePack({
+    await exportPack(
       sourceDir,
-      outputDir: path.join(directory, "pack"),
-      config: await configFor(sourceDir, { lite: false, ...options }),
-      now: addHours(NOW, 2),
-    });
+      path.join(directory, "pack"),
+      await configFor(sourceDir, { lite: false, ...options }),
+    );
   }).then((directory) => path.join(directory, "pack"));
 }
 
@@ -321,6 +351,81 @@ async function whileOpening(file, action, operation) {
   } finally {
     fs.open = open;
   }
+}
+
+// Runs `action` once, right after `operation` has first read `file`, whichever
+// way it reads it.
+async function afterFirstRead(file, action, operation) {
+  const original = { readFile: fs.readFile, copyFile: fs.copyFile };
+  let ran = false;
+  for (const method of Object.keys(original)) {
+    fs[method] = async (target, ...rest) => {
+      const result = await original[method](target, ...rest);
+      if (target === file && !ran) {
+        ran = true;
+        await action();
+      }
+      return result;
+    };
+  }
+  try {
+    const result = await operation();
+    assert.equal(ran, true, `${file} was never read`);
+    return result;
+  } finally {
+    Object.assign(fs, original);
+  }
+}
+
+// Replaces the champion with a new immutable artifact, as a promotion does.
+async function promoteNextChampion(store, trainingCutoff) {
+  const promoted = {
+    ...await store.readModel("champion"),
+    training_cutoff: trainingCutoff.toISOString(),
+  };
+  promoted.model_version = `${promoted.model_version}-next`;
+  for (const field of ["artifact_hash", "promoted_at", "promotion_evaluation"]) {
+    delete promoted[field];
+  }
+  promoted.artifact_hash = sha256(stableStringify(promoted));
+  await store.writeModel("champion", promoted);
+  return promoted;
+}
+
+// Starts the real server process in lite mode on a data root and reports how
+// far it got: whether it began listening, and how it exited.
+async function startLiteServer(t, directory) {
+  const configFile = path.join(
+    await temporaryDirectory(t, "lite-server-config"),
+    "config.json",
+  );
+  await fs.writeFile(configFile, JSON.stringify(overridesFor(directory)));
+  const child = spawn(process.execPath, ["src/server.mjs"], {
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    env: {
+      ...process.env,
+      RESET_CONFIG: configFile,
+      RESET_DATA_DIR: directory,
+      RESET_SCHEDULER_ENABLED: "false",
+      HOST: "127.0.0.1",
+      PORT: "0",
+    },
+  });
+  let stdout = "";
+  let stderr = "";
+  let listened = false;
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    if (!listened && stdout.includes("listening")) {
+      listened = true;
+      child.kill("SIGTERM");
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const code = await new Promise((resolve) => child.on("exit", resolve));
+  return { listened, code, stderr };
 }
 
 test("lite mode requires an explicit required-source list", async () => {
@@ -513,12 +618,7 @@ test("lite pack carries only what inference reads and starts a serving lite inst
   const champion = await sourceStore.readModel("champion");
   const pack = path.join(await temporaryDirectory(t, "lite-pack"), "pack");
 
-  const manifest = await exportLitePack({
-    sourceDir: source,
-    outputDir: pack,
-    config: sourceConfig,
-    now: addHours(NOW, 2),
-  });
+  const manifest = await exportPack(source, pack, sourceConfig);
   assert.equal(manifest.source.model_contract_hash, modelContractHash(sourceConfig));
   assert.deepEqual(manifest.prediction_ref, {
     ...recordRef(servedPrediction),
@@ -551,7 +651,7 @@ test("lite pack carries only what inference reads and starts a serving lite inst
     servedPrediction.data.feature_snapshot_refs,
   );
   await assert.rejects(
-    exportLitePack({ sourceDir: source, outputDir: pack, config: sourceConfig }),
+    exportPack(source, pack, sourceConfig),
     /not empty/,
   );
 
@@ -652,12 +752,7 @@ test("an export that a writer overtakes mid-copy still yields a pack with no mis
       );
       await processRecords(sourceStore, sourceConfig, { now: addHours(NOW, 2) });
     },
-    () => exportLitePack({
-      sourceDir: source,
-      outputDir: pack,
-      config: sourceConfig,
-      now: addHours(NOW, 2),
-    }),
+    () => exportPack(source, pack, sourceConfig),
   );
 
   const config = await configFor(pack);
@@ -685,13 +780,8 @@ test("export refuses a data root with unpublished changes and leaves no pack beh
   await processRecords(sourceStore, sourceConfig, { now: addHours(NOW, 2) });
   const pack = path.join(await temporaryDirectory(t, "lite-pending-pack"), "pack");
   await assert.rejects(
-    exportLitePack({
-      sourceDir: source,
-      outputDir: pack,
-      config: sourceConfig,
-      now: addHours(NOW, 2),
-    }),
-    /has not emitted yet \(outcome\.reset_corrected\.v1\)/,
+    exportPack(source, pack, sourceConfig),
+    /did not settle .* has not emitted \(outcome\.reset_corrected\.v1\)/,
   );
   assert.deepEqual(await fs.readdir(pack), []);
 
@@ -702,12 +792,7 @@ test("export refuses a data root with unpublished changes and leaves no pack beh
     published.map((event) => event.event_type),
     ["outcome.reset_corrected.v1"],
   );
-  await exportLitePack({
-    sourceDir: source,
-    outputDir: pack,
-    config: sourceConfig,
-    now: addHours(NOW, 2),
-  });
+  await exportPack(source, pack, sourceConfig);
   const config = await configFor(pack);
   const store = await new JsonlStore(pack).init();
   assert.deepEqual(await startupPublication(store, config, addHours(NOW, 2)), []);
@@ -730,12 +815,7 @@ test("export refuses a data root whose records reference evidence it does not ho
   );
   const pack = path.join(await temporaryDirectory(t, "lite-open-pack"), "pack");
   await assert.rejects(
-    exportLitePack({
-      sourceDir: source,
-      outputDir: pack,
-      config: await configFor(source, { lite: false }),
-      now: addHours(NOW, 2),
-    }),
+    exportPack(source, pack, await configFor(source, { lite: false })),
     /Lite pack is not closed: .* references missing obs_/,
   );
   assert.deepEqual(await fs.readdir(pack), []);
@@ -752,24 +832,8 @@ test("a model promoted during export does not separate the exported pointer from
   // carry the model that run served, whole.
   const manifest = await whileOpening(
     path.join(source, "records", "raw_observation.jsonl"),
-    async () => {
-      const promoted = {
-        ...served,
-        model_version: `${served.model_version}-next`,
-        training_cutoff: addHours(NOW, 2).toISOString(),
-      };
-      for (const field of ["artifact_hash", "promoted_at", "promotion_evaluation"]) {
-        delete promoted[field];
-      }
-      promoted.artifact_hash = sha256(stableStringify(promoted));
-      await sourceStore.writeModel("champion", promoted);
-    },
-    () => exportLitePack({
-      sourceDir: source,
-      outputDir: pack,
-      config: sourceConfig,
-      now: addHours(NOW, 2),
-    }),
+    () => promoteNextChampion(sourceStore, addHours(NOW, 2)),
+    () => exportPack(source, pack, sourceConfig),
   );
   assert.notEqual(
     (await sourceStore.readModel("champion")).artifact_hash,
@@ -823,15 +887,157 @@ test("a model the full instance stopped serving cannot be exported for lite serv
 
   const pack = path.join(await temporaryDirectory(t, "lite-failed-pack"), "pack");
   await assert.rejects(
-    exportLitePack({
-      sourceDir: source,
-      outputDir: pack,
-      config: sourceConfig,
-      now: addHours(NOW, 3),
-    }),
+    exportPack(source, pack, sourceConfig, { now: addHours(NOW, 3) }),
     /issued no forecast \(status error: No model passed the promotion gate/,
   );
   assert.deepEqual(await fs.readdir(pack), []);
+});
+
+test("export waits for a completed run to be projected instead of mixing it with the previous round", async (t) => {
+  const source = await fullDataRootCopy(t);
+  const sourceConfig = await configFor(source, { lite: false });
+  const sourceStore = await new JsonlStore(source).init();
+  const packs = await temporaryDirectory(t, "lite-round-packs");
+  const now = addHours(NOW, 2);
+  // This round has something to publish: a correction of the confirmed
+  // completion.
+  await appendCompletionStatement(
+    sourceStore,
+    sourceConfig,
+    "Codex usage limits were reset for all paid users. Thank you!",
+    now,
+  );
+
+  let early = null;
+  let waiting = null;
+  const { runtime, published } = await scheduledRun(sourceStore, sourceConfig, now, {
+    // The scheduler has recorded the run; the serving snapshot and the
+    // publication ledger still describe the round before it.
+    beforeProjection: async () => {
+      early = await exportPack(source, path.join(packs, "early"), sourceConfig)
+        .then(() => null, (error) => error);
+      waiting = exportPack(source, path.join(packs, "pack"), sourceConfig, {
+        waitMs: 60_000,
+        pollMs: 5,
+      });
+    },
+  });
+  assert.deepEqual(
+    published.map((event) => event.event_type),
+    ["outcome.reset_corrected.v1"],
+  );
+  assert.match(
+    early?.message ?? "exported a pack before the run was projected",
+    /did not settle on one completed pipeline run within 0 s: the serving snapshot has not been materialized/,
+  );
+  assert.deepEqual(await fs.readdir(path.join(packs, "early")), []);
+
+  const manifest = await waiting;
+  assert.equal(manifest.capture.attempts > 1, true);
+  assert.equal(manifest.prediction_ref.record_id, runtime.last_prediction_id);
+  const pack = path.join(packs, "pack");
+  const ledger = path.join(pack, "audit", "publication-event.jsonl");
+  const sourceLedger = await fs.readFile(
+    path.join(source, "audit", "publication-event.jsonl"),
+    "utf8",
+  );
+  assert.equal(await fs.readFile(ledger, "utf8"), sourceLedger);
+
+  const config = await configFor(pack);
+  const store = await new JsonlStore(pack).init();
+  assert.deepEqual(await startupPublication(store, config, now), []);
+  const firstLiteRun = await scheduledRun(store, config, addHours(NOW, 3));
+  assert.equal(firstLiteRun.runtime.last_status, "completed");
+  assert.deepEqual(firstLiteRun.published, []);
+  assert.equal(await fs.readFile(ledger, "utf8"), sourceLedger);
+});
+
+test("a run that completes while export reads state is exported as one whole round", async (t) => {
+  const source = await fullDataRootCopy(t);
+  const sourceConfig = await configFor(source, { lite: false });
+  const sourceStore = await new JsonlStore(source).init();
+  const pack = path.join(await temporaryDirectory(t, "lite-crossing-pack"), "pack");
+  const now = addHours(NOW, 3);
+
+  // Between two state reads the full instance promotes another model and
+  // completes a run with it.
+  let promoted = null;
+  const manifest = await afterFirstRead(
+    path.join(source, "state", "runtime.json"),
+    async () => {
+      promoted = await promoteNextChampion(sourceStore, now);
+      await scheduledRun(sourceStore, sourceConfig, now);
+    },
+    () => exportPack(source, pack, sourceConfig, { now, waitMs: 60_000, pollMs: 5 }),
+  );
+  const runtime = await sourceStore.readState("runtime");
+  assert.equal(manifest.prediction_ref.record_id, runtime.last_prediction_id);
+  assert.equal(manifest.model.artifact_hash, promoted.artifact_hash);
+
+  const config = await configFor(pack);
+  const store = await new JsonlStore(pack).init();
+  const seed = await store.readState("serving-snapshot");
+  assert.deepEqual(seed.prediction_ref, {
+    record_id: manifest.prediction_ref.record_id,
+    revision: manifest.prediction_ref.revision,
+  });
+  assert.deepEqual(await store.readState("runtime"), runtime);
+  assert.deepEqual(
+    (await store.all("prediction")).map(recordRef),
+    [seed.prediction_ref],
+  );
+  assert.equal(
+    (await store.readModelArtifact(seed.prediction.data.model.artifact_hash))
+      .artifact_hash,
+    manifest.model.artifact_hash,
+  );
+
+  const server = http.createServer(createRequestHandler({
+    store,
+    config,
+    now: () => now,
+    servingSnapshotProvider: { get: () => seed },
+  }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const health = await (
+    await fetch(`http://127.0.0.1:${server.address().port}/api/health`)
+  ).json();
+  assert.equal(health.serving_ready, true);
+  assert.equal(health.current_prediction_ref.record_id, manifest.prediction_ref.record_id);
+  assert.equal(health.lite_mode.model.version, manifest.model.version);
+});
+
+test("a lite process refuses to start on a serving snapshot its pack does not back", async (t) => {
+  // Another round of the full instance, served from another model.
+  const source = await fullDataRootCopy(t);
+  const sourceConfig = await configFor(source, { lite: false });
+  const sourceStore = await new JsonlStore(source).init();
+  await promoteNextChampion(sourceStore, addHours(NOW, 3));
+  await scheduledRun(sourceStore, sourceConfig, addHours(NOW, 3));
+
+  const mixed = await litePackCopy(t);
+  await fs.copyFile(
+    path.join(source, "state", "serving-snapshot.json"),
+    path.join(mixed, "state", "serving-snapshot.json"),
+  );
+  const refused = await startLiteServer(t, mixed);
+  assert.equal(refused.listened, false);
+  assert.notEqual(refused.code, 0);
+  assert.match(
+    refused.stderr,
+    /Lite serving snapshot shows forecast pred_\w+@1, which this data root does not hold/,
+  );
+
+  // The same pack with its own snapshot starts, also after lite runs have
+  // replaced the exported snapshot with forecasts of their own.
+  const pack = await litePackCopy(t);
+  const config = await configFor(pack);
+  const store = await new JsonlStore(pack).init();
+  for (const hours of [2, 3]) {
+    assert.equal((await startLiteServer(t, pack)).listened, true);
+    await scheduledRun(store, config, addHours(NOW, hours));
+  }
 });
 
 test("lite pack keeps only the latest revision of each impact episode", async (t) => {
@@ -844,12 +1050,7 @@ test("lite pack keeps only the latest revision of each impact episode", async (t
       .map((line) => `${line}\n`).join(""),
   );
   const pack = path.join(await temporaryDirectory(t, "lite-impact-pack"), "pack");
-  await exportLitePack({
-    sourceDir: source,
-    outputDir: pack,
-    config: await configFor(source, { lite: false }),
-    now: addHours(NOW, 2),
-  });
+  await exportPack(source, pack, await configFor(source, { lite: false }));
   assert.deepEqual(
     (await lines(path.join(pack, "records", "impact_episode.jsonl")))
       .filter((line) => /"imp_[ab]"/.test(line)),
