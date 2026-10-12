@@ -64,6 +64,7 @@ export async function issueForecast(store, config, {
   knowledgeCutoff = new Date(),
   horizonStart = null,
   clock = () => new Date(),
+  featureSnapshots = null,
 } = {}) {
   if (!MODEL_VALIDATION_STATUSES.has(validationStatus)) {
     throw new TypeError("Forecast model validation status must be provisional or validated");
@@ -100,12 +101,16 @@ export async function issueForecast(store, config, {
     prediction.data.horizon.start === firstTarget.toISOString(),
     );
     if (existing) return { prediction: existing, inserted: false };
-    ({ snapshots } = await buildForecastFeatureSnapshots(store, config, {
-      knowledgeCutoff: cutoff,
-      horizonStart: firstTarget,
-      horizonHours: 168,
-      createdAt: issued,
-    }));
+    // Snapshots a caller already built for this cutoff stay valid until the
+    // horizon moves to the next hour.
+    snapshots = featureSnapshots?.[0].data.target.start === firstTarget.toISOString()
+      ? featureSnapshots
+      : (await buildForecastFeatureSnapshots(store, config, {
+        knowledgeCutoff: cutoff,
+        horizonStart: firstTarget,
+        horizonHours: 168,
+        createdAt: issued,
+      })).snapshots;
     issued = new Date(clock());
     if (Number.isNaN(issued.getTime())) throw new TypeError("Forecast clock returned an invalid time");
     if (issued.getTime() < cutoff.getTime()) {

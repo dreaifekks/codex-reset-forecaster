@@ -33,6 +33,7 @@ import {
   aggregateCoverageWaiting,
   normalizeProviderCoverageWaiting,
 } from "../core/coverage-waiting.mjs";
+import { LITE_PACK_STATE_KEY } from "../runtime/lite-mode.mjs";
 
 function providerStateKey(name) {
   return `${name.replaceAll("_", "-")}-provider`;
@@ -227,7 +228,10 @@ export async function trainEvaluatePromote(store, config, {
   };
 }
 
-export async function collectConfiguredProviders(store, config, { instances = {} } = {}) {
+export async function collectConfiguredProviders(store, config, {
+  instances = {},
+  requiredOnly = false,
+} = {}) {
   const collections = {};
   const requiredProviders = new Set(
     requiredSourceProviderIds(config) ?? config.model.outcome_coverage_providers ?? [],
@@ -312,9 +316,23 @@ export async function collectConfiguredProviders(store, config, { instances = {}
     !descriptor.required && !descriptor.mutatesCoverage
   );
   for (const descriptor of required) await collectProvider(descriptor);
-  for (const descriptor of optionalCoverage) await collectProvider(descriptor);
-  await Promise.all(optionalContext.map(collectProvider));
+  if (!requiredOnly) {
+    for (const descriptor of optionalCoverage) await collectProvider(descriptor);
+    await Promise.all(optionalContext.map(collectProvider));
+  }
   return Object.keys(collections).length > 0 ? collections : null;
+}
+
+function pipelineClock(now, clock) {
+  const fixedNow = now === null || now === undefined ? null : new Date(now);
+  if (fixedNow && Number.isNaN(fixedNow.getTime())) {
+    throw new TypeError("Invalid fixed pipeline time");
+  }
+  return () => {
+    const value = fixedNow ?? new Date(clock());
+    if (Number.isNaN(value.getTime())) throw new TypeError("Pipeline clock returned an invalid time");
+    return new Date(value);
+  };
 }
 
 export async function runPipeline(store, config, {
@@ -325,15 +343,7 @@ export async function runPipeline(store, config, {
   providerInstances = {},
   assessPromotionGuard = assessLiveForecastPromotionGuard,
 } = {}) {
-  const fixedNow = now === null || now === undefined ? null : new Date(now);
-  if (fixedNow && Number.isNaN(fixedNow.getTime())) {
-    throw new TypeError("Invalid fixed pipeline time");
-  }
-  const currentTime = () => {
-    const value = fixedNow ?? new Date(clock());
-    if (Number.isNaN(value.getTime())) throw new TypeError("Pipeline clock returned an invalid time");
-    return new Date(value);
-  };
+  const currentTime = pipelineClock(now, clock);
   const result = {
     status: "running",
     collection: null,
@@ -568,6 +578,119 @@ export async function runPipeline(store, config, {
     : result.evaluation_waiting
       ? "waiting_for_evaluation"
       : "completed";
+  result.timing.completed_at = currentTime().toISOString();
+  return result;
+}
+
+// Lite mode serves an already fitted model: it collects the required sources,
+// normalizes, and issues a forecast. Reference sources, training, walk-forward
+// evaluation, settlement, and as-issued evaluation stay with the full instance.
+export async function runLitePipeline(store, config, {
+  now = null,
+  clock = () => new Date(),
+  collect = true,
+  providerInstances = {},
+  assessPromotionGuard = assessLiveForecastPromotionGuard,
+} = {}) {
+  const currentTime = pipelineClock(now, clock);
+  const result = {
+    status: "running",
+    collection: null,
+    processing: null,
+    training: { succeeded: false, skipped: true, reason_code: "lite_mode" },
+    promotion_guard: null,
+    forecast: null,
+    coverage_waiting: null,
+    evaluation_waiting: null,
+    issuedEvaluation: null,
+    settlements: null,
+    timing: {
+      started_at: currentTime().toISOString(),
+      processing_completed_at: null,
+      knowledge_cutoff: null,
+      horizon_start: null,
+      forecast_issued_at: null,
+      completed_at: null,
+    },
+  };
+  // Lite retention rewrites feature_snapshot.jsonl down to one batch, so it may
+  // only ever run on a data root that export-lite created for that purpose.
+  if (!await store.readState(LITE_PACK_STATE_KEY, null)) {
+    throw new Error(
+      "Lite mode only runs on a data root created by export-lite; this data root has no lite-pack manifest",
+    );
+  }
+  // A pack exported under another extractor or model contract must stop here,
+  // before normalization would replay every observation under the new contract.
+  const champion = await compatibleStoredModel(store, "champion", config);
+  const challenger = champion
+    ? null
+    : await compatibleStoredModel(store, "challenger", config);
+  const provisionalModel =
+    eligibleProvisionalBootstrapModel(challenger, config) ? challenger : null;
+  const forecastModel = champion ?? provisionalModel;
+  if (!forecastModel) {
+    throw new Error(
+      `Lite mode has no stored model compatible with model contract ${modelContractHash(config)} ` +
+      `(timezone database ${config.timezone_database_version})`,
+    );
+  }
+  if (collect) {
+    result.collection = await collectConfiguredProviders(store, config, {
+      instances: providerInstances,
+      requiredOnly: true,
+    });
+  }
+  result.processing = await processRecords(store, config, { now: currentTime() });
+  const knowledgeCutoff = currentTime();
+  const horizonStart = ceilHour(knowledgeCutoff);
+  result.timing.processing_completed_at = knowledgeCutoff.toISOString();
+  result.timing.knowledge_cutoff = knowledgeCutoff.toISOString();
+  result.timing.horizon_start = horizonStart.toISOString();
+  let guardedSnapshots = null;
+  if (
+    provisionalModel &&
+    config.model.live_forecast_promotion_guard?.enabled === true
+  ) {
+    ({ snapshots: guardedSnapshots } = await buildForecastFeatureSnapshots(
+      store,
+      config,
+      {
+        knowledgeCutoff,
+        horizonStart,
+        horizonHours: 168,
+        createdAt: currentTime(),
+      },
+    ));
+    const guard = await assessPromotionGuard({
+      candidate: provisionalModel,
+      previous: null,
+      snapshots: guardedSnapshots,
+      policy: config.model.live_forecast_promotion_guard,
+    });
+    result.promotion_guard = guard;
+    result.training.promotion_guard = guard;
+    if (!guard.passed) {
+      await store.retainFeatureSnapshots(guardedSnapshots);
+      result.status = "promotion_blocked";
+      result.timing.completed_at = currentTime().toISOString();
+      return result;
+    }
+  }
+  result.forecast = await issueForecast(store, config, {
+    model: forecastModel,
+    validationStatus: provisionalModel ? "provisional" : "validated",
+    knowledgeCutoff,
+    horizonStart,
+    clock: currentTime,
+    featureSnapshots: guardedSnapshots,
+  });
+  await store.retainFeatureSnapshots(
+    result.forecast.prediction.data.feature_snapshot_refs,
+  );
+  result.timing.horizon_start = result.forecast.prediction.data.horizon.start;
+  result.timing.forecast_issued_at = result.forecast.prediction.data.issued_at;
+  result.status = "completed";
   result.timing.completed_at = currentTime().toISOString();
   return result;
 }

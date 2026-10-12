@@ -15,6 +15,7 @@ import { DEMO_CONFIG_OVERRIDES } from "./demo/config.mjs";
 import { generateDemoHistory } from "./demo/history.mjs";
 import {
   processRecords,
+  runLitePipeline,
   runPipeline,
   trainEvaluatePromote,
 } from "./pipeline/run.mjs";
@@ -24,6 +25,7 @@ import { evaluateIssuedForecasts } from "./model/issued-evaluation.mjs";
 import { getReadiness } from "./runtime/readiness.mjs";
 import { settleIssuedPredictions } from "./model/settlement.mjs";
 import { confirmManualPlatformReset } from "./operators/manual-reset.mjs";
+import { exportLitePack } from "./operators/lite-pack.mjs";
 
 function argument(name, fallback = null) {
   const index = process.argv.indexOf(name);
@@ -185,11 +187,21 @@ try {
       retrain: process.argv.includes("--retrain"),
     };
     if (nowArgument) pipelineOptions.now = now;
-    output(await runPipeline(store, config, pipelineOptions));
+    const run = config.runtime.lite_mode ? runLitePipeline : runPipeline;
+    output(await run(store, config, pipelineOptions));
+  } else if (command === "export-lite") {
+    const outputDir = argument("--output");
+    if (!outputDir) throw new TypeError("export-lite requires --output DIR");
+    output(await exportLitePack({
+      sourceDir: config.runtime.data_dir,
+      outputDir,
+      config,
+      now,
+    }));
   } else if (command === "status") {
     output(await getReadiness(store, config));
   } else {
-    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  confirm-reset --offline --attest-platform --source-status STATUS --actor ID (--effective-at ISO | --ago-hours HOURS) [--note TEXT] [--now ISO]\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  status\n`);
+    process.stdout.write(`Codex Reset Forecaster\n\nCommands:\n  demo-seed [--now ISO]\n  ingest-x\n  ingest-gateway [--query NAME]\n  ingest-rsshub\n  ingest-archive\n  ingest-timeline --file PATH\n  confirm-reset --offline --attest-platform --source-status STATUS --actor ID (--effective-at ISO | --ago-hours HOURS) [--note TEXT] [--now ISO]\n  process\n  train [--now ISO]\n  evaluate [--now ISO]\n  forecast [--now ISO]\n  pipeline [--retrain] [--no-collect] [--now ISO]\n  export-lite --output DIR\n  status\n`);
   }
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

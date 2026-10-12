@@ -1166,6 +1166,40 @@ export class JsonlStore {
     return results;
   }
 
+  // Lite mode keeps feature snapshots as a bounded working set: only the batch
+  // behind the served prediction survives, and the sidecar index is rebuilt.
+  async retainFeatureSnapshots(refs) {
+    const type = FEATURE_SNAPSHOT_RECORD_TYPE;
+    const operation = () => this.#withTypeScan(type, async () => {
+      const retained = await this.#readIndexedFeatureSnapshots((index) =>
+        [...new Set(refs.map(exactRecordKey))]
+          .map((key) => [key, index.byExactRef.get(key)])
+      );
+      const target = this.recordPath(type);
+      const temporary = `${target}.${process.pid}.tmp`;
+      await fs.writeFile(
+        temporary,
+        [...retained.values()]
+          .map((record) => `${JSON.stringify(record)}\n`)
+          .join(""),
+        "utf8",
+      );
+      await fs.rename(temporary, target);
+      await Promise.all([
+        fs.rm(this.#featureSnapshotIndexPath(), { force: true }),
+        fs.rm(this.#featureSnapshotIndexCheckpointPath(), { force: true }),
+      ]);
+      this.#featureSnapshotIndex = null;
+      this.#recordsCache.delete(type);
+      this.#targetedRecordsCache.delete(type);
+      this.#latestTargetedRecordsCache.delete(type);
+      this.#negativeRefScanSizes.delete(type);
+      return retained.size;
+    });
+    this.#appendChain = this.#appendChain.then(operation, operation);
+    return this.#appendChain;
+  }
+
   async writeBlob(namespace, id, payload) {
     const safeNamespace = String(namespace).replace(/[^a-zA-Z0-9_-]/g, "_");
     const safeId = sha256(String(id));

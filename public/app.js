@@ -1287,6 +1287,18 @@ function renderPublicationWarning(forecastResult, readinessResult) {
     : tr(`预测尚未达到发布条件：${label}。`, `The forecast has not met publication requirements: ${label}.`);
 }
 
+function renderLiteMode(health) {
+  const target = document.querySelector("#lite-mode-notice");
+  const lite = health?.lite_mode;
+  target.hidden = !lite;
+  if (!lite) return;
+  const trainedThrough = formatCompactTime(lite.model?.training_cutoff);
+  target.textContent = tr(
+    `精简模式：模型停留在 ${trainedThrough} 的训练结果，训练、评估和结算已暂停；预测仍会随核心来源的新内容刷新。`,
+    `Lite mode: the model is frozen at its training cutoff (${trainedThrough}). Training, evaluation and settlement are paused; the forecast still refreshes from new core-source posts.`,
+  );
+}
+
 function renderDataStatus(forecast, health, readiness) {
   if (!forecast?.data?.data_quality) return;
   const groups = health.provider_freshness ?? readiness.provider_freshness?.groups ?? {};
@@ -1321,6 +1333,7 @@ function renderDataStatus(forecast, health, readiness) {
 
 function renderHealth(forecastResult, healthResult, readinessResult) {
   const health = healthResult.data ?? {};
+  renderLiteMode(health);
   const readiness = readinessResult.data ?? {};
   const forecast = forecastResult.data;
   const exact = health.provider_freshness?.exact ?? readiness.provider_freshness?.groups?.exact;

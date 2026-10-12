@@ -1,5 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { runPipeline } from "../pipeline/run.mjs";
+import { runLitePipeline, runPipeline } from "../pipeline/run.mjs";
 import { JsonlStore } from "../store/jsonl-store.mjs";
 import { materializeServingSnapshot } from "../web/app.mjs";
 import { projectPipelineSchedulerResult } from "./pipeline-worker.mjs";
@@ -37,7 +37,8 @@ async function execute(message) {
         message.payload?.now === undefined
       ? null
       : new Date(message.payload.now);
-    const result = await runPipeline(store, config, {
+    const run = config.runtime.lite_mode ? runLitePipeline : runPipeline;
+    const result = await run(store, config, {
       now: fixedNow,
       collect: message.payload?.collect !== false,
       retrain: message.payload?.retrain === true,

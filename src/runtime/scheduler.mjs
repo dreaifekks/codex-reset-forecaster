@@ -103,9 +103,11 @@ export function startScheduler({
       const lastRetrainRequest = Date.parse(
         state.last_retrain_requested_at ?? state.last_training_at ?? "",
       );
-      const retrain = !Number.isFinite(lastRetrainRequest) ||
+      const retrain = !config.runtime.lite_mode && (
+        !Number.isFinite(lastRetrainRequest) ||
         startedAt.getTime() - lastRetrainRequest >=
-          config.runtime.retrain_interval_hours * HOUR_MS;
+          config.runtime.retrain_interval_hours * HOUR_MS
+      );
       await store.writeState("runtime", {
         ...state,
         current_run_started_at: startedAt.toISOString(),

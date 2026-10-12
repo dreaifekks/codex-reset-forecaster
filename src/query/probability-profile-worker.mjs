@@ -121,6 +121,27 @@ function seededProfiles(snapshot) {
   return profiles;
 }
 
+// Lite mode has no as-issued evaluation to rebuild profiles from. It keeps the
+// exported last-good profiles instead of replacing them with an empty context.
+export function createFrozenProbabilityProfileProvider(seedSnapshot) {
+  const profiles = new Map(seededProfiles(seedSnapshot).map(
+    ({ horizonHours, value }) => [horizonHours, value],
+  ));
+  return {
+    async get(horizonValue) {
+      const profile = profiles.get(parseProbabilityProfileHorizon(horizonValue));
+      if (!profile) {
+        throw unavailable(
+          "Probability calibration profile is not available in lite mode",
+        );
+      }
+      return profile;
+    },
+    async warm() {},
+    async stop() {},
+  };
+}
+
 export function createProbabilityProfileWorkerProvider({
   dataDir,
   config,

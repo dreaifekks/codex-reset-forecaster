@@ -28,6 +28,7 @@ import { createWebPushRuntime } from "./web-push/runtime.mjs";
 import { createOperationsRuntime } from "./operations/runtime.mjs";
 import {
   PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
+  createFrozenProbabilityProfileProvider,
   createProbabilityProfileWorkerProvider,
 } from "./query/probability-profile-worker.mjs";
 
@@ -84,19 +85,21 @@ const webPushRuntime = await createWebPushRuntime({
   publicationLedger,
   forecastInputStream,
 });
-const probabilityProfileProvider = createProbabilityProfileWorkerProvider({
-  dataDir: config.runtime.data_dir,
-  config,
-  seedSnapshot: probabilityProfileSeed,
-  onSnapshot: (snapshot) => store.writeState(
-    PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
-    snapshot,
-  ).catch((error) => {
-    process.stderr.write(
-      `Probability profile snapshot persistence failed: ${error.stack ?? error.message}\n`,
-    );
-  }),
-});
+const probabilityProfileProvider = config.runtime.lite_mode
+  ? createFrozenProbabilityProfileProvider(probabilityProfileSeed)
+  : createProbabilityProfileWorkerProvider({
+    dataDir: config.runtime.data_dir,
+    config,
+    seedSnapshot: probabilityProfileSeed,
+    onSnapshot: (snapshot) => store.writeState(
+      PROBABILITY_PROFILE_SNAPSHOT_STATE_KEY,
+      snapshot,
+    ).catch((error) => {
+      process.stderr.write(
+        `Probability profile snapshot persistence failed: ${error.stack ?? error.message}\n`,
+      );
+    }),
+  });
 const requestHandler = createRequestHandler({
   store,
   config,

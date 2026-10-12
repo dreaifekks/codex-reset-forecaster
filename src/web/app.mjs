@@ -17,6 +17,7 @@ import {
   getReadiness,
   sourceFreshnessBlockers,
 } from "../runtime/readiness.mjs";
+import { liteModeStatus } from "../runtime/lite-mode.mjs";
 import {
   selectCurrentRelevantSignals,
 } from "../pipeline/signal-selection.mjs";
@@ -2069,6 +2070,7 @@ export function createRequestHandler({
         const requestNow = now();
         const warmup = await servingWarmupFor(requestNow);
         if (warmup) {
+          const liteMode = await liteModeStatus(store, config);
           const states = Object.values(warmup.providerFreshness.providers);
           sendSemanticUnavailable(response, {
             status: "warming",
@@ -2101,6 +2103,7 @@ export function createRequestHandler({
             synthetic_only: false,
             publication_ready: false,
             publication_blockers: ["serving_snapshot_warming"],
+            ...(liteMode ? { lite_mode: liteMode } : {}),
           });
           return;
         }
@@ -2112,6 +2115,7 @@ export function createRequestHandler({
           evaluationResult,
           readiness,
         } = await dynamicServingProjection(requestNow);
+        const liteMode = await liteModeStatus(store, config, prediction);
         const providers = readiness.provider_freshness.providers;
         const states = Object.values(providers);
         const forecastStatus = readiness.current_forecast.status;
@@ -2177,6 +2181,7 @@ export function createRequestHandler({
           synthetic_only: readiness.synthetic_only,
           publication_ready: readiness.publication_ready,
           publication_blockers: readiness.publication_blockers,
+          ...(liteMode ? { lite_mode: liteMode } : {}),
         });
         return;
       }
@@ -2287,8 +2292,11 @@ export function createRequestHandler({
         return;
       }
       if (url.pathname === "/api/readiness") {
-        const { readiness } = await dynamicServingProjection(now());
-        sendJson(response, 200, readiness);
+        const { prediction, readiness } = await dynamicServingProjection(now());
+        const liteMode = await liteModeStatus(store, config, prediction);
+        sendJson(response, 200, liteMode
+          ? { ...readiness, lite_mode: liteMode }
+          : readiness);
         return;
       }
       if (url.pathname === "/api/history/results") {

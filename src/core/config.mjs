@@ -105,6 +105,10 @@ function validateSourcePolicies(config) {
   if (required != null && !validIds(required)) {
     throw new TypeError("runtime.required_source_providers must name non-empty configured provider IDs");
   }
+  if (typeof config.runtime?.lite_mode !== "boolean" ||
+      (config.runtime.lite_mode && required == null)) {
+    throw new TypeError("runtime.lite_mode must be a boolean and requires runtime.required_source_providers");
+  }
   if (policy && (policy.version !== "primary-full-text/1" ||
       !validIds(policy.primary_providers) ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(policy.effective_at) ||
@@ -508,6 +512,9 @@ export async function loadConfig({ configPath = process.env.RESET_CONFIG, overri
   }
   if (process.env.RESET_RUN_ON_START !== undefined) {
     config.runtime.run_on_start = process.env.RESET_RUN_ON_START === "true";
+  }
+  if (process.env.RESET_LITE_MODE !== undefined) {
+    config.runtime.lite_mode = process.env.RESET_LITE_MODE === "true";
   }
   config.runtime.public_base_url = process.env.RESET_PUBLIC_BASE_URL ??
     config.runtime.public_base_url;
