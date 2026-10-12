@@ -132,6 +132,12 @@ snapshot identity so replaying an old cutoff cannot overwrite or collide with an
 older payload. Existing snapshots retain their original fields and remain
 readable. The model feature schema and numerical inputs are unchanged.
 
+A lite data root (`runtime.lite_mode`) is the one exception to append-only
+retention: it keeps only the snapshots referenced by its latest prediction. It is
+a serving working set exported from a full data root, never the system of record,
+and an export carries only the latest `impact_episode` revision and the latest
+prediction.
+
 ### `prediction`
 
 A seven-day list of hourly hazard and derived probabilities, plus the no-reset

@@ -1,4 +1,5 @@
-FROM node:22-alpine
+ARG NODE_IMAGE=node:22-alpine
+FROM ${NODE_IMAGE}
 
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./

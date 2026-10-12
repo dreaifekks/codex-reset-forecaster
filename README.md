@@ -210,6 +210,12 @@ validate implementation mechanics only and are never accepted as real-world mode
 accuracy. The dedicated demo start command loads the same frozen model contract
 used by `demo:seed`; ordinary `npm start` deliberately keeps the live contract.
 
+`RESET_LITE_MODE=true` with `compose.lite.yaml` runs a serve-only instance from a
+pack written by `node src/cli.mjs export-lite`: it keeps collecting the required
+primary source and issuing forecasts from the exported model, while reference
+sources, training, evaluation, and settlement stay with the full instance. See
+“Lite serving mode” in `docs/operations.md`.
+
 The public stable Atom feed is `/feed.xml`; `/feeds/experimental.xml` explicitly
 adds the shared model probability-watch events. The page's notification dialog can
 also generate a parameterized `/feeds/probability.xml` URL and apply the same

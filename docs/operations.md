@@ -359,6 +359,7 @@ node src/cli.mjs train
 node src/cli.mjs evaluate
 node src/cli.mjs forecast
 node src/cli.mjs pipeline --retrain
+node src/cli.mjs export-lite --output /absolute/path/to/empty-directory
 node src/cli.mjs status
 ```
 
@@ -1048,6 +1049,154 @@ curl -sS -D - -o /dev/null \
 curl -fsS http://127.0.0.1:8799/api/live
 # {"status":"ok"}
 ```
+
+## Lite serving mode
+
+`RESET_LITE_MODE=true` (`runtime.lite_mode`) runs a serve-only instance from an
+exported data pack. It exists for periods when the full instance is offline and a
+small host should keep the website, the primary-source collection, and inference
+from the already fitted model running. It is a runtime switch: it is excluded from
+`config_hash` and changes no extractor, feature, label, or model contract.
+
+A lite run does:
+
+- collect only the providers named in `runtime.required_source_providers` (the
+  live profile names `rsshub_x_timeline`); the mode requires that list;
+- normalize, review reset claims, fold impact episodes, link candidates, and
+  adjudicate outcomes exactly as the full pipeline does, so a qualifying
+  completion statement still becomes a `reset_outcome`, re-anchors the forecast,
+  and reaches the publication ledger;
+- select the stored model: a compatible champion issues `validated` forecasts,
+  otherwise a compatible challenger that meets the provisional-bootstrap minimum
+  issues `provisional` ones after passing the live promotion guard on that run's
+  snapshots;
+- issue the 168-slot forecast, materialize the serving snapshot, and project
+  publication events and forecast inputs.
+
+A lite run does not collect reference or context providers (historical monitor,
+X Search Gateway, direct X), fit or evaluate a model, promote, settle issued
+forecasts, run the as-issued evaluation, or rebuild the notification probability
+profiles. It never writes `prediction_settlement`, evaluation state, or
+evaluation blobs. The calibration endpoint keeps serving the exported last-good
+profiles; a horizon missing from that export returns
+`notification_calibration_unavailable`.
+
+The model is selected before collection. If neither stored model matches the
+current model contract, the run fails with `Lite mode has no stored model
+compatible with model contract …` and touches no record, because normalizing
+under a different extractor contract would replay every observation. The website
+keeps serving the last good read model while that error is visible in health.
+
+`feature_snapshot` is a bounded working set in lite mode: after each forecast
+only the 168 snapshots behind that prediction remain, and the sidecar index is
+rebuilt from them. A lite data root is therefore not a system of record. Its
+predictions stay immutable, but an older lite prediction can no longer be
+re-verified against its snapshots. Because that retention rewrites
+`feature_snapshot.jsonl`, a lite run refuses any data root without the
+`state/lite-pack.json` manifest that `export-lite` writes. Setting
+`RESET_LITE_MODE=true` on a full data root fails before anything is collected or
+removed.
+
+`/api/health` and `/api/readiness` add a `lite_mode` object (absent in full
+mode) with the collected providers, the paused stages, the pack export time, and
+the serving model's version, validation status, and `training_cutoff`. The
+forecast page shows the same training cutoff in a persistent notice, so a frozen
+model is never presented as continuously retrained. Reference providers keep
+reporting the last state carried in the pack; they are not required for serving.
+
+### Exporting the data pack
+
+```bash
+node src/cli.mjs export-lite --output /absolute/path/to/empty-directory
+```
+
+Run it with the full instance's configuration and environment. It only reads the
+configured data root and refuses a non-empty output directory. From the Compose
+deployment:
+
+```bash
+mkdir lite-pack
+docker compose -f compose.yaml -f compose.cloudflare.yaml \
+  run --rm --no-deps -v "$PWD/lite-pack:/export" reset-forecaster \
+  node src/cli.mjs export-lite --output /export
+```
+
+The pack contains:
+
+- every revision of `raw_observation`, `normalized_signal`, `event_candidate`,
+  and `reset_outcome`;
+- the latest revision of each `impact_episode`;
+- the latest prediction and its 168 feature snapshots;
+- `champion` and `challenger` plus their immutable artifacts;
+- the coverage and publication audit logs, and every coverage evidence blob the
+  assertions reference;
+- provider cursors, normalization and reset-review state, the publication and
+  forecast-input projections with their cursors, the last-good serving snapshot
+  and probability profiles, and `runtime`;
+- `state/lite-pack.json`, a manifest with the export time, source `config_hash`,
+  model contract hash, time-zone database version, and model identity.
+
+It omits older predictions and feature snapshots, settlements, every evaluation
+summary and blob, raw payload and archive blobs that no coverage assertion
+references, and traffic telemetry. The export keeps only complete JSONL lines and
+copies mutable cursors before the logs they describe, so it tolerates a live
+writer; stopping the writer first still gives the cleanest handover. The pack is
+a starting point for a lite instance, not a backup of the full data root.
+
+### Running the lite instance
+
+```bash
+docker volume create codex-reset-forecaster-lite-data-v1
+docker run --rm \
+  -v "$PWD/lite-pack:/seed:ro" \
+  -v codex-reset-forecaster-lite-data-v1:/data \
+  alpine:3.20 \
+  sh -ceu 'test -z "$(ls -A /data)"; cp -a /seed/. /data/; chown -R 1000:1000 /data'
+docker compose -f compose.yaml -f compose.lite.yaml up --build -d reset-forecaster
+curl http://127.0.0.1:8799/api/health
+```
+
+`compose.lite.yaml` only adds `RESET_LITE_MODE=true`, a memory limit, and an
+optional base-image pin. Copy the full instance's `.env` and change only
+host-specific values:
+
+- `RESET_DATA_VOLUME` names the lite volume;
+- every `*_TOKEN_FILE_HOST` whose file does not exist on the lite host goes back
+  to `/dev/null` (Docker would otherwise create a directory at that path);
+- keep `RESET_CONFIG`, `RESET_SEMANTIC_ASSISTANCE_ENABLED`,
+  `RESET_SEMANTIC_ASSISTANCE_MODEL`, and the provider enable flags as they are.
+  The first three are part of the extractor and model contract; the flags are
+  part of `config_hash`, which lets the exported serving snapshot seed the page
+  immediately. Lite mode does not collect an enabled reference provider;
+- `RESET_NODE_IMAGE` may pin the exact Node image of the full instance, for
+  example `node:22.23.1-alpine`. The Node build supplies the time-zone database
+  version, which is part of the model contract; `state/lite-pack.json` records
+  the exported value.
+
+With semantic assistance enabled but no token mounted, reset review fails closed:
+an unrecognized completion statement stays `pending` and is retried every six
+hours. Mount the token file to keep that review working.
+
+The primary source must be reachable from the lite host. One data root still has
+exactly one writer: stop the full instance before the lite instance takes over
+public traffic, and never point two instances at the same Telegram bot volume.
+Attach `compose.cloudflare.yaml` only on the host that should receive tunnel
+traffic.
+
+Measured on 2026-10-12 with a pack exported from the live Tibo-authority volume
+(x86-64, Node 22.23.1): the pack is 128 MB in 927 files and exports from the
+50 GB data root in about two seconds. One run takes about 45 seconds, nearly all
+of it building the 168 feature snapshots. The process settles at roughly
+270–320 MB resident between runs and peaks near 490 MB during a run. A 512 MB
+limit completed runs without reaching the limit; the default 768 MB leaves room
+for the in-memory prediction history, which grows by about 10 MB per day, as does
+the data root. Lite forecasts matched the full instance's hourly hazards for the
+same horizon.
+
+The pack is not merged back automatically. The existing rule still applies:
+never copy a snapshot into a non-empty data root. Restarting the full instance
+resumes from its own state, and its first collection reads whatever the primary
+feed still exposes.
 
 ## Docker
 

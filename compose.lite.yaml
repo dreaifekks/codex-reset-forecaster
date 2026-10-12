@@ -1,0 +1,11 @@
+# Lite override: RSS primary source and inference from an exported model only.
+# Use with the same .env semantics as the full instance the pack came from:
+#   docker compose -f compose.yaml -f compose.lite.yaml up --build -d reset-forecaster
+services:
+  reset-forecaster:
+    build:
+      args:
+        NODE_IMAGE: "${RESET_NODE_IMAGE:-node:22-alpine}"
+    environment:
+      RESET_LITE_MODE: "true"
+    mem_limit: "${RESET_LITE_MEMORY_LIMIT:-768m}"

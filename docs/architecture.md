@@ -513,6 +513,12 @@ errors require a separate edge data source and are not inferred from origin data
   evidence until the original validated gate is met.
 - Continuously: retain the last stable champion as the rollback target.
 
+A lite instance (`runtime.lite_mode`) keeps only the 10-minute collection of the
+required sources, normalization, outcome adjudication, and forecast issuance from
+an exported model. Reference sources, fitting, evaluation, promotion, and
+settlement stay with the full instance, and health plus the page report the frozen
+model's training cutoff. See `docs/operations.md`.
+
 The hourly slots are the forecast target resolution, not the serving-cache
 lifetime. Two successful 10-minute runs can use the same fitted model while
 producing different immutable predictions because their knowledge cutoffs differ.
