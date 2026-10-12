@@ -1058,6 +1058,95 @@ test("lite pack keeps only the latest revision of each impact episode", async (t
   );
 });
 
+test("the trial-model status and warning say validation is paused only in lite mode", async () => {
+  const source = await fs.readFile(
+    new URL("../public/app.js", import.meta.url),
+    "utf8",
+  );
+  const pageFunctions = [
+    "isProvisionalServing",
+    "setStatus",
+    "renderLiteMode",
+    "renderPublicationWarning",
+    "renderHealth",
+  ].map((name) =>
+    source.match(new RegExp(`\\nfunction ${name}\\([\\s\\S]*?\\n}\\n`))[0]
+  ).join("");
+  const render = (language, liteMode) => {
+    const elements = new Map();
+    const element = (selector) => {
+      if (!elements.has(selector)) {
+        elements.set(selector, {
+          hidden: true,
+          textContent: "",
+          classList: { add() {}, remove() {}, toggle() {} },
+          setAttribute() {},
+          querySelector: (child) => element(`${selector} ${child}`),
+        });
+      }
+      return elements.get(selector);
+    };
+    const page = new Function(
+      "document",
+      "tr",
+      "formatCompactTime",
+      "challengerReady",
+      "renderDataStatus",
+      `${pageFunctions}return { renderPublicationWarning, renderHealth };`,
+    )(
+      { querySelector: element },
+      (chinese, english) => language === "en" ? english : chinese,
+      (value) => String(value),
+      () => true,
+      () => {},
+    );
+    // The page renders both from the health response of a provisional forecast.
+    const health = {
+      data: {
+        status: "degraded",
+        serving_ready: true,
+        serving_stage: "provisional",
+        serving_blockers: [],
+        publication_ready: false,
+        ...(liteMode ? {
+          lite_mode: { model: { training_cutoff: "2026-10-11T12:50:08.086Z" } },
+        } : {}),
+      },
+    };
+    const forecast = { data: { data: {}, serving: { status: "provisional" } } };
+    page.renderPublicationWarning(forecast, health);
+    page.renderHealth(forecast, health, health);
+    return {
+      status: element("#source-status .status-text").textContent,
+      warning: element("#publication-warning").textContent,
+      liteNoticeShown: !element("#lite-mode-notice").hidden,
+    };
+  };
+
+  assert.deepEqual(render("zh", true), {
+    status: "试用模型 · 严格验证已暂停",
+    warning: "试用模型：当前概率已开放试用，严格验证已暂停，尚未完成。",
+    liteNoticeShown: true,
+  });
+  assert.deepEqual(render("en", true), {
+    status: "Trial model · Strict validation paused",
+    warning:
+      "Trial model: probabilities are available, but strict validation is paused and has not been completed.",
+    liteNoticeShown: true,
+  });
+  assert.deepEqual(render("zh", false), {
+    status: "试用模型 · 严格验证积累中",
+    warning: "试用模型：当前概率已开放试用，严格验证仍在积累中。",
+    liteNoticeShown: false,
+  });
+  assert.deepEqual(render("en", false), {
+    status: "Trial model · Strict validation accumulating",
+    warning:
+      "Trial model: probabilities are available while strict validation continues to accumulate.",
+    liteNoticeShown: false,
+  });
+});
+
 test("lite scheduler never requests a retrain", async (t) => {
   const directory = await temporaryDirectory(t, "lite-scheduler");
   const store = await new JsonlStore(directory).init();

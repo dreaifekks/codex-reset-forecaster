@@ -1264,10 +1264,15 @@ function renderPublicationWarning(forecastResult, readinessResult) {
   if (provisional) {
     target.hidden = false;
     target.classList.remove("synthetic");
-    target.textContent = tr(
-      "试用模型：当前概率已开放试用，严格验证仍在积累中。",
-      "Trial model: probabilities are available while strict validation continues to accumulate.",
-    );
+    target.textContent = readiness.lite_mode
+      ? tr(
+        "试用模型：当前概率已开放试用，严格验证已暂停，尚未完成。",
+        "Trial model: probabilities are available, but strict validation is paused and has not been completed.",
+      )
+      : tr(
+        "试用模型：当前概率已开放试用，严格验证仍在积累中。",
+        "Trial model: probabilities are available while strict validation continues to accumulate.",
+      );
     return;
   }
   if (
@@ -1361,7 +1366,9 @@ function renderHealth(forecastResult, healthResult, readinessResult) {
   if (sourceFreshnessBlocked) {
     setStatus("error", tr("核心来源异常 · 预测已暂停", "Core source issue · Forecast paused"));
   } else if (provisional) {
-    setStatus("warning", tr("试用模型 · 严格验证积累中", "Trial model · Strict validation accumulating"));
+    setStatus("warning", health.lite_mode
+      ? tr("试用模型 · 严格验证已暂停", "Trial model · Strict validation paused")
+      : tr("试用模型 · 严格验证积累中", "Trial model · Strict validation accumulating"));
   } else if (coverageWaiting || evaluationWaiting) {
     setStatus(
       "warning",
