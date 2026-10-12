@@ -509,6 +509,11 @@ The service exposes:
 - `/accuracy` for the confirmed reset history (the path is retained for bookmark
   compatibility)
 
+The standalone Toy reader at `https://www.bilibilitoy.com` can read health,
+immutable forecast snapshots, recent evidence, and confirmed history through
+GET/HEAD CORS responses. These responses vary by Origin; credentialed requests,
+subscription writes, and operations endpoints are not shared with Toy.
+
 `GET /api/evidence/recent` returns semantic arrays `core`, `experience`,
 `competition`, and `other_context`, plus a combined `items` view. It also returns
 up to 12 exact-source `timeline` entries for the configured Tibo confirmation

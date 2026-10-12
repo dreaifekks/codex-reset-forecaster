@@ -548,6 +548,36 @@ function requestThroughProxy(base, {
   });
 }
 
+test("Toy can read public projections without exposing writes or operations through CORS", async (t) => {
+  const origin = "https://www.bilibilitoy.com";
+  const base = await serverFor(t, new MemoryStore(), config(), "2026-07-25T10:10:00.000Z");
+  for (const path of [
+    "/api/health",
+    "/api/history/results",
+    "/api/evidence/recent",
+    "/api/forecast/snapshots/pred_missing/1",
+  ]) {
+    const response = await requestThroughProxy(base, { path, headers: { origin } });
+    assert.equal(response.headers["access-control-allow-origin"], origin, path);
+    assert.equal(response.headers.vary, "Origin", path);
+    assert.equal(response.headers["access-control-allow-credentials"], undefined);
+  }
+  for (const headers of [{}, { origin: "https://example.com" }, { origin: "https://www.bilibilitoy.com.example.com" }]) {
+    const response = await requestThroughProxy(base, { path: "/api/health", headers });
+    assert.equal(response.headers["access-control-allow-origin"], undefined);
+    assert.equal(response.headers.vary, "Origin");
+  }
+  for (const [method, path] of [
+    ["POST", "/api/health"],
+    ["POST", "/api/web-push/subscriptions"],
+    ["GET", "/api/operations/traffic"],
+    ["GET", "/"],
+  ]) {
+    const response = await requestThroughProxy(base, { method, path, headers: { origin } });
+    assert.equal(response.headers["access-control-allow-origin"], undefined, `${method} ${path}`);
+  }
+});
+
 test("public HTTP requests redirect to the configured HTTPS origin", async (t) => {
   const publicHost = "codexreset.dreaife.tokyo";
   const base = await serverFor(

@@ -327,6 +327,21 @@ function securityHeaders(response) {
   response.setHeader("x-frame-options", "DENY");
 }
 
+function toyReadCors(request, response, pathname) {
+  // Toy hosts the standalone reader on this origin, inside the Bilibili shell.
+  // Only its public read endpoints are shared; subscriptions and operations stay
+  // same-origin. Vary also applies to requests without an Origin header so an
+  // immutable snapshot cached by the main site can be reused correctly by Toy.
+  if (!/^\/api\/(?:health|history\/results|evidence\/recent|forecast\/snapshots\/[^/]+\/\d+)$/.test(pathname)) return;
+  response.setHeader("vary", "Origin");
+  if (
+    ["GET", "HEAD"].includes(request.method) &&
+    request.headers.origin === "https://www.bilibilitoy.com"
+  ) {
+    response.setHeader("access-control-allow-origin", "https://www.bilibilitoy.com");
+  }
+}
+
 function configuredPublicHttpsUrl(config) {
   const publicBaseUrl = config?.runtime?.public_base_url;
   if (typeof publicBaseUrl !== "string") return null;
@@ -1641,6 +1656,7 @@ export function createRequestHandler({
     securityHeaders(response);
     try {
       const url = new URL(request.url, "http://localhost");
+      toyReadCors(request, response, url.pathname);
       const httpsRedirect = publicHttpsRedirectLocation(
         request,
         url,
