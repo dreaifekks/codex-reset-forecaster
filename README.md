@@ -1,308 +1,75 @@
 # Codex Reset Forecaster
 
-Design baseline for a provider-neutral system with a versioned forecast outcome.
-The live profile in `config/tibo-authority-live.json` estimates when the configured
-Tibo identity will publish a qualifying, platform-wide Codex reset/refill
-completion statement. It does not claim to observe every physical backend reset.
-The versioned live scope policy accepts either an explicit platform-wide statement
-or a completed general Codex reset statement with no narrower plan, account, or
-region qualifier. Banked vouchers and narrower segments stay outside the target.
+Hourly probability forecasts for the next Codex usage-limit reset announcement.
 
-The repository contains the contracts plus a zero-dependency Node.js prototype:
-direct X, RSSHub X timeline, X Search Gateway, historical-monitor, and fixture
-adapters; append-only records and acquisition audit data; deterministic extraction
-and adjudication; feature snapshots; a regularized hourly hazard model; a
-walk-forward promotion gate; JSON APIs; forecast plus confirmed-history pages; and
-a channel-neutral publication ledger for Atom, Web Push, and Telegram. Personal
-quota integration remains deferred.
+![Codex Reset Forecast: next 168 hours, hourly probability](public/social-preview-en.png)
 
-The operating policy separates immediate usefulness from validated performance. A
-first deployment batch-fits a clearly labeled `provisional` bootstrap from the
-eligible historical data already available at its training cutoff; it does not wait
-for weeks of new wall-clock data before it may train or be inspected. Strict causal
-walk-forward and immutable `as_issued` evidence continue accumulating in the
-background. Until the original 1,008-window, 20-event promotion gate passes, the
-bootstrap must not claim that 80% event-window recall or production accuracy has
-been validated.
+Codex usage limits are sometimes reset or refilled for everyone, and the reset is
+announced publicly on X. This project collects those public posts and related
+context. It then forecasts, hour by hour for the next seven days, how likely a
+qualifying reset announcement is within the next four hours.
 
-## Current decisions
+**Live site:** <https://codexreset.dreaife.tokyo/en> (Chinese:
+<https://codexreset.dreaife.tokyo/>)
 
-- Outcome meaning is versioned rather than tied to a provider adapter. The current
-  live deployment target is a qualifying completion statement from the configured
-  Tibo identity.
-- A `started` statement, schedule, expectation, rumor, summary, or model judgment
-  is not a positive outcome.
-- An authenticated host operator may explicitly attest that a linked authority
-  reset candidate completed at a supplied UTC time. That append-only path is
-  labeled `silver` and `operator_confirmation`; it re-anchors recurrence and the
-  post-outcome refractory curve, but is never presented as an official statement.
-- The internal time base is 168 hourly anchors per week.
-- At each hourly anchor, the product-facing forecast is the probability of the
-  selected qualifying outcome during the next four hours.
-- The website derives its next-4-hour, next-24-hour, and seven-day `[7][24]`
-  heatmaps from the same 168-slot forecast rather than producing separate models.
-- Notifications are a non-canonical projection. Stable delivery includes exact
-  authority windows and confirmed outcomes/corrections; probability threshold
-  watches remain experimental opt-in and can never be presented as outcomes.
-  The website and Telegram bot are result UI/read models: they may lazily fetch
-  and cache only the needed forecast projections, but cannot write canonical
-  records or contribute to training, labels, calibration, or publication triggers.
-  The HTTP event loop serves an in-memory last-good projection only; collection,
-  JSONL traversal, settlement, evaluation, and fitting run in a dedicated worker
-  isolate and atomically replace that projection only after it is complete.
-- Provider adapters only collect and normalize observations. Watchdogs, X feeds,
-  official status pages, user-report sources, and other vendors are
-  interchangeable providers rather than the core model.
-- The checked-in RSSHub X timeline adapter is an exact-evidence transport for
-  configured accounts' posts, replies, and reposts. A reply whose own text makes
-  an explicit relevant claim can be a `primary_statement`; a reply that is relevant
-  only through its parent is bound to the parent's evidence root and remains
-  derivative with `derivation: "reply"`, so it cannot confirm an outcome or
-  activate authority timing. A marker whose exact relation is missing is retained
-  as an auditable, feature-ineligible quarantine item instead of failing every
-  otherwise valid item in the feed. A qualifying exact completion statement may
-  support a positive outcome after adjudication, but the finite feed never
-  establishes outcome coverage or a negative label.
-- Text models extract stable claims. A statistical hazard model produces the final
-  probability.
-- Search matches are candidates, not signals. A versioned provider-neutral
-  relevance gate checks the post and any exact reply/quote context first; personal
-  quota errors, requests, generic discussion, and unresolved ambiguous replies do
-  not enter features.
-- The extractor recognizes the versioned Codex mode aliases `ultra` and `/fast`
-  inside relevant reset claims. A post that quotes older evidence still owns a
-  `primary_statement` when its own text makes the reset claim; a wrapper that only
-  inherits quoted text remains derivative.
-- New provider intelligence is incorporated into as-of features and a fresh
-  forecast on the 10-minute pipeline cadence; the forecast slots and conditional
-  hazards remain hourly, and this refresh does not wait for parameter retraining.
-- A timed authority statement raises probability only while its asserted window
-  remains active. Window expiry or a compatible confirmed reset removes it from
-  the probability path; the confirmed reset then anchors the next recurrence
-  cycle instead of leaving the pre-reset alert elevated. Exact authority timing is
-  excluded from the learned baseline so the same statement is not counted twice.
-- The optional X Search Gateway currently defaults to `grokbuild`. Both Grokbuild
-  and the `hermes` rollback path are summary/context-only inputs: they may adjust
-  features but cannot confirm an outcome or establish negative-label coverage.
-  Its independent context queries run concurrently behind a six-hour provider
-  gate; the exact RSSHub Tibo timeline has a five-minute provider gate. The
-  current shared scheduler checks both on 10-minute boundaries, so these gates do
-  not imply independent five-minute polling.
-- An exhausted Grok Build usage balance opens a persisted six-hour circuit
-  breaker: optional community searches are skipped without failing the pipeline,
-  while the last successful source timestamp remains unchanged and can age stale.
-- Context collection targets Codex experience issues and recoveries, classified by
-  impact and severity, including security/privacy, data-integrity, and
-  compatibility failures, plus non-rumor competitor model or coding-agent releases.
-  Independent issue evidence is also grouped into append-only impact episodes whose
-  bounded, freshness-decayed pressure shows whether a problem is persisting,
-  spreading, mitigating, or resolved over time.
-  Community post volume, momentum, resonance, and disagreement are not prediction
-  features. Experience reports are initially display/audit evidence; a competitor
-  event contributes at most one recency-decayed value after dependency collapse,
-  so repost volume cannot amplify it. Impact-episode pressure is likewise an
-  intelligence-layer measurement, not the current reset probability.
-- Model parameters are batch-refit at most once every 24 hours and only from
-  labels that are mature and available at the frozen training cutoff. Confirmed
-  positive intervals can enter immediately; only negative hours require complete
-  outcome coverage. Records that arrive while a fit is running enter the next
-  batch instead of restarting the current fit.
-- A learnable feature must have non-zero support in at least three independent
-  positive event intervals and 24 covered negative hours. Unsupported,
-  zero-variance, or near-perfect duplicate columns are fixed to zero and audited
-  in the model artifact rather than extrapolated from one coincidence.
-- The live guard checks raw cumulative probability at 4, 24, and 72 hours and
-  combines same-snapshot clip-bound contributions. A rejected old provisional
-  model is not silently restored.
-- `provisional` means usable bootstrap, not measured 80% performance. `validated`
-  remains reserved for the original causal/as-issued sample and quality gates.
-- Personal quota windows and expiring reset vouchers are a downstream optimization
-  layer and do not redefine the platform forecast. This layer is not part of the
-  initial website MVP.
+## What you get
 
-## Confirmed MVP
+- **Seven-day forecast page.** A 7 × 24 heatmap plus next-4-hour and
+  next-24-hour views. All three come from the same 168-hour forecast, and each cell
+  shows its exact probability.
+- **Confirmed reset history.** A separate page (`/en/accuracy`) that lists only
+  confirmed resets and links to their sources.
+- **Recent evidence.** The source account's timeline and related context, such as
+  Codex outages and recoveries or competing model releases. This evidence is shown
+  separately from the reset probability.
+- **Notifications:**
+  - Atom feeds. `/feed.xml` carries authority announcements and confirmed resets.
+    `/feeds/experimental.xml` also carries probability alerts.
+    `/feeds/probability.xml` takes your own horizon and threshold.
+  - Web Push in the browser, opt-in, for deployments that have set it up.
+  - Telegram bots, in Chinese
+    [@codex_reset_7day_bot](https://t.me/codex_reset_7day_bot) and English
+    [@codex_reset_7day_en_bot](https://t.me/codex_reset_7day_en_bot). For example,
+    `/subscribe probability 24h 60%` alerts you when the 24-hour probability
+    passes 60%.
+- **JSON API.** Read-only endpoints such as `/api/forecast/current`,
+  `/api/history/results`, `/api/health`, and `/api/readiness`.
 
-The first website release covers:
+## Important notes
 
-- exact collection of configured Tibo posts, replies, and reposts through direct
-  X or RSSHub, with provider-neutral provenance;
-- Codex experience issues and recoveries classified by severity, lifecycle,
-  affected scope, and surface;
-- non-rumor competing-model and coding-agent announcements, previews, and
-  releases, collapsed to independent evidence roots;
-- provider-neutral normalization, provenance tracking, and dependency-aware
-  deduplication;
-- a small, strongly regularized hourly hazard model;
-- a single 168-hour forecast rendered as 4-hour, 24-hour, and seven-day heatmaps;
-- immutable prediction history, internal evaluation for promotion, and a public
-  history page containing only confirmed reset results and their sources;
-- append-only publication events consumed by the default Atom feed, optional Web
-  Push, and separate Chinese and English public Telegram bots that share the same
-  forecaster while keeping delivery state isolated, with experimental probability
-  alerts kept outside default delivery.
+- **This is not official data.** The forecast target is a public statement from a
+  configured authority account (currently Tibo Sottiaux on X) saying that a
+  platform-wide Codex reset has completed. The project does not see OpenAI's
+  backend and cannot detect every physical reset. Announcements of planned
+  resets, rumors, and model output are not counted as resets. It knows nothing
+  about your own account's quota.
+- **The model is provisional, not validated.** The live model is fitted on the
+  history available so far and is labeled `provisional` on the site. Accuracy
+  claims such as 80% event recall are not made until a strict walk-forward test
+  passes. That test needs at least 1,008 evaluated hourly windows and 20 resets.
+  Until then, read the numbers as a rough indicator.
 
-The MVP does not include user accounts, personal five-hour or weekly quota state,
-reset-voucher inventory, or personalized voucher recommendations. Those remain a
-separate follow-up described in `docs/personal-optimizer.md`.
+## Quick start
 
-## Core flow
-
-```text
-providers
-  -> append-only raw observations
-  -> topic/context relevance decisions
-  -> normalized claims
-  -> append-only impact episodes for issue/recovery follow-up
-  -> event candidates and evidence-dependency graph
-  -> 10-minute as-of refreshes of hourly-slot feature snapshots
-  -> hourly hazard and rolling four-hour forecast
-  -> confirmed outcomes
-  -> non-canonical publication events for delivery channels
-  -> immediate historical batch bootstrap when needed
-  -> append-only prediction settlements and background causal/as-issued validation
-  -> at-most-daily batch train/evaluate attempts
-```
-
-The bootstrap and validation paths share the same leakage, outcome-confirmation,
-coverage, and lineage rules. The distinction is the strength of the performance
-claim: provisional use is allowed before the validation sample matures, but it is
-displayed as unvalidated and cannot inherit an exploratory or replay score as an
-80% claim.
-
-## Repository layout
-
-```text
-AGENTS.md                    Repository boundaries and working rules
-docs/architecture.md        System components and lifecycle
-docs/data-contract.md       Canonical records, timestamps, and provenance
-docs/notifications.md       Publication events, delivery topics, and channel safety
-docs/model-contract.md      Forecast target, model, training, and evaluation
-docs/product-requirements.md
-                             Confirmed MVP scope and website surfaces
-docs/personal-optimizer.md  Later personal quota/voucher optimization interface
-docs/operations.md          Live collection, scheduling, API, and Docker operation
-docs/implementation-status.md
-                             Requirement-to-verification matrix and external gates
-schemas/reset-intel.schema.json
-                             JSON Schema for the canonical record envelope
-schemas/publication-event.schema.json
-                             Non-canonical publication event schema
-examples/                   Canonical records plus a separate publication example
-scripts/validate.mjs        Zero-dependency contract checks
-```
-
-## Validate
+Requires Node.js 22 or newer.
 
 ```bash
-node scripts/validate.mjs
-```
-
-## Run
-
-```bash
+npm install
 npm test
+npm run validate
+```
+
+### Demo with synthetic data
+
+```bash
 RESET_DATA_DIR=/tmp/reset-forecaster-demo npm run demo:seed
 RESET_DATA_DIR=/tmp/reset-forecaster-demo npm run demo:start
 ```
 
-See `docs/operations.md` before enabling live X collection. Synthetic demo results
-validate implementation mechanics only and are never accepted as real-world model
-accuracy. The dedicated demo start command loads the same frozen model contract
-used by `demo:seed`; ordinary `npm start` deliberately keeps the live contract.
+Then open <http://127.0.0.1:8787/>. The demo checks that the pipeline works. Its
+scores are labeled `SYNTHETIC DEMO` and say nothing about real accuracy.
 
-`RESET_LITE_MODE=true` with `compose.lite.yaml` runs a serve-only instance from a
-pack written by `node src/cli.mjs export-lite`: it keeps collecting the required
-primary source and issuing forecasts from the exported model, while reference
-sources, training, evaluation, and settlement stay with the full instance. See
-“Lite serving mode” in `docs/operations.md`.
-
-The public stable Atom feed is `/feed.xml`; `/feeds/experimental.xml` explicitly
-adds the shared model probability-watch events. The page's notification dialog can
-also generate a parameterized `/feeds/probability.xml` URL and apply the same
-versioned `1..168h` horizon plus `1%..99%` threshold rule to opt-in Web Push and
-either localized Telegram Bot (`/subscribe probability 24h 60%`;
-`/subscribe experimental` remains a `4h/50%` compatibility alias).
-Historical threshold reliability is shown separately from forecast probability and
-uses strict-above-threshold samples, a per-point 20-window gate, and Wilson
-intervals; it is labeled preliminary until the configured global sample gates pass.
-The chart focuses on the historical mean plus or minus four population standard
-deviations instead of reserving most of its width for empty probability space, and
-reports how many outlying windows were clipped from the drawing. For a new browser
-preference only, the initial threshold suggestion is the historical mean plus two
-standard deviations, rounded up to a real one-percentage-point threshold. Saved or
-manually edited rules are never overwritten, and the channel-neutral `4h/50%`
-compatibility default remains unchanged.
-The parameterized Atom URL includes an explicit current baseline cursor and keeps
-entries for 24 hours independently of Web Push expiry. Web Push and both Telegram
-Bots are safe-disabled until their external key/token files and required
-administrator settings are configured. The existing Chinese
-[`@codex_reset_7day_bot`](https://t.me/codex_reset_7day_bot) keeps its current
-delivery volume; the English
-[`@codex_reset_7day_en_bot`](https://t.me/codex_reset_7day_en_bot) uses an
-independent token and volume and links to `/en`. A new English volume silently
-baselines the current streams and does not replay old notifications. Bot timestamps
-default to the fixed `Asia/Tokyo` zone and show an explicit `UTC+9` suffix;
-deployments may override each instance's IANA zone with
-`TELEGRAM_DISPLAY_TIME_ZONE` or `TELEGRAM_EN_DISPLAY_TIME_ZONE`.
-Ordinary private-chat Bot users do not need an allowlist. Public Web Push also
-requires edge rate limiting plus an anti-automation challenge on subscription
-mutations; same-origin headers alone are not an abuse control. The first successful
-pipeline generation after publication is enabled establishes a baseline and sends
-no historical backlog. See
-`docs/notifications.md` for the event and subscription contract.
-
-The server builds all 28 slider horizons from one read-only historical context,
-persists a lineage-bound last-good snapshot, and refreshes it in the background at
-startup and after a successful pipeline run. Expired values remain immediately
-readable while a forced refresh runs, so a browser drag never owns the historical
-file scan. The browser's explicit compact HTTP projection has a ten-minute public
-cache plus a bounded stale-while-revalidate window; omitting that view keeps the
-complete profile contract for existing consumers. The page also keeps an
-exact-horizon ten-minute cache and flushes the final slider value immediately on
-release. On a cache miss, an already rendered chart stays visible but becomes
-non-interactive until the selected horizon is ready, then the new chart replaces it
-atomically; only the first chart uses the full loading state. Telegram requests
-sparse forecast-input views for only the distinct horizons used by active dynamic
-rules; without such a rule it reads only the tail cursor and outcome gate. The core
-projection continues to retain the complete 168-point curve.
-
-The same last-good boundary covers the main forecast, health/readiness base,
-confirmed history, evaluation event views, and recent evidence. Pipeline progress
-or failure changes dynamic status but cannot blank those display records or make a
-browser request own a canonical scan. If the last-good forecast is no longer
-eligible for fresh serving, the page still renders its exact immutable snapshot
-with a stale/blocked warning instead of remaining on the loading shell.
-
-Origin request monitoring is a separate operations plane, not a model input. It
-keeps privacy-preserving minute and UTC-day aggregates, shows daily growth to the
-Bot administrator with `/traffic`, and emits only sustained capacity state
-transitions. Ordinary users can use the Bot in their own private chat without
-pre-registration; administrator operations data never enters the publication
-ledger or ordinary subscriptions. See `docs/operations.md` for token setup and
-thresholds.
-
-To import the historical monitor as outcome-discovery evidence under the default
-archive profile (network access required):
-
-```bash
-export RESET_CONFIG="$PWD/config/archive-evaluation.example.json"
-export RESET_DATA_DIR="$PWD/data/archive"
-node src/cli.mjs ingest-archive
-node src/cli.mjs process
-node src/cli.mjs status
-```
-
-The generated archive data is ignored by Git. Preserve that data directory if an
-exact audit of a particular run is required. The adapter saves the source HTML,
-parsed date grid, hashes, and verification payloads, but its date grid is
-`outcome_only`: it does not prove that hours without listed posts are true
-negatives. Training therefore refuses to use that source for negative labels
-unless a separate, explicit completeness attestation is configured and audited.
-Linked posts discovered from a known outcome are retained only as
-outcome-conditioned audit evidence and are excluded from forecast features.
-
-For the live Tibo-authority profile, select the checked-in deployment config
-explicitly:
+### Live profile
 
 ```bash
 export RESET_CONFIG="$PWD/config/tibo-authority-live.json"
@@ -310,105 +77,74 @@ export RESET_DATA_DIR="$PWD/data/tibo-authority"
 node src/cli.mjs ingest-archive
 node src/cli.mjs process
 node src/cli.mjs status
+RESET_SCHEDULER_ENABLED=true npm start
 ```
 
-This profile uses the archive's UTC daily grid as a versioned authority ledger,
-not as proof of every physical reset. A grid day can become
-`negative_label_eligible` only after day-end plus 36 hours and after at least two
-actual fetches of the same ledger separated by six hours or more. Dates before the
-grid begins remain outcome-discovery-only. The first live import therefore leaves
-eligible days pending, and any later promotion records its real fetch time instead
-of backdating coverage to day-end. See `docs/operations.md` for service switching
-and restart commands.
+Without `RESET_SCHEDULER_ENABLED=true`, `npm start` only serves data that is
+already saved. With it, the service collects and forecasts every 10 minutes. A
+fresh data directory answers `503 waiting` until enough history and outcome
+coverage exist. See [operations](docs/operations.md) for live X credentials,
+RSSHub, and the source-stability rules.
 
-### Optional semantic timing assistance
-
-The extractor has a disabled-by-default OpenAI-compatible helper for rare,
-ambiguous native-quote wrappers from a configured confirmation authority. It sends
-only the public wrapper text, the exact public quote text, and the already
-deterministically established target product. It can promote only
-`scheduled`, `expected`, or `started` timing. A model response of `completed`, a
-low-confidence response, malformed JSON, timeout, HTTP failure, stale observation,
-unresolved quote, unconfigured author, narrow-plan reset, or banked reset falls
-back to the deterministic record and can never create a `reset_outcome`.
-The model's confidence is stored separately as extraction confidence and is never
-used as reset probability.
-
-The checked-in endpoint and model defaults are TokenFlux
-`https://tokenflux.dev/v1` and `deepseek-v4-flash`; the adapter calls the standard
-`/chat/completions` route. Keep the API key in a regular file with mode `0400` or
-`0600`:
+### Docker
 
 ```bash
-export RESET_SEMANTIC_ASSISTANCE_ENABLED=true
-export RESET_SEMANTIC_ASSISTANCE_BASE_URL=https://tokenflux.dev/v1
-export RESET_SEMANTIC_ASSISTANCE_MODEL=deepseek-v4-flash
-export RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE=/path/to/tokenflux-token
+cp .env.example .env
+docker volume create codex-reset-forecaster-data-v1
+docker compose up --build -d
+curl http://127.0.0.1:8799/api/readiness
 ```
 
-The Docker variables and read-only secret mount are documented in `.env.example`.
-Enabling the helper changes the versioned extraction semantic contract, so existing
-raw observations are replayed under a new contract and compatible model artifacts
-must be fitted before serving.
+The service listens on loopback port 8799. Set `RESET_PUBLIC_BASE_URL` in `.env`
+to your own public URL before enabling publication. Add `--profile telegram` (and
+`--profile telegram-en`) to run the bots once their
+token files are configured. `compose.cloudflare.yaml` attaches the service to a
+Cloudflare Tunnel network. `compose.lite.yaml` runs a serve-only instance from an
+exported model; see “Lite serving mode” in [operations](docs/operations.md).
 
-### Manual platform confirmation
+## Configuration
 
-When a configured-authority plan is present but no later official completion post
-exists, a host operator can explicitly record the observed platform completion.
-This is deliberately an offline, filesystem-authorized operation rather than a
-public web endpoint. Stop the only live writer first, then bind the assertion to
-the exact authority status and supply either an exact effective timestamp or a
-relative age:
+- **Profiles** live in `config/`. `default.json` is the provider-neutral baseline,
+  `tibo-authority-live.json` is the live deployment target, and
+  `archive-evaluation.example.json` and `live.example.json` are starting points.
+  Select one with `RESET_CONFIG`.
+- **Environment variables** for Docker are listed and commented in
+  `.env.example`: port, data volume, scheduler, public base URL, Web Push,
+  Telegram, and the optional X Search Gateway and semantic assistance.
+- **Secrets** are never placed in config or `.env`. Each one is read from a file,
+  using mode `0400`/`0600` and the `*_TOKEN_FILE` / `*_KEYS_FILE` variables, and
+  Compose mounts that file read-only.
+- **Web Push and Telegram** stay disabled until their key or token files exist. A
+  public Web Push deployment also needs edge rate limiting and an anti-automation
+  challenge. See [notifications](docs/notifications.md).
 
-```bash
-node src/cli.mjs confirm-reset \
-  --offline \
-  --attest-platform \
-  --source-status 2087706104814023111 \
-  --actor dreaife \
-  --effective-at 2026-08-13T04:35:00Z
+## Project structure
+
+```text
+src/providers/      Source adapters (X, RSSHub, X Search Gateway, archive, fixtures)
+src/pipeline/       Relevance, extraction, linking, outcomes, coverage
+src/model/          Features, hourly hazard model, training, evaluation, forecast
+src/notifications/  Publication ledger, Atom feeds, subscription rules
+src/web/, public/   HTTP server and website
+src/telegram/       Telegram bot runtime
+src/cli.mjs         Command-line entry point
+config/             Versioned deployment profiles
+schemas/, examples/ JSON Schemas and example records
+docs/               Design, contracts, operations, and status
+test/               Node test suite
 ```
 
-`--ago-hours 1` may replace `--effective-at`; `--now` can freeze the assertion
-clock for a reproducible run. The command refuses personal-quota observations,
-unknown or community-only statuses, future effective times, and times before the
-linked authority plan. The resulting minute-level `silver` outcome is eligible for
-forecast recurrence/refractory logic and notification projection, while the public
-history and messages retain its manual provenance.
+Further reading:
 
-## Status
-
-Version `0.7.0` with canonical contract `reset-intel/0.2` implements the website,
-notification read models, and operations monitoring while keeping the personal
-optimizer as a post-MVP TODO. Synthetic fixtures
-exercise the mechanics only. Any model or evaluation artifact created under the
-older inferred-archive-coverage policy is incompatible with the current feature,
-deduplication, coverage, and evaluation contracts and must not be served as current
-evidence. The Tibo-authority outcome definition and delayed daily-ledger coverage
-contract are checked in. The live profile batch-fits existing eligible history
-immediately as a provisional bootstrap; no claim of validated 80% performance
-follows from that fit. The `validated` status still requires at least 1,008
-evaluated hourly windows, 20 eligible events, and a compatible challenger that
-passes the fixed-policy walk-forward and calibration gates.
-
-The current checked-in configuration contract is `provider-config/0.3.8`, with
-`reset-taxonomy/0.3.1`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
-rules `0.3.4` (`reset-extract/rules-0.3.4`). The model contract also binds the
-`winsorized-zscore/1` transform:
-standardized feature values are clipped to `[-3, 3]` during fitting and live
-inference. Coefficient priors use raw-feature logit units and are converted into
-the standardized training coordinates recorded in each artifact.
-
-Once a qualifying completion outcome is visible, the live profile immediately
-starts a new recurrence cycle. It consumes the completed evidence lineage, halves
-the carry-over of independent evidence published before the outcome boundary, and
-applies a versioned 12-hour refractory recovery to near-term hazards. A new exact
-authority statement after completion may still raise the next-cycle forecast.
-An exact day-level authority statement raises probability for that day without
-flattening all of its hours: policy `authority-timing-first-event-mixture/2`
-uses a `0.5`-power tempered baseline first-event shape inside the asserted
-window, with duration-uniform allocation only when the baseline has no usable
-mass.
+- [Design baseline and current decisions](docs/design.md)
+- [Product requirements](docs/product-requirements.md)
+- [Architecture](docs/architecture.md)
+- [Data contract](docs/data-contract.md)
+- [Model contract](docs/model-contract.md)
+- [Notifications](docs/notifications.md)
+- [Operations](docs/operations.md)
+- [Implementation status and contract versions](docs/implementation-status.md)
+- [Personal quota optimizer (deferred)](docs/personal-optimizer.md)
 
 ## License
 

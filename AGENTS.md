@@ -52,6 +52,15 @@ optimization.
 - A challenger replaces the champion only after it improves out-of-sample
   probability quality and calibration.
 
+## Documentation placement
+
+- `README.md` is for external visitors: what the project does, what it offers,
+  caveats, quick start, configuration overview, and links. Do not record design
+  decisions, contract versions, model internals, or implementation status there.
+- Record decisions in `docs/design.md` (or the relevant contract document), current
+  versions and acceptance gates in `docs/implementation-status.md`, and run
+  procedures in `docs/operations.md`.
+
 ## Verification
 
 Run before committing contract changes:

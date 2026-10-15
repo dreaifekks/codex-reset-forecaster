@@ -123,3 +123,37 @@ separately and sets `real_walk_forward_acceptance_proven` only for a passing,
 compatible evaluation using currently configured, non-synthetic,
 negative-label-eligible coverage. It also blocks publication for stale forecasts,
 stale exact sources, a current pipeline error, or an incompatible champion.
+
+## Current release and contract versions
+
+Version `0.7.0` with canonical contract `reset-intel/0.2` implements the website,
+notification read models, and operations monitoring while keeping the personal
+optimizer as a post-MVP TODO. Synthetic fixtures
+exercise the mechanics only. Any model or evaluation artifact created under the
+older inferred-archive-coverage policy is incompatible with the current feature,
+deduplication, coverage, and evaluation contracts and must not be served as current
+evidence. The Tibo-authority outcome definition and delayed daily-ledger coverage
+contract are checked in. The live profile batch-fits existing eligible history
+immediately as a provisional bootstrap; no claim of validated 80% performance
+follows from that fit. The `validated` status still requires at least 1,008
+evaluated hourly windows, 20 eligible events, and a compatible challenger that
+passes the fixed-policy walk-forward and calibration gates.
+
+The current checked-in configuration contract is `provider-config/0.3.8`, with
+`reset-taxonomy/0.3.1`, `reset-features/0.3.1`, `reset-dedup/0.2.3`, and extractor
+rules `0.3.4` (`reset-extract/rules-0.3.4`). The model contract also binds the
+`winsorized-zscore/1` transform:
+standardized feature values are clipped to `[-3, 3]` during fitting and live
+inference. Coefficient priors use raw-feature logit units and are converted into
+the standardized training coordinates recorded in each artifact.
+
+Once a qualifying completion outcome is visible, the live profile immediately
+starts a new recurrence cycle. It consumes the completed evidence lineage, halves
+the carry-over of independent evidence published before the outcome boundary, and
+applies a versioned 12-hour refractory recovery to near-term hazards. A new exact
+authority statement after completion may still raise the next-cycle forecast.
+An exact day-level authority statement raises probability for that day without
+flattening all of its hours: policy `authority-timing-first-event-mixture/2`
+uses a `0.5`-power tempered baseline first-event shape inside the asserted
+window, with duration-uniform allocation only when the baseline has no usable
+mass.

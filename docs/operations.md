@@ -329,6 +329,24 @@ cancellation blocks the manual path. After restart, `run_on_start` issues a fres
 forecast and the publication projector emits only the new material confirmation;
 it does not replay historical outcomes.
 
+Outside Docker, run the same command directly against the stopped writer's data
+root:
+
+```bash
+node src/cli.mjs confirm-reset \
+  --offline \
+  --attest-platform \
+  --source-status 2087706104814023111 \
+  --actor dreaife \
+  --effective-at 2026-08-13T04:35:00Z
+```
+
+The command refuses personal-quota observations, unknown or community-only
+statuses, future effective times, and times before the linked authority plan. The
+resulting minute-level `silver` outcome is eligible for forecast
+recurrence/refractory logic and notification projection, while the public history
+and messages retain its manual provenance.
+
 While coverage is waiting, the scheduler keeps the normal 10-minute cadence and
 also wakes just after `earliest_recheck_at` when that deadline falls before the
 next scheduled run. A due stability recheck bypasses the provider's normal refresh
@@ -428,6 +446,36 @@ rollback; Hermes receives the same summary/context-only treatment. The SocialDat
 upstream can return exact text but may bill a full upstream page even for a small
 requested limit; enable it only deliberately. No gateway mode asserts exhaustive
 timeline coverage, so gateway results cannot create negative labels.
+
+### Optional semantic timing assistance
+
+The extractor has a disabled-by-default OpenAI-compatible helper for rare,
+ambiguous native-quote wrappers from a configured confirmation authority. It sends
+only the public wrapper text, the exact public quote text, and the already
+deterministically established target product. It can promote only
+`scheduled`, `expected`, or `started` timing. A model response of `completed`, a
+low-confidence response, malformed JSON, timeout, HTTP failure, stale observation,
+unresolved quote, unconfigured author, narrow-plan reset, or banked reset falls
+back to the deterministic record and can never create a `reset_outcome`.
+The model's confidence is stored separately as extraction confidence and is never
+used as reset probability.
+
+The checked-in endpoint and model defaults are TokenFlux
+`https://tokenflux.dev/v1` and `deepseek-v4-flash`; the adapter calls the standard
+`/chat/completions` route. Keep the API key in a regular file with mode `0400` or
+`0600`:
+
+```bash
+export RESET_SEMANTIC_ASSISTANCE_ENABLED=true
+export RESET_SEMANTIC_ASSISTANCE_BASE_URL=https://tokenflux.dev/v1
+export RESET_SEMANTIC_ASSISTANCE_MODEL=deepseek-v4-flash
+export RESET_SEMANTIC_ASSISTANCE_TOKEN_FILE=/path/to/tokenflux-token
+```
+
+The Docker variables and read-only secret mount are documented in `.env.example`.
+Enabling the helper changes the versioned extraction semantic contract, so existing
+raw observations are replayed under a new contract and compatible model artifacts
+must be fitted before serving.
 
 ## Multi-source reset review
 
@@ -695,6 +743,76 @@ behalf of a browser. HTML, JavaScript, and CSS are served with revalidation so a
 deployment cannot combine new markup with an older cached script. A first-ever
 read model still fails visibly after 15 seconds instead of leaving the initial
 loading row indefinitely.
+
+## Website and notification surfaces
+
+This is a summary of the public surfaces; [notifications](notifications.md) holds
+the event and subscription contract.
+
+The public stable Atom feed is `/feed.xml`; `/feeds/experimental.xml` explicitly
+adds the shared model probability-watch events. The page's notification dialog can
+also generate a parameterized `/feeds/probability.xml` URL and apply the same
+versioned `1..168h` horizon plus `1%..99%` threshold rule to opt-in Web Push and
+either localized Telegram Bot (`/subscribe probability 24h 60%`;
+`/subscribe experimental` remains a `4h/50%` compatibility alias).
+Historical threshold reliability is shown separately from forecast probability and
+uses strict-above-threshold samples, a per-point 20-window gate, and Wilson
+intervals; it is labeled preliminary until the configured global sample gates pass.
+The chart focuses on the historical mean plus or minus four population standard
+deviations instead of reserving most of its width for empty probability space, and
+reports how many outlying windows were clipped from the drawing. For a new browser
+preference only, the initial threshold suggestion is the historical mean plus two
+standard deviations, rounded up to a real one-percentage-point threshold. Saved or
+manually edited rules are never overwritten, and the channel-neutral `4h/50%`
+compatibility default remains unchanged.
+The parameterized Atom URL includes an explicit current baseline cursor and keeps
+entries for 24 hours independently of Web Push expiry. Web Push and both Telegram
+Bots are safe-disabled until their external key/token files and required
+administrator settings are configured. The existing Chinese
+[`@codex_reset_7day_bot`](https://t.me/codex_reset_7day_bot) keeps its current
+delivery volume; the English
+[`@codex_reset_7day_en_bot`](https://t.me/codex_reset_7day_en_bot) uses an
+independent token and volume and links to `/en`. A new English volume silently
+baselines the current streams and does not replay old notifications. Bot timestamps
+default to the fixed `Asia/Tokyo` zone and show an explicit `UTC+9` suffix;
+deployments may override each instance's IANA zone with
+`TELEGRAM_DISPLAY_TIME_ZONE` or `TELEGRAM_EN_DISPLAY_TIME_ZONE`.
+Ordinary private-chat Bot users do not need an allowlist. Public Web Push also
+requires edge rate limiting plus an anti-automation challenge on subscription
+mutations; same-origin headers alone are not an abuse control. The first successful
+pipeline generation after publication is enabled establishes a baseline and sends
+no historical backlog. See
+`docs/notifications.md` for the event and subscription contract.
+
+The server builds all 28 slider horizons from one read-only historical context,
+persists a lineage-bound last-good snapshot, and refreshes it in the background at
+startup and after a successful pipeline run. Expired values remain immediately
+readable while a forced refresh runs, so a browser drag never owns the historical
+file scan. The browser's explicit compact HTTP projection has a ten-minute public
+cache plus a bounded stale-while-revalidate window; omitting that view keeps the
+complete profile contract for existing consumers. The page also keeps an
+exact-horizon ten-minute cache and flushes the final slider value immediately on
+release. On a cache miss, an already rendered chart stays visible but becomes
+non-interactive until the selected horizon is ready, then the new chart replaces it
+atomically; only the first chart uses the full loading state. Telegram requests
+sparse forecast-input views for only the distinct horizons used by active dynamic
+rules; without such a rule it reads only the tail cursor and outcome gate. The core
+projection continues to retain the complete 168-point curve.
+
+The same last-good boundary covers the main forecast, health/readiness base,
+confirmed history, evaluation event views, and recent evidence. Pipeline progress
+or failure changes dynamic status but cannot blank those display records or make a
+browser request own a canonical scan. If the last-good forecast is no longer
+eligible for fresh serving, the page still renders its exact immutable snapshot
+with a stale/blocked warning instead of remaining on the loading shell.
+
+Origin request monitoring is a separate operations plane, not a model input. It
+keeps privacy-preserving minute and UTC-day aggregates, shows daily growth to the
+Bot administrator with `/traffic`, and emits only sustained capacity state
+transitions. Ordinary users can use the Bot in their own private chat without
+pre-registration; administrator operations data never enters the publication
+ledger or ordinary subscriptions. See “Origin traffic and capacity monitoring”
+below for token setup and thresholds.
 
 ## Publication and notification operation
 
