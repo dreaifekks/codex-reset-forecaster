@@ -978,6 +978,7 @@ export async function evaluateWalkForward(store, config, {
         coverageAssertionRecords: assertions,
         asOfMode,
         coverageAsOfMode,
+        minimumEventCount: config.model.minimum_outcomes,
       });
     } catch (error) {
       evaluationFailures.push(error);

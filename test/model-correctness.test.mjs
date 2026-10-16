@@ -32,6 +32,7 @@ import {
 import {
   assessFoldCoverage,
   causalWindowLabel,
+  evaluateWalkForward,
   foldSourceExclusionsAtAnchor,
   fourHourAnchorsWithinFold,
   promoteChallenger,
@@ -453,6 +454,126 @@ test("partially overlapping event hours use exposure-weighted censoring and purg
       end: "2026-07-25T12:45:00.000Z",
     }), 0),
     2.5,
+  );
+});
+
+test("training skips hourly feature scans when the causal event count is insufficient", async () => {
+  const observations = [];
+  let observationScans = 0;
+  observations[Symbol.iterator] = function* () {
+    observationScans += 1;
+    yield* Array.prototype.values.call(this);
+  };
+  const store = {
+    async all(type) {
+      return type === "raw_observation" ? observations : [];
+    },
+  };
+  const result = await buildTrainingExamples(store, modelConfig(), {
+    trainingCutoff: "2026-07-25T00:00:00.000Z",
+    coverageIntervals: [{
+      start: "2026-06-25T00:00:00.000Z",
+      end: "2026-07-25T00:00:00.000Z",
+    }],
+    minimumEventCount: 1,
+  });
+  assert.equal(result.eventCount, 0);
+  assert.equal(observationScans, 1, "only select observations at the fold cutoff; do not scan per hour");
+  assert.equal(result.examples, undefined, "an ineligible fold has no materialized feature rows");
+
+  observationScans = 0;
+  const config = modelConfig();
+  const assertion = {
+    assertion_id: "empty-training-coverage", revision: 1, provider: "fixture",
+    start: "2026-06-25T00:00:00.000Z", end: "2026-07-25T00:00:00.000Z",
+    asserted_at: "2026-07-25T00:00:00.000Z",
+    adequacy: "negative_label_eligible", mode: "fixture_declared_complete",
+    evidence_refs: testCompletenessEvidence("2026-07-25T00:00:00.000Z").map((entry) => ({
+      ...entry, kind: "fixture_manifest", method: "synthetic_fixture_manifest",
+    })),
+  };
+  const challenger = {
+    feature_names: FEATURE_NAMES, weights: Array(FEATURE_NAMES.length + 1).fill(0),
+    means: Array(FEATURE_NAMES.length).fill(0), scales: Array(FEATURE_NAMES.length).fill(1),
+    covariance: null, uncertainty: { status: "unavailable" }, converged: true,
+    feature_transform: { version: FEATURE_TRANSFORM_VERSION, standardized_feature_clip: 8 },
+    coefficient_prior_policy: COEFFICIENT_PRIOR_POLICY_VERSION,
+    raw_coefficient_priors: Array(FEATURE_NAMES.length + 1).fill(0),
+    coefficient_priors: Array(FEATURE_NAMES.length + 1).fill(0),
+    feature_schema_version: config.feature_schema_version,
+    model_contract_hash: modelContractHash(config), artifact_version: MODEL_ARTIFACT_VERSION,
+    model_version: `${MODEL_VERSION_PREFIX}-empty-fold-test`,
+  };
+  const evaluationStore = {
+    ...store,
+    async allAudit() { return [assertion]; },
+    async readBlob() { return testCoverageEvidence; },
+    async readModel(name) { return name === "challenger" ? challenger : null; },
+    async writeState() {},
+  };
+  await assert.rejects(evaluateWalkForward(evaluationStore, config, {
+    evaluationCutoff: new Date("2026-07-25T00:00:00.000Z"),
+  }), (error) => {
+    assert.equal(error.code, "evaluation_pending", error.stack);
+    assert.equal(error.toJSON().reason_code, "walk_forward_fold_pending");
+    assert.equal(error.toJSON().evaluated_windows, 0);
+    assert.equal(error.toJSON().rejected_fold_count, 0);
+    return true;
+  });
+  assert.equal(observationScans, 3, "one evaluation selection and two fold selections, without hourly scans");
+  observationScans = 0;
+  await assert.rejects(trainChallenger(evaluationStore, config, {
+    trainingCutoff: "2026-07-25T00:00:00.000Z",
+  }), /Need at least 1 confirmed covered outcomes; found 0/);
+  assert.equal(observationScans, 1);
+});
+
+test("training event preflight preserves interval exposure, cutoff, and lookback semantics", async () => {
+  const source = observation("event-preflight", {
+    publishedAt: "2026-07-25T10:30:00.000Z",
+    firstSeenAt: "2026-07-25T10:30:00.000Z",
+  });
+  const range = {
+    start: "2026-07-25T10:30:00.000Z",
+    end: "2026-07-25T11:30:00.000Z",
+  };
+  const confirmed = outcome("event-preflight", source, range, range.end);
+  const records = {
+    raw_observation: [source],
+    normalized_signal: [signal("event-preflight", source, { assertedRange: range })],
+    reset_outcome: [confirmed],
+  };
+  const store = { async all(type) { return records[type] ?? []; } };
+  const options = {
+    trainingCutoff: "2026-07-25T13:00:00.000Z",
+    coverageIntervals: [{ start: "2026-07-25T09:00:00.000Z", end: "2026-07-25T10:00:00.000Z" }],
+    asOfMode: AS_OF_MODE.LIVE,
+  };
+  const expected = await buildTrainingExamples(store, modelConfig(), options);
+  assert.equal(expected.eventCount, 1, "positives need not overlap negative-label coverage");
+  assert.deepEqual(
+    await buildTrainingExamples(store, modelConfig(), { ...options, minimumEventCount: 1 }),
+    expected,
+  );
+  assert.deepEqual(
+    await buildTrainingExamples(store, modelConfig(), { ...options, minimumEventCount: 2 }),
+    { eventCount: 1 },
+  );
+  assert.deepEqual(
+    await buildTrainingExamples(store, modelConfig(), {
+      ...options, trainingCutoff: "2026-07-25T11:00:00.000Z", minimumEventCount: 1,
+    }),
+    { eventCount: 0 },
+    "an event learned after the cutoff must not admit the fold",
+  );
+  assert.deepEqual(
+    await buildTrainingExamples(store, modelConfig({ maximum_training_days: 1 }), {
+      ...options,
+      trainingCutoff: "2026-07-27T00:00:00.000Z",
+      minimumEventCount: 1,
+    }),
+    { eventCount: 0 },
+    "an event outside the training lookback must not admit the fold",
   );
 });
 

@@ -89,6 +89,7 @@ export async function buildTrainingExamples(store, config, {
   coverageAssertionRecords = null,
   asOfMode = null,
   coverageAsOfMode = null,
+  minimumEventCount = 0,
 } = {}) {
   const cutoff = new Date(trainingCutoff);
   if (Number.isNaN(cutoff.getTime())) {
@@ -196,6 +197,19 @@ export async function buildTrainingExamples(store, config, {
   const ambiguousOutcomes = outcomeCandidates.filter((outcome) =>
     !settledOutcomes.includes(outcome),
   );
+  const eventSlots = settledOutcomes.map((outcome) => ({
+    outcome,
+    matching: hourlySlotsOverlappingRange(
+      outcome.data.occurred_time_range,
+      maximumStart,
+      cutoff,
+    ),
+  })).filter(({ matching }) => matching.length > 0);
+  // Callers that gate on eventCount do not need hourly features for a rejected
+  // dataset. Use the same causal outcomes and bounded slots as eventExamples.
+  if (eventSlots.length < minimumEventCount) {
+    return { eventCount: eventSlots.length };
+  }
   const baseRows = uniqueSlots.map((slot) => {
     const vector = featureVectorAt({
       config,
@@ -232,13 +246,7 @@ export async function buildTrainingExamples(store, config, {
     }
   }
   const eventExamples = [];
-  for (const outcome of settledOutcomes) {
-    const matching = hourlySlotsOverlappingRange(
-      outcome.data.occurred_time_range,
-      maximumStart,
-      cutoff,
-    );
-    if (matching.length === 0) continue;
+  for (const { outcome, matching } of eventSlots) {
     matching.forEach((slot) => {
       if (coveredRowStarts.has(slot.start)) censoredRows.add(slot.start);
     });
@@ -319,7 +327,10 @@ export async function trainChallenger(store, config, options = {}) {
     persist = true,
     ...datasetOptions
   } = options;
-  const dataset = await buildTrainingExamples(store, config, datasetOptions);
+  const dataset = await buildTrainingExamples(store, config, {
+    ...datasetOptions,
+    minimumEventCount: config.model.minimum_outcomes,
+  });
   if (dataset.eventCount < config.model.minimum_outcomes) {
     throw new Error(
       `Need at least ${config.model.minimum_outcomes} confirmed covered outcomes; found ${dataset.eventCount}`,
